@@ -1,0 +1,37 @@
+{
+  "name": "opencomms",
+  "version": "1.0.0",
+  "description": "OpenComms — a project-local TypeScript OpenCode plugin that links two existing root OpenCode sessions into a communication channel (e.g. Builder <-> Reviewer) without creating or owning sessions.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/plugin.js",
+  "exports": {
+    ".": {
+      "import": "./dist/plugin.js"
+    }
+  },
+  "files": [
+    "dist/"
+  ],
+  "engines": {
+    "opencode": ">=1.18.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:test": "tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build:test && node --test --test-concurrency=1 dist-test/test/unit/*.test.js",
+    "test:unit": "npm run build:test && node --test --test-concurrency=1 dist-test/test/unit/*.test.js",
+    "test:live": "npm run build:test && node --test --test-concurrency=1 --test-timeout=300000 dist-test/test/live/live.test.js",
+    "test:all": "npm run build:test && node --test --test-concurrency=1 dist-test/test/unit/*.test.js dist-test/test/live/live.test.js",
+    "audit": "npm audit --omit=dev"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.23",
+    "@opencode-ai/sdk": "1.18.23"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
