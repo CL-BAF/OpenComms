@@ -180,7 +180,16 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
           },
           ctx.sessionID,
         )
-        if (result.ok) save(state)
+        if (result.ok) {
+          save(state)
+          // Proactively attempt delivery to the peer immediately, so the
+          // recipient sees the message without needing a manual prompt or
+          // waiting for the session.idle event. If the peer is busy the
+          // queue is preserved and the idle event will drain it later.
+          const channel = channelForSession(state, ctx.sessionID)
+          const peer = channel?.members.find((m) => m.session_id !== ctx.sessionID)
+          if (peer) void deliverPending(peer.session_id)
+        }
         return JSON.stringify(result)
       },
     }),
