@@ -1,21 +1,22 @@
 # TOOLS_AND_COMMANDS.md — Tools & Slash Command Spec
 
-> 10 deterministic tools registered via `@opencode-ai/plugin` `tool()` (`plugin.ts:79`). All mutating tools pattern: `load() → engine fn → save() if ok → JSON.stringify(result)`. All `channel` args are case-insensitive (normalized via `engine.ts:39`).
+> 11 deterministic tools registered via `@opencode-ai/plugin` `tool()` (`plugin.ts:79`). All mutating tools pattern: `load() → engine fn → save() if ok → JSON.stringify(result)`. All `channel` args are case-insensitive (normalized via `engine.ts:39`).
 
 ## Tool Inventory
 
-| # | Tool name | Line | Mutates state? | Requires membership? | Args |
-|---|-----------|------|----------------|----------------------|------|
-| 1 | `opencomms_create` | `plugin.ts:80` | Yes | No | `channel`, `role`, `role_prompt` |
-| 2 | `opencomms_join` | `plugin.ts:105` | Yes | No | `channel`, `role`, `role_prompt` |
-| 3 | `opencomms_send` | `plugin.ts:130` | Yes | Yes | `channel`, `type?`, `content`, `reply_to?` |
-| 4 | `opencomms_status` | `plugin.ts:161` | No | No | `channel?` |
-| 5 | `opencomms_inbox` | `plugin.ts:173` | No | Yes | `channel`, `limit?` |
-| 6 | `opencomms_history` | `plugin.ts:188` | No | No | `channel`, `limit?` |
-| 7 | `opencomms_update_role` | `plugin.ts:201` | Yes | Yes | `channel`, `role_prompt` |
-| 8 | `opencomms_pause` | `plugin.ts:222` | Yes | Yes | `channel` |
-| 9 | `opencomms_resume` | `plugin.ts:238` | Yes | Yes | `channel` |
-| 10| `opencomms_disconnect` | `plugin.ts:254` | Yes | Yes | `channel` |
+| # | Tool name | Mutates state? | Requires membership? | Args |
+|---|-----------|----------------|----------------------|------|
+| 1 | `opencomms_create` | Yes | No | `channel`, `role`, `role_prompt` |
+| 2 | `opencomms_join` | Yes | No | `channel`, `role`, `role_prompt` |
+| 3 | `opencomms_send` | Yes | Yes | `channel`, `type?`, `content`, `reply_to?` |
+| 4 | `opencomms_status` | No | No | `channel?` |
+| 5 | `opencomms_inbox` | No | Yes | `channel`, `limit?` |
+| 6 | `opencomms_history` | No | No | `channel`, `limit?` |
+| 7 | `opencomms_update_role` | Yes | Yes | `channel`, `role_prompt` |
+| 8 | `opencomms_pause` | Yes | Yes | `channel` |
+| 9 | `opencomms_resume` | Yes | Yes | `channel` |
+| 10| `opencomms_disconnect` | Yes | Yes | `channel` |
+| 11| `opencomms_timer` | Yes | Yes | `channel`, `action`, `limit_ms?`, `limit_role?` |
 
 ### Schemas (exact)
 
@@ -43,6 +44,10 @@
 
 // plugin.ts:226 opencomms_pause / 242 resume / 258 disconnect
 { channel: string }
+
+// opencomms_timer
+{ channel: string, action: string /* start|stop|switch|reset|status|set_limit|clear_limit */,
+  limit_ms?: number|null, limit_role?: string /* Builder|Reviewer, omit for total */ }
 ```
 
 ### Returns
@@ -54,6 +59,7 @@ Every tool returns `JSON.stringify(ToolResult)` where `ToolResult = {ok:boolean,
 - `inbox`: `{pending:number, messages:{message_id,sender_role,message_type,content,timestamp,reply_to,hop_count,delivery_status}[]}` (`engine.ts:448`)
 - `history`: `{messages:{message_id,sender_role,recipient_role,message_type,content,timestamp,reply_to,hop_count,delivery_status}[]}` (`engine.ts:471`)
 - `status`: `StatusReport {channels:ChannelSummary[], total_messages, pending_messages, errors}` (`engine.ts:516`)
+- `timer` (status): `{active_role, builder_ms, reviewer_ms, total_ms, limit_ms, limit_role, limit_reached}` (`engine.ts:timerAction`)
 
 `requireMember` guard (`plugin.ts:72`) — tools 3,5,7-10 reject with `"This session is not linked to any OpenComms channel..."` if `isMember(state, ctx.sessionID) === false`.
 
@@ -90,10 +96,11 @@ rolePrompt = args.RolePrompt ?? args.role_prompt ?? rest.replace(/^\S+\s*/, "") 
 | `UpdateRole` (alias `update_role`) | `plugin.ts:408` | `Channel`, rest=rolePrompt | `updateRole` | `/OpenComms UpdateRole Channel=feat New instructions...` |
 | `Inbox` | `plugin.ts:415` | `Channel` | `inbox` | `/OpenComms Inbox Channel=feat` |
 | `History` | `plugin.ts:418` | `Channel` | `history` | `/OpenComms History Channel=feat` |
+| `Timer` | `plugin.ts:419` | `Channel`, `Action`/`action`, `LimitMs`?, `LimitRole`? | `timerAction` | `/OpenComms Timer Channel=feat Action=status` |
 
 Aliases: subcommand matched lowercased, so `Create`/`create`/`CREATE` all work. `Channel`/`channel` both work; `As`/`role` both work (`plugin.ts:356-358`).
 
-On unknown subcommand: returns `"Unknown /OpenComms subcommand. Supported: Create, Join, Status, Pause, Resume, Disconnect, UpdateRole, Inbox, History."` (`plugin.ts:422`). Result always appended as `output.parts.push({type:"text", text:`OpenComms: ${result.message}`, ...})` (`plugin.ts:430`) and `save(state)` only if `result.ok` (`plugin.ts:429`).
+On unknown subcommand: returns `"Unknown /OpenComms subcommand. Supported: Create, Join, Status, Pause, Resume, Disconnect, UpdateRole, Inbox, History, Timer."` (`plugin.ts:422`). Result always appended as `output.parts.push({type:"text", text:`OpenComms: ${result.message}`, ...})` (`plugin.ts:430`) and `save(state)` only if `result.ok` (`plugin.ts:429`).
 
 ## End-to-End Flow Example
 

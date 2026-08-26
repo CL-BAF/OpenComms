@@ -35,10 +35,11 @@ import {
   rolePromptFor,
   sendMessage,
   status,
+  timerAction,
   updateRole,
   assertRootSession,
 } from "./engine.js"
-import type { Role, State } from "./types.js"
+import type { Role, State, TimerInput } from "./types.js"
 
 const ROLE_PROMPT_HEADER = "## OpenComms role instructions"
 
@@ -292,6 +293,42 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
         return JSON.stringify(result)
       },
     }),
+
+    opencomms_timer: tool({
+      description:
+        "Manage the chess-clock timer for a channel. Tracks cumulative active time per role (Builder/Reviewer). Use 'status' to read elapsed time and check a hard limit. The timer auto-switches on send (sender stops, recipient starts), but can also be manually started, stopped, switched, reset, or given a limit via set_limit/clear_limit.",
+      args: {
+        channel: tool.schema.string().describe("Channel name (case-insensitive)."),
+        action: tool.schema
+          .string()
+          .describe("start | stop | switch | reset | status | set_limit | clear_limit"),
+        limit_ms: tool.schema
+          .number()
+          .optional()
+          .nullable()
+          .describe("For set_limit: the hard cap in milliseconds."),
+        limit_role: tool.schema
+          .string()
+          .optional()
+          .nullable()
+          .describe("For set_limit: which role the limit applies to (Builder|Reviewer). Omit for total."),
+      },
+      async execute(args, ctx: ToolContext) {
+        const state = load()
+        const blocked = requireMember(state, ctx.sessionID)
+        if (blocked) return blocked
+        const role = args.limit_role ? normalizeRole(args.limit_role) : null
+        const result = timerAction(state, {
+          channel: args.channel,
+          session_id: ctx.sessionID,
+          action: args.action as TimerInput["action"],
+          limit_ms: args.limit_ms ?? null,
+          limit_role: role,
+        })
+        if (result.ok) save(state)
+        return JSON.stringify(result)
+      },
+    }),
   }
 
   const deliverPending = async (sessionId: string): Promise<void> => {
@@ -473,11 +510,26 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
         case "history":
           result = history(state, { channel: channel ?? "" })
           break
+        case "timer": {
+          const action = (args["Action"] ?? args["action"] ?? "status").toLowerCase() as
+            | "start" | "stop" | "switch" | "reset" | "status" | "set_limit" | "clear_limit"
+          const limitMs = args["LimitMs"] ?? args["limit_ms"]
+          const limitRoleStr = args["LimitRole"] ?? args["limit_role"]
+          const limitRole = limitRoleStr ? normalizeRole(limitRoleStr) : null
+          result = timerAction(state, {
+            channel: channel ?? "",
+            session_id: input.sessionID,
+            action,
+            limit_ms: limitMs !== undefined ? Number(limitMs) : null,
+            limit_role: limitRole,
+          })
+          break
+        }
         default:
           result = {
             ok: false,
             message:
-              "Unknown /OpenComms subcommand. Supported: Create, Join, Status, Pause, Resume, Disconnect, UpdateRole, Inbox, History.",
+              "Unknown /OpenComms subcommand. Supported: Create, Join, Status, Pause, Resume, Disconnect, UpdateRole, Inbox, History, Timer.",
           }
       }
 

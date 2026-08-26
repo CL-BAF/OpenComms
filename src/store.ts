@@ -12,7 +12,8 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { randomBytes } from "node:crypto"
-import { SCHEMA_VERSION, STATE_DIR, STATE_FILE, type State } from "./types.js"
+import { SCHEMA_VERSION, STATE_DIR, STATE_FILE, type Channel, type State } from "./types.js"
+import { defaultTimer } from "./engine.js"
 
 export function emptyState(): State {
   return {
@@ -40,7 +41,7 @@ export class StateStore {
       const raw = readFileSync(this.file, "utf8")
       const parsed = JSON.parse(raw) as Partial<State>
       const base = emptyState()
-      return {
+      const merged = {
         ...base,
         ...parsed,
         channels: parsed.channels ?? {},
@@ -49,6 +50,16 @@ export class StateStore {
         delivered_to: parsed.delivered_to ?? {},
         errors: parsed.errors ?? [],
       }
+      // Backfill timer on any channel missing it (pre-timer state.json).
+      if (merged.channels) {
+        for (const key of Object.keys(merged.channels)) {
+          const ch = merged.channels[key] as Channel | undefined
+          if (ch && !ch.timer) {
+            ch.timer = defaultTimer()
+          }
+        }
+      }
+      return merged
     } catch (error) {
       // Corrupt state must never brick the plugin: start fresh and record the
       // recovery so the user can see what happened via opencomms_status.

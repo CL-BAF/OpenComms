@@ -10,7 +10,7 @@
 | `docs/README.md` | This file — navigation | Finding which doc to read |
 | `docs/ARCHITECTURE.md` | System design, state diagram, lifecycles, invariants, delivery flow | Before architectural changes or debugging delivery |
 | `docs/API_REFERENCE.md` | Every exported function/type/constant with `file:line` + signature | Looking up exact args/returns without opening `src/*` |
-| `docs/TOOLS_AND_COMMANDS.md` | 10 tools + `/OpenComms` slash command, schemas, examples | Adding/modifying tools or commands |
+| `docs/TOOLS_AND_COMMANDS.md` | 11 tools + `/OpenComms` slash command, schemas, examples | Adding/modifying tools or commands |
 
 ## Quick Routing
 

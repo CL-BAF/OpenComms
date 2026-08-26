@@ -12,6 +12,7 @@ import {
   ROLE_REVIEWER,
   type Channel,
   type ChannelSummary,
+  type ChannelTimer,
   type CreateInput,
   type DeliveryStatus,
   type DisconnectInput,
@@ -27,6 +28,7 @@ import {
   type State,
   type StatusInput,
   type StatusReport,
+  type TimerInput,
   type ToolResult,
   type UpdateRoleInput,
 } from "./types.js"
@@ -75,6 +77,39 @@ export function newChannelId(): string {
 
 export function newCorrelationId(): string {
   return `cor_${randomUUID().replace(/-/g, "")}`
+}
+
+export function defaultTimer(): ChannelTimer {
+  return {
+    active_role: null,
+    segment_started_at: null,
+    elapsed_ms: { Builder: 0, Reviewer: 0 },
+    limit_ms: null,
+    limit_role: null,
+  }
+}
+
+/** Compute cumulative ms for a role, including the in-progress segment. */
+export function timerElapsed(timer: ChannelTimer, role: Role, now: number = Date.now()): number {
+  const base = timer.elapsed_ms[role] ?? 0
+  if (timer.active_role === role && timer.segment_started_at !== null) {
+    return base + (now - timer.segment_started_at)
+  }
+  return base
+}
+
+/** Total elapsed across both roles, including the in-progress segment. */
+export function timerTotal(timer: ChannelTimer, now: number = Date.now()): number {
+  return timerElapsed(timer, ROLE_BUILDER, now) + timerElapsed(timer, ROLE_REVIEWER, now)
+}
+
+/** Returns true when the configured limit is reached or exceeded. */
+export function timerLimitReached(timer: ChannelTimer, now: number = Date.now()): boolean {
+  if (timer.limit_ms === null || timer.limit_ms <= 0) return false
+  if (timer.limit_role !== null) {
+    return timerElapsed(timer, timer.limit_role, now) >= timer.limit_ms
+  }
+  return timerTotal(timer, now) >= timer.limit_ms
 }
 
 function ok(message: string, data?: unknown): ToolResult {
@@ -139,6 +174,7 @@ export function createChannel(state: State, input: CreateInput): ToolResult {
     rate_limit: DEFAULT_RATE_LIMIT,
     delivery_cooldown_ms: DEFAULT_DELIVERY_COOLDOWN_MS,
     stale_event_ms: DEFAULT_STALE_EVENT_MS,
+    timer: defaultTimer(),
   }
 
   state.channels[name] = channel
@@ -373,6 +409,17 @@ export function sendMessage(state: State, input: SendInput, senderSessionId: str
   queue.push(envelope.message_id)
   state.queues[peer.session_id] = queue
 
+  // Chess-clock auto-switch: sending a message hands the clock to the peer.
+  // The sender's active segment is folded into elapsed_ms and stopped; the
+  // recipient's segment starts immediately.
+  const now0 = now
+  if (channel.timer.active_role !== null && channel.timer.segment_started_at !== null) {
+    channel.timer.elapsed_ms[channel.timer.active_role] +=
+      now0 - channel.timer.segment_started_at
+  }
+  channel.timer.active_role = peer.role
+  channel.timer.segment_started_at = now0
+
   return ok(
     `Message queued for ${peer.role} (session ${peer.session_id}) on channel "${input.channel}".`,
     { message_id: envelope.message_id, delivery_status: envelope.delivery_status },
@@ -536,12 +583,104 @@ export function status(state: State, input: StatusInput): ToolResult {
   return ok("OpenComms status.", report)
 }
 
+export function timerAction(state: State, input: TimerInput): ToolResult {
+  const channel = findChannel(state, input.channel)
+  if (!channel) return fail(`Channel "${input.channel}" does not exist.`)
+  const member = memberOf(channel, input.session_id)
+  if (!member) {
+    return fail(`This session is not a member of channel "${input.channel}".`)
+  }
+  const timer = channel.timer
+  const now = Date.now()
+
+  const foldSegment = () => {
+    if (timer.active_role !== null && timer.segment_started_at !== null) {
+      timer.elapsed_ms[timer.active_role] += now - timer.segment_started_at
+    }
+  }
+
+  switch (input.action) {
+    case "start": {
+      if (timer.active_role !== null) {
+        return ok(`Timer already running for ${timer.active_role} on channel "${input.channel}".`)
+      }
+      timer.active_role = member.role
+      timer.segment_started_at = now
+      return ok(`Timer started for ${member.role} on channel "${input.channel}".`)
+    }
+    case "stop": {
+      if (timer.active_role === null) {
+        return ok(`Timer is already stopped on channel "${input.channel}".`)
+      }
+      foldSegment()
+      timer.active_role = null
+      timer.segment_started_at = null
+      return ok(`Timer stopped on channel "${input.channel}".`)
+    }
+    case "switch": {
+      const peer = peerOf(channel, input.session_id)
+      if (!peer) return fail(`No peer to switch to on channel "${input.channel}".`)
+      foldSegment()
+      timer.active_role = peer.role
+      timer.segment_started_at = now
+      return ok(`Timer switched to ${peer.role} on channel "${input.channel}".`)
+    }
+    case "reset": {
+      timer.active_role = null
+      timer.segment_started_at = null
+      timer.elapsed_ms = { Builder: 0, Reviewer: 0 }
+      return ok(`Timer reset on channel "${input.channel}".`)
+    }
+    case "status": {
+      const builderMs = timerElapsed(timer, ROLE_BUILDER, now)
+      const reviewerMs = timerElapsed(timer, ROLE_REVIEWER, now)
+      const totalMs = builderMs + reviewerMs
+      const limitReached = timerLimitReached(timer, now)
+      return ok(`Timer status for channel "${input.channel}".`, {
+        active_role: timer.active_role,
+        builder_ms: builderMs,
+        reviewer_ms: reviewerMs,
+        total_ms: totalMs,
+        limit_ms: timer.limit_ms,
+        limit_role: timer.limit_role,
+        limit_reached: limitReached,
+      })
+    }
+    case "set_limit": {
+      if (input.limit_ms === null || input.limit_ms === undefined || input.limit_ms <= 0) {
+        return fail("limit_ms must be a positive number of milliseconds.")
+      }
+      timer.limit_ms = input.limit_ms
+      timer.limit_role = input.limit_role ?? null
+      const scope = input.limit_role ? input.limit_role : "total (both roles)"
+      return ok(`Timer limit set to ${input.limit_ms} ms (${scope}) on channel "${input.channel}".`)
+    }
+    case "clear_limit": {
+      timer.limit_ms = null
+      timer.limit_role = null
+      return ok(`Timer limit cleared on channel "${input.channel}".`)
+    }
+    default:
+      return fail(`Unknown timer action. Supported: start, stop, switch, reset, status, set_limit, clear_limit.`)
+  }
+}
+
 export function markStale(state: State, sessionId: string): void {
   for (const channel of Object.values(state.channels)) {
     const member = channel.members.find((m) => m.session_id === sessionId)
     if (member && !member.stale) {
       member.stale = true
       member.stale_at = Date.now()
+    }
+    // Stop the timer segment if the stale session was on the clock.
+    if (channel.timer.active_role !== null && channel.timer.segment_started_at !== null) {
+      const staleMember = channel.members.find((m) => m.session_id === sessionId)
+      if (staleMember && staleMember.role === channel.timer.active_role) {
+        channel.timer.elapsed_ms[channel.timer.active_role] +=
+          Date.now() - channel.timer.segment_started_at
+        channel.timer.active_role = null
+        channel.timer.segment_started_at = null
+      }
     }
   }
 }

@@ -95,6 +95,7 @@ DisconnectInput{ channel:string, session_id:string } // :163
 InboxInput     { channel:string, session_id:string, limit?:number } // :168
 HistoryInput   { channel:string, limit?:number } // :174
 StatusInput    { channel?:string } // :179
+TimerInput     { channel:string, session_id:string, action:"start"|"stop"|"switch"|"reset"|"status"|"set_limit"|"clear_limit", limit_ms?:number|null, limit_role?:Role|null }
 ToolResult     { ok:boolean, message:string, data?:unknown } // :183
 ```
 
@@ -122,6 +123,10 @@ Utilities:
 | `newMessageId` | `engine.ts:54` | `()=>string` | `ocm_<32hex>` |
 | `newChannelId` | `engine.ts:58` | `()=>string` | `chn_<32hex>` |
 | `newCorrelationId` | `engine.ts:62` | `()=>string` | `cor_<32hex>` |
+| `defaultTimer` | `engine.ts:66` | `()=>ChannelTimer` | Fresh timer with both roles at 0 |
+| `timerElapsed` | `engine.ts:73` | `(timer:ChannelTimer, role:Role, now?:number)=>number` | Cumulative ms for role incl. in-progress segment |
+| `timerTotal` | `engine.ts:79` | `(timer:ChannelTimer, now?:number)=>number` | Sum of both roles incl. in-progress segment |
+| `timerLimitReached` | `engine.ts:84` | `(timer:ChannelTimer, now?:number)=>boolean` | True when configured limit reached |
 
 Channel ops (all `state` mutated in place, return `ToolResult`):
 
@@ -143,6 +148,7 @@ Messaging:
 | `inbox` | `engine.ts:435` | `(state:State, input:InboxInput)=>ToolResult` | no channel, not member; limit clamped 1..100 default 20; does NOT drain |
 | `history` | `engine.ts:463` | `(state:State, input:HistoryInput)=>ToolResult` | no channel; returns newest-first, limit 1..100 |
 | `status` | `engine.ts:486` | `(state:State, input:StatusInput)=>ToolResult` | If `input.channel` set, only that channel; else all |
+| `timerAction` | `engine.ts:500` | `(state:State, input:TimerInput)=>ToolResult` | no channel, not member, invalid action, bad limit |
 
 Session helpers (read-only):
 

@@ -139,6 +139,7 @@ OpenComms rejects:
 /OpenComms UpdateRole Channel=<name> [new role instructions]
 /OpenComms Inbox   Channel=<name>
 /OpenComms History Channel=<name>
+/OpenComms Timer   Channel=<name> Action=<start|stop|switch|reset|status|set_limit|clear_limit> [LimitMs=<ms>] [LimitRole=<Builder|Reviewer>]
 ```
 
 The equivalent deterministic tools are also available to the agents directly:
@@ -154,6 +155,7 @@ opencomms_update_role
 opencomms_pause
 opencomms_resume
 opencomms_disconnect
+opencomms_timer
 ```
 
 Arguments are parsed deterministically in plugin code. The slash command only forwards raw arguments to the matching tool — it does not rely on the model to interpret channel names, roles, or instructions loosely.
@@ -235,6 +237,22 @@ OpenComms never interrupts a user-authored turn, discards a message silently, de
 ```
 
 **Disconnect:** removes the current session from the channel. The channel remains for the other member, or is removed if empty. **No OpenCode sessions are ever deleted.**
+
+## Chess-clock timer
+
+Each channel has a **chess-clock timer** that tracks cumulative active time per role. When Builder sends a message, Builder's clock stops and Reviewer's starts automatically. This lets you give the agents a hard time budget and let them self-limit.
+
+```text
+/OpenComms Timer Channel=feat Action=start                                    # start your clock
+/OpenComms Timer Channel=feat Action=status                                    # read elapsed + limit
+/OpenComms Timer Channel=feat Action=set_limit LimitMs=600000                  # 10 min total cap
+/OpenComms Timer Channel=feat Action=set_limit LimitMs=300000 LimitRole=Builder # 5 min Builder-only cap
+/OpenComms Timer Channel=feat Action=clear_limit                                # remove the cap
+/OpenComms Timer Channel=feat Action=stop                                      # stop the clock
+/OpenComms Timer Channel=feat Action=reset                                     # zero everything
+```
+
+The timer auto-switches on every `opencomms_send` (sender stops, recipient starts). The `status` action returns `{active_role, builder_ms, reviewer_ms, total_ms, limit_ms, limit_role, limit_reached}` so agents can check it and decide whether to continue.
 
 ## Persistence and privacy
 

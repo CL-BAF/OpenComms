@@ -82,6 +82,21 @@ export interface Channel {
   delivery_cooldown_ms: number
   /** Stale events (older than this, in ms) are rejected. */
   stale_event_ms: number
+  /** Chess-clock timer: tracks cumulative per-role active time. */
+  timer: ChannelTimer
+}
+
+export interface ChannelTimer {
+  /** Which role is currently on the clock, or null when stopped. */
+  active_role: Role | null
+  /** Epoch ms when the current active segment started, or null when stopped. */
+  segment_started_at: number | null
+  /** Cumulative active ms per role (excludes the in-progress segment). */
+  elapsed_ms: Record<Role, number>
+  /** Optional hard cap in ms; agents can query it and self-limit. */
+  limit_ms: number | null
+  /** Which role the limit applies to (null = total across both). */
+  limit_role: Role | null
 }
 
 export interface State {
@@ -178,6 +193,14 @@ export interface HistoryInput {
 
 export interface StatusInput {
   channel?: string
+}
+
+export interface TimerInput {
+  channel: string
+  session_id: string
+  action: "start" | "stop" | "switch" | "reset" | "status" | "set_limit" | "clear_limit"
+  limit_ms?: number | null
+  limit_role?: Role | null
 }
 
 export interface ToolResult {

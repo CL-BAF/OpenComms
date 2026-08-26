@@ -12,6 +12,7 @@ import {
   inbox,
   history,
   status,
+  timerAction,
   normalizeChannelName,
   normalizeRole,
   contentHash,
@@ -442,4 +443,126 @@ test("assertRootSession rejects child sessions and accepts root sessions", () =>
   assert.ok(reject)
   assert.match(reject!, /child session/)
   assert.match(reject!, /parent_1/)
+})
+
+// ── Timer (chess clock) tests ──
+
+test("timerAction start/stop tracks elapsed time for a role", () => {
+  const state = freshState()
+  createPair(state)
+  const start = timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "start" })
+  assert.equal(start.ok, true)
+  const channel = state.channels["my-feature"]!
+  assert.equal(channel.timer.active_role, "Builder")
+
+  // Simulate some time passing.
+  channel.timer.segment_started_at = Date.now() - 5_000
+
+  const stop = timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "stop" })
+  assert.equal(stop.ok, true)
+  assert.equal(channel.timer.active_role, null)
+  assert.ok(channel.timer.elapsed_ms.Builder >= 5_000)
+  assert.equal(channel.timer.elapsed_ms.Reviewer, 0)
+})
+
+test("timerAction switch hands the clock to the peer", () => {
+  const state = freshState()
+  createPair(state)
+  timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "start" })
+  const channel = state.channels["my-feature"]!
+  channel.timer.segment_started_at = Date.now() - 3_000
+
+  const sw = timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "switch" })
+  assert.equal(sw.ok, true)
+  assert.equal(channel.timer.active_role, "Reviewer")
+  assert.ok(channel.timer.elapsed_ms.Builder >= 3_000)
+  assert.equal(channel.timer.elapsed_ms.Reviewer, 0)
+})
+
+test("sendMessage auto-switches the timer to the recipient", () => {
+  const state = freshState()
+  createPair(state)
+  // Start Builder's clock.
+  timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "start" })
+  const channel = state.channels["my-feature"]!
+  channel.timer.segment_started_at = Date.now() - 2_000
+
+  // Builder sends → clock should switch to Reviewer.
+  sendMessage(state, { channel: "my-feature", content: "work done" }, SESSION_A)
+  assert.equal(channel.timer.active_role, "Reviewer")
+  assert.ok(channel.timer.elapsed_ms.Builder >= 2_000)
+  assert.equal(channel.timer.elapsed_ms.Reviewer, 0)
+
+  // Reviewer sends back → clock should switch to Builder.
+  channel.timer.segment_started_at = Date.now() - 1_000
+  sendMessage(state, { channel: "my-feature", content: "looks good" }, SESSION_B)
+  assert.equal(channel.timer.active_role, "Builder")
+  assert.ok(channel.timer.elapsed_ms.Reviewer >= 1_000)
+})
+
+test("timerAction reset zeroes everything", () => {
+  const state = freshState()
+  createPair(state)
+  timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "start" })
+  const channel = state.channels["my-feature"]!
+  channel.timer.segment_started_at = Date.now() - 8_000
+  timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "stop" })
+
+  const reset = timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "reset" })
+  assert.equal(reset.ok, true)
+  assert.equal(channel.timer.elapsed_ms.Builder, 0)
+  assert.equal(channel.timer.elapsed_ms.Reviewer, 0)
+  assert.equal(channel.timer.active_role, null)
+})
+
+test("timerAction set_limit and status report limit_reached", () => {
+  const state = freshState()
+  createPair(state)
+  timerAction(state, {
+    channel: "my-feature",
+    session_id: SESSION_A,
+    action: "set_limit",
+    limit_ms: 10_000,
+    limit_role: "Builder",
+  })
+  const channel = state.channels["my-feature"]!
+  assert.equal(channel.timer.limit_ms, 10_000)
+  assert.equal(channel.timer.limit_role, "Builder")
+
+  // Accumulate 10s of Builder time.
+  timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "start" })
+  channel.timer.segment_started_at = Date.now() - 10_001
+  timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "stop" })
+
+  const st = timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "status" })
+  const data = st.data as { limit_reached: boolean; builder_ms: number }
+  assert.equal(data.limit_reached, true)
+  assert.ok(data.builder_ms >= 10_000)
+})
+
+test("timerAction clear_limit removes the cap", () => {
+  const state = freshState()
+  createPair(state)
+  timerAction(state, {
+    channel: "my-feature",
+    session_id: SESSION_A,
+    action: "set_limit",
+    limit_ms: 5_000,
+  })
+  const clr = timerAction(state, { channel: "my-feature", session_id: SESSION_A, action: "clear_limit" })
+  assert.equal(clr.ok, true)
+  const channel = state.channels["my-feature"]!
+  assert.equal(channel.timer.limit_ms, null)
+})
+
+test("timerAction rejects non-members", () => {
+  const state = freshState()
+  createPair(state)
+  const result = timerAction(state, {
+    channel: "my-feature",
+    session_id: "outsider",
+    action: "status",
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.message, /not a member/)
 })

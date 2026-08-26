@@ -55,6 +55,7 @@ Channel {
   rate_limit: 20,           // engine.ts:35
   delivery_cooldown_ms: 1000, // engine.ts:36
   stale_event_ms: 300_000,  // 5 min engine.ts:37
+  timer: ChannelTimer,      // chess-clock: active_role, segment_started_at, elapsed_ms per role, optional limit_ms + limit_role
 }
 
 // types.ts:32
