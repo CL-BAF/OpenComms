@@ -48,7 +48,28 @@ This produces `dist/` with the compiled plugin. The entry point is `dist/plugin.
 
 ### Project-local installation
 
-Copy the built plugin into your project's `.opencode/plugins/` directory so OpenCode loads it automatically:
+The bundled installer builds the plugin, copies it into your project's `.opencode/plugins/` directory, and patches your `opencode.json` to register it — all in one command:
+
+```bash
+# from the OpenComms repo root
+node install.mjs C:\path\to\your\project
+```
+
+Or via npm script:
+
+```bash
+npm run install:plugin -- C:\path\to\your\project
+```
+
+The installer:
+- Runs `npm run build` automatically if `dist/` is missing
+- Copies `dist/*` into `<target>/.opencode/plugins/`
+- Adds `".opencode/plugins/plugin.js"` to the `plugin` array in `<target>/opencode.json` (or `opencode.jsonc`)
+- Preserves all existing config and never duplicates the entry on re-runs (idempotent)
+
+If no target directory is given, it installs into the current working directory.
+
+If you prefer to wire it manually instead, copy the built plugin into your project and reference it in `opencode.json`:
 
 ```text
 <your-project>/
@@ -56,8 +77,6 @@ Copy the built plugin into your project's `.opencode/plugins/` directory so Open
     └── plugins/
         └── opencomms.js   # copy of dist/plugin.js (+ dist/*.js)
 ```
-
-Or reference the OpenComms repo directly in your project's OpenCode config (`opencode.json`):
 
 ```jsonc
 {

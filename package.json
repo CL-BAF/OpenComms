@@ -17,6 +17,7 @@
     "opencode": ">=1.18.0"
   },
   "scripts": {
+    "install:plugin": "node install.mjs",
     "build": "tsc -p tsconfig.build.json",
     "build:test": "tsc -p tsconfig.test.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
