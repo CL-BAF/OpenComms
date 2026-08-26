@@ -38,7 +38,7 @@ OpenComms only coordinates communication between them.
 ### From Git
 
 ```bash
-git clone <repo-url> OpenComms
+git clone https://github.com/CL-BAF/OpenComms.git OpenComms
 cd OpenComms
 npm install
 npm run build
