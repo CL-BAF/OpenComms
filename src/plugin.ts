@@ -343,10 +343,20 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
   const deliverPending = async (sessionId: string): Promise<void> => {
     const state = load()
     const channel = channelForSession(state, sessionId)
-    if (!channel) return
-    if (channel.paused) return
+    if (!channel) {
+      console.error(`[OpenComms] deliverPending: no channel for session ${sessionId}`)
+      return
+    }
+    if (channel.paused) {
+      console.error(`[OpenComms] deliverPending: channel ${channel.name} is paused`)
+      return
+    }
+    const queueBefore = state.queues[sessionId] ?? []
     const delivered = drainQueue(state, sessionId)
-    if (delivered.length === 0) return
+    if (delivered.length === 0) {
+      console.error(`[OpenComms] deliverPending: queue empty for ${sessionId} (queue had ${queueBefore.length} ids)`)
+      return
+    }
     save(state)
 
     const text = delivered
@@ -357,12 +367,14 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
       .join("\n\n---\n\n")
 
     try {
+      console.error(`[OpenComms] deliverPending: prompting session ${sessionId} with ${delivered.length} message(s)`)
       await client.session.prompt({
         path: { id: sessionId },
         body: {
           parts: [{ type: "text", text: text }],
         },
       })
+      console.error(`[OpenComms] deliverPending: prompt succeeded for ${sessionId}`)
     } catch (error) {
       // Delivery failed: do NOT leave messages marked "delivered" (that would
       // silently drop them). Re-queue each envelope back to pending so the
