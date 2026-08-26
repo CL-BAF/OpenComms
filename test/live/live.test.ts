@@ -1,10 +1,10 @@
 /**
  * OpenComms — live integration test.
  *
- * Exercises the full acceptance criteria from PROMPT.md against a real
- * OpenCode runtime. The test is GUARDED: it skips automatically when no
- * OpenCode server is reachable, so `npm run test:all` never fails in CI or
- * on a machine without OpenCode Desktop running.
+ * Exercises the full end-to-end acceptance flow against a real OpenCode
+ * runtime. The test is GUARDED: it skips automatically when no OpenCode
+ * server is reachable, so `npm run test:all` never fails in CI or on a
+ * machine without OpenCode Desktop running.
  *
  * To run it for real:
  *   1. Start OpenCode Desktop with the OpenComms plugin installed and a
@@ -15,7 +15,7 @@
  *        $env:OPENCOMMS_LIVE_PROJECT  = "C:\\path\\to\\project"
  *   3. npm run test:live
  *
- * Acceptance criteria covered (see PROMPT.md "Required end-to-end acceptance test"):
+ * Acceptance criteria covered:
  *   1-6  create two root sessions, register Builder + Reviewer, no extra sessions
  *   7-12 independent prompting + explicit send both directions
  *   13   busy-session queueing

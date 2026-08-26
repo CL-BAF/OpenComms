@@ -1,7 +1,29 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 dist-test/
+
+# Plugin state (runtime)
 .opencode-comms/
+
+# Logs
 *.log
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Dev scratch scripts
 probe-*.mjs
+
+# Environment
+.env
+.env.local
