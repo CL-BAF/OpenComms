@@ -18,7 +18,8 @@
   },
   "scripts": {
     "install:plugin": "node install.mjs",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && npm run build:bundle",
+    "build:bundle": "esbuild src/plugin.ts --bundle --format=esm --platform=node --outfile=dist/plugin.bundled.js --external:@opencode-ai/plugin --external:@opencode-ai/sdk --log-level=warning",
     "build:test": "tsc -p tsconfig.test.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build:test && node --test --test-concurrency=1 dist-test/test/unit/*.test.js",
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7.0"
   }
 }

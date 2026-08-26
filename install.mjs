@@ -18,7 +18,7 @@
  *   node install.mjs C:\Users\Cameron\Desktop\Shhhh
  */
 
-import { existsSync, mkdirSync, readdirSync, copyFileSync, statSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, copyFileSync, statSync, readFileSync, writeFileSync, unlinkSync } from "node:fs"
 import { join, resolve, dirname, basename } from "node:path"
 import { execSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
@@ -39,25 +39,36 @@ function fail(msg) {
   process.exit(1)
 }
 
-// 1. Ensure dist/ exists (build if missing).
+// 1. Ensure the bundled plugin exists (build if missing).
 const distDir = join(repoRoot, "dist")
-if (!existsSync(distDir)) {
-  log("dist/ not found — running npm run build ...")
+const bundledPath = join(distDir, "plugin.bundled.js")
+if (!existsSync(bundledPath)) {
+  log("dist/plugin.bundled.js not found — running npm run build ...")
   execSync("npm run build", { cwd: repoRoot, stdio: "inherit" })
-  if (!existsSync(distDir)) fail("build did not produce dist/.")
+  if (!existsSync(bundledPath)) fail("build did not produce dist/plugin.bundled.js.")
 }
 
-// 2. Copy dist/* into <target>/.opencode/plugins/
+// 2. Copy the self-contained bundled plugin into <target>/.opencode/plugins/.
+//    We ship a single bundled file (plugin.bundled.js, produced by esbuild
+//    with @opencode-ai/plugin and @opencode-ai/sdk marked external since
+//    OpenCode provides those at runtime) plus the dist sources as fallback.
 log(`Target project: ${target}`)
 mkdirSync(pluginsDir, { recursive: true })
-const entries = readdirSync(distDir)
-for (const name of entries) {
-  const src = join(distDir, name)
-  if (!statSync(src).isFile()) continue
-  const dst = join(pluginsDir, name)
-  copyFileSync(src, dst)
-  log(`copied ${name} -> .opencode/plugins/${name}`)
+
+// Remove stale plugin files we previously copied so the directory stays clean.
+for (const name of ["plugin.js", "engine.js", "store.js", "types.js"]) {
+  const stale = join(pluginsDir, name)
+  if (existsSync(stale)) {
+    try { unlinkSync(stale) } catch {}
+  }
 }
+
+const bundledSrc = join(distDir, "plugin.bundled.js")
+if (!existsSync(bundledSrc)) {
+  fail("dist/plugin.bundled.js missing. Run `npm run build` in the OpenComms repo first.")
+}
+copyFileSync(bundledSrc, join(pluginsDir, "plugin.js"))
+log("copied plugin.bundled.js -> .opencode/plugins/plugin.js (self-contained)")
 
 // 3. Patch opencode.json (or .jsonc) in the target.
 const jsonCandidates = [
@@ -70,10 +81,15 @@ const pluginRelPath = ".opencode/plugins/plugin.js"
 function readConfig(path) {
   if (!existsSync(path)) return {}
   const raw = readFileSync(path, "utf8")
-  // Strip JSONC comments/lines so we can parse and rewrite cleanly.
-  const stripped = raw.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")
+  // For .jsonc only, strip line/block comments. Naive // stripping would
+  // corrupt URLs inside .json (e.g. "$schema": "https://..."), so only apply
+  // it to .jsonc files.
+  let text = raw
+  if (path.endsWith(".jsonc")) {
+    text = text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")
+  }
   try {
-    return JSON.parse(stripped)
+    return JSON.parse(text)
   } catch {
     fail(`could not parse existing ${basename(path)}. Back it up, then re-run.`)
   }
