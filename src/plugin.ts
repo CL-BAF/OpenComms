@@ -12,55 +12,84 @@
  *
  * The plugin never creates sessions. It only links sessions the user has
  * already opened.
+ *
+ * Concurrency: every load→mutate→save cluster runs inside store.withLock so
+ * two OpenCode processes sharing one project cannot lose each other's writes.
+ * Bare reads (system-prompt transform, status) stay lock-free because saves
+ * are atomic renames — readers see either the old or the new file intact.
  */
 
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import { StateStore } from "./store.js"
 import {
-  channelForSession,
   clearStale,
   createChannel,
   disconnectChannel,
-  drainQueue,
+  drainForDelivery,
+  formatDeliveryBatch,
   history,
   inbox,
   isMember,
   joinChannel,
+  kickChannel,
   markStale,
-  normalizeChannelName,
+  memberInfosFor,
   normalizeRole,
   pauseChannel,
+  requeueFailedDelivery,
   resumeChannel,
-  rolePromptFor,
   sendMessage,
   status,
   timerAction,
   updateRole,
   assertRootSession,
 } from "./engine.js"
-import type { Role, State, TimerInput } from "./types.js"
+import type { SenderMessageType, State, TimerInput, ToolResult } from "./types.js"
 
 const ROLE_PROMPT_HEADER = "## OpenComms role instructions"
+const ROLE_RULES =
+  "Role must be 1-32 characters: letters first, then letters, digits, spaces, \"-\" or \"_\"."
 
-function buildRolePrompt(role: Role, prompt: string): string {
-  return `${ROLE_PROMPT_HEADER}\n\nYou are the ${role} on an OpenComms channel.\n\n${prompt.trim()}`
+function buildRolePrompt(role: string, prompt: string, channelName?: string): string {
+  const scope = channelName ? ` on OpenComms channel "${channelName}"` : " on an OpenComms channel"
+  return `${ROLE_PROMPT_HEADER}\n\nYou are the ${role}${scope}.\n\n${prompt.trim()}`
 }
 
-function parseArgs(raw: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  const re = /([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(\S+))/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(raw)) !== null) {
-    const key = m[1]!
-    const value = m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : m[4]!
-    out[key] = value
+/** Slash-command keys we recognize. Unknown `key=value` pairs stay in the prompt text. */
+const SLASH_KEYS = ["Channel", "As", "RolePrompt", "Action", "LimitMs", "LimitRole", "To", "Broadcast", "Target"] as const
+
+interface SlashArgs {
+  params: Record<string, string>
+  rest: string
+}
+
+/**
+ * Extract only RECOGNIZED key=value tokens; free-form role prompts survive:
+ * unknown `x=y` substrings in prose are no longer swallowed by a blanket
+ * key=value stripper.
+ */
+function extractSlashArgs(raw: string): SlashArgs {
+  const params: Record<string, string> = {}
+  let rest = raw
+  for (const key of SLASH_KEYS) {
+    const valuePattern = String.raw`(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(\S+))`
+    const re = new RegExp(String.raw`(^|\s)(${key})\s*=\s*${valuePattern}`, "i")
+    const m = re.exec(rest)
+    if (m) {
+      const quotedDouble = m[3]
+      const quotedSingle = m[4]
+      const bare = m[5]
+      params[key.toLowerCase()] = quotedDouble ?? quotedSingle ?? bare ?? ""
+      rest = rest.slice(0, m.index) + m[1] + rest.slice(m.index + m[0].length)
+    }
   }
-  return out
+  return { params, rest: rest.trim() }
 }
 
-function stripArgs(raw: string): string {
-  return raw.replace(/([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(\S+))/g, "").trim()
+function slashSub(raw: string): string {
+  const first = raw.trim().split(/\s+/)[0] ?? ""
+  return first.replace(/[_-]/g, "").toLowerCase()
 }
 
 export const OpenCommsPlugin: Plugin = async ({ client, project, directory, worktree }) => {
@@ -68,128 +97,245 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
   const projectId = project.id
   const worktreePath = worktree || directory
 
+  // Read-only loads need no lock: state.json is replaced atomically, so a
+  // reader never observes a torn write.
   const load = (): State => store.load()
-  const save = (state: State): void => store.save(state)
 
-  const requireMember = (state: State, sessionId: string): string | null => {
+  /** Mutating update that persists when `shouldSave(result)` holds true. */
+  const withLockedState = (
+    mutate: (state: State) => ToolResult,
+    shouldSave: (result: ToolResult) => boolean,
+  ): ToolResult => {
+    return store.withLock(() => {
+      const state = load()
+      const result = mutate(state)
+      if (shouldSave(result)) store.save(state)
+      return result
+    })
+  }
+
+  const requireMember = (state: State, sessionId: string): ToolResult | null => {
     if (!isMember(state, sessionId)) {
-      return "This session is not linked to any OpenComms channel. Create or join a channel first."
+      return {
+        ok: false,
+        message:
+          "This session is not linked to any OpenComms channel. Create or join a channel first.",
+      }
     }
     return null
   }
 
-  // Invariant #1: OpenComms only links root OpenCode sessions. Fetch the
-  // session's parentID from the OpenCode client and reject child sessions
-  // before any channel state is mutated. Returns a rejection string or null.
-  // On lookup failure we do not block channel creation (a transient SDK
-  // error must not brick the plugin), but the failure is recorded visibly in
-  // opencomms_status so it is not silently swallowed.
+  /**
+   * Invariant #1: OpenComms only links root OpenCode sessions. FAIL CLOSED:
+   * if the SDK lookup errors we cannot verify root status, so we refuse to
+   * mutate channel membership and record why in opencomms_status. A transient
+   * server hiccup must not open the door to child-session linking.
+   */
   const requireRootSession = async (sessionId: string): Promise<string | null> => {
     try {
       const res = await client.session.get({ path: { id: sessionId } })
       const parentID = res.data?.parentID
       return assertRootSession(parentID, sessionId)
     } catch (error) {
+      const msg = `Root-session lookup for ${sessionId} failed (${(error as Error).message}); refusing to link until the session can be verified as a root session. Retry shortly.`
+      store.withLock(() => {
+        const state = load()
+        state.errors.push({ at: Date.now(), message: msg })
+        if (state.errors.length > 200) state.errors = state.errors.slice(-200)
+        store.save(state)
+      })
+      return msg
+    }
+  }
+
+  const recordError = (message: string): void => {
+    store.withLock(() => {
       const state = load()
-      const msg = `Root-session lookup for ${sessionId} failed (${(error as Error).message}); treating it as root. Verify the session exists.`
-      state.errors.push({ at: Date.now(), message: msg })
+      state.errors.push({ at: Date.now(), message })
       if (state.errors.length > 200) state.errors = state.errors.slice(-200)
-      save(state)
-      return null
+      store.save(state)
+    })
+  }
+
+  const deliverPending = async (sessionId: string): Promise<void> => {
+    // Phase 1 (locked): atomically drain queues and persist delivery marks.
+    // Each envelope carries its own channel's name — a session may belong to
+    // multiple channels, so provenance is resolved per message, never once
+    // for the batch. Per-channel pause handling happens inside drainQueue.
+    let batch: Array<{ id: string; channelName: string }> = []
+    try {
+      const drained = store.withLock(() => {
+        const state = load()
+        const pairs = drainForDelivery(state, sessionId)
+        if (pairs.length > 0) store.save(state)
+        return pairs.map((p) => ({ id: p.message_id, channelName: p.channel_name }))
+      })
+      batch = drained
+    } catch (error) {
+      recordError(`Delivery drain for ${sessionId} failed: ${(error as Error).message}`)
+      return
+    }
+    if (batch.length === 0) return
+
+    // Phase 2 (unlocked): prompt the peer once per batch. Peer content is
+    // framed as untrusted data with per-envelope provenance — see
+    // formatDeliveryBatch.
+    const ids = batch.map((b) => b.id)
+    const text = batch.map((b) => formatOne(b)).join("\n\n---\n\n")
+
+    function formatOne(b: { id: string; channelName: string }): string {
+      const snapshot = load()
+      const msg = snapshot.messages[b.id]
+      if (!msg) return `(OpenComms: message ${b.id} no longer exists)`
+      return formatDeliveryBatch([msg], b.channelName)
+    }
+
+    try {
+      await client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          parts: [{ type: "text", text }],
+        },
+      })
+    } catch (error) {
+      // Delivery failed: do NOT leave messages marked "delivered" (that
+      // would silently drop them). Rebuild the FIFO in original order and
+      // record the failure visibly in opencomms_status.
+      try {
+        store.withLock(() => {
+          const state2 = load()
+          requeueFailedDelivery(state2, sessionId, ids)
+          state2.errors.push({
+            at: Date.now(),
+            message: `Delivery to session ${sessionId} failed (${(error as Error).message}); ${ids.length} message(s) re-queued for retry.`,
+          })
+          if (state2.errors.length > 200) state2.errors = state2.errors.slice(-200)
+          store.save(state2)
+        })
+      } catch (lockError) {
+        recordError(
+          `Requeue after failed delivery to ${sessionId} also failed: ${(lockError as Error).message}`,
+        )
+      }
     }
   }
 
   const tools = {
     opencomms_create: tool({
       description:
-        "Create an OpenComms channel and register the CURRENT session as a role (Builder or Reviewer). The current session's real session id is taken from the tool execution context — no new session is created. Role instructions in `role_prompt` become the persistent per-session system instructions.",
+        "Create an OpenComms channel and register the CURRENT session under a role label (e.g. Builder, Reviewer — any short unique label). The current session's real session id is taken from the tool execution context — no new session is created. Role instructions in `role_prompt` become the persistent per-session system instructions.",
       args: {
-        channel: tool.schema.string().describe("Channel name (case-insensitive)."),
-        role: tool.schema.string().describe("Role: Builder or Reviewer."),
+        channel: tool.schema.string().describe("Channel name (case-insensitive slug)."),
+        role: tool.schema.string().describe(`Role label. ${ROLE_RULES}`),
         role_prompt: tool.schema.string().describe("Persistent role instructions for this session."),
+        max_members: tool.schema.number().optional().describe(`Optional membership cap (default ${8}).`),
       },
       async execute(args, ctx: ToolContext) {
         const role = normalizeRole(args.role)
-        if (!role) return "Invalid role. Use Builder or Reviewer."
+        if (!role) return ROLE_RULES
         const rootReject = await requireRootSession(ctx.sessionID)
         if (rootReject) return rootReject
-        const state = load()
-        const result = createChannel(state, {
-          channel: args.channel,
-          role,
-          role_prompt: args.role_prompt,
-          session_id: ctx.sessionID,
-          project_id: projectId,
-          worktree: worktreePath,
-        })
-        if (result.ok) save(state)
+        const result = withLockedState(
+          (state) =>
+            createChannel(state, {
+              channel: args.channel,
+              role,
+              role_prompt: args.role_prompt,
+              session_id: ctx.sessionID,
+              project_id: projectId,
+              worktree: worktreePath,
+              max_members: args.max_members,
+            }),
+          (r) => r.ok,
+        )
         return JSON.stringify(result)
       },
     }),
 
     opencomms_join: tool({
       description:
-        "Join an existing OpenComms channel with the CURRENT session as a role (Builder or Reviewer). The current session's real session id is taken from the tool execution context — no new session is created. Rejects joining the same session twice, using one session for both roles, replacing an existing member, child sessions, and sessions from incompatible projects or worktrees.",
+        "Join an existing OpenComms channel with the CURRENT session under a role label (e.g. Builder, Reviewer — any short unique label not already taken on that channel). The current session's real session id is taken from the tool execution context — no new session is created. Rejects joining the same session twice, using one session for two roles, replacing an existing member, full channels, child sessions, and sessions from incompatible projects or worktrees.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
-        role: tool.schema.string().describe("Role: Builder or Reviewer."),
+        role: tool.schema.string().describe(`Role label (unique within the channel). ${ROLE_RULES}`),
         role_prompt: tool.schema.string().describe("Persistent role instructions for this session."),
       },
       async execute(args, ctx: ToolContext) {
         const role = normalizeRole(args.role)
-        if (!role) return "Invalid role. Use Builder or Reviewer."
+        if (!role) return ROLE_RULES
         const rootReject = await requireRootSession(ctx.sessionID)
         if (rootReject) return rootReject
-        const state = load()
-        const result = joinChannel(state, {
-          channel: args.channel,
-          role,
-          role_prompt: args.role_prompt,
-          session_id: ctx.sessionID,
-          project_id: projectId,
-          worktree: worktreePath,
-        })
-        if (result.ok) save(state)
+        const result = withLockedState(
+          (state) =>
+            joinChannel(state, {
+              channel: args.channel,
+              role,
+              role_prompt: args.role_prompt,
+              session_id: ctx.sessionID,
+              project_id: projectId,
+              worktree: worktreePath,
+            }),
+          (r) => r.ok,
+        )
         return JSON.stringify(result)
       },
     }),
 
     opencomms_send: tool({
       description:
-        "Send a structured peer message to the other member of the current session's OpenComms channel. The message is queued and delivered to the peer session when it is idle. Never auto-forwards assistant responses — only explicit calls to this tool cross sessions.",
+        "Send a structured peer message on the current session's OpenComms channel. Queued and delivered when recipients are idle. On channels with more than one other member, target one member with `to` (session id or role label) or fan out with broadcast=true. Never auto-forwards assistant responses — only explicit calls to this tool cross sessions.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
         type: tool.schema
           .string()
           .optional()
-          .describe("Message type: review_request, review_response, manual, or system. Defaults to manual."),
+          .describe("Message type: review_request, review_response, or manual. Defaults to manual."),
         content: tool.schema.string().describe("Message content."),
         reply_to: tool.schema.string().optional().nullable().describe("Optional message_id this message replies to."),
+        to: tool.schema
+          .string()
+          .optional()
+          .nullable()
+          .describe("Recipient on multi-member channels: another member's session id or role label."),
+        broadcast: tool.schema
+          .boolean()
+          .optional()
+          .describe("Deliver to every other member of the channel instead of one recipient."),
       },
       async execute(args, ctx: ToolContext) {
-        const state = load()
-        const blocked = requireMember(state, ctx.sessionID)
-        if (blocked) return blocked
-        const result = sendMessage(
-          state,
-          {
-            channel: args.channel,
-            type: (args.type as "review_request" | "review_response" | "manual" | "system" | undefined) ?? "manual",
-            content: args.content,
-            reply_to: args.reply_to ?? null,
+        let invalidType = false
+        let notifyRecipients: string[] = []
+        const result = withLockedState(
+          (state) => {
+            const blocked = requireMember(state, ctx.sessionID)
+            if (blocked) return blocked
+            const requestedType = (args.type ?? undefined) as SenderMessageType | undefined
+            const sendResult = sendMessage(
+              state,
+              {
+                channel: args.channel,
+                type: requestedType,
+                content: args.content,
+                reply_to: args.reply_to ?? null,
+                to: args.to ?? null,
+                broadcast: args.broadcast,
+              },
+              ctx.sessionID,
+            )
+            if (!sendResult.ok && sendResult.message.includes("Unknown message type")) {
+              invalidType = true
+            }
+            return sendResult
           },
-          ctx.sessionID,
+          (r) => r.ok === true,
         )
+        // Fire deliveries only AFTER the state lock is released —
+        // deliverPending acquires the lock itself and must never nest.
         if (result.ok) {
-          save(state)
-          // Proactively attempt delivery to the peer immediately, so the
-          // recipient sees the message without needing a manual prompt or
-          // waiting for the session.idle event. If the peer is busy the
-          // queue is preserved and the idle event will drain it later.
-          const channel = channelForSession(state, ctx.sessionID)
-          const peer = channel?.members.find((m) => m.session_id !== ctx.sessionID)
-          if (peer) void deliverPending(peer.session_id)
+          notifyRecipients = ((result.data as { recipients?: string[] } | undefined)?.recipients ?? []).slice()
         }
+        for (const rid of notifyRecipients) void deliverPending(rid)
+        if (invalidType) return "Invalid message type. Valid types: review_request, review_response, manual."
         return JSON.stringify(result)
       },
     }),
@@ -216,21 +362,21 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
       async execute(args, ctx: ToolContext) {
         const state = load()
         const blocked = requireMember(state, ctx.sessionID)
-        if (blocked) return blocked
+        if (blocked) return blocked.message
         return JSON.stringify(inbox(state, { channel: args.channel, session_id: ctx.sessionID, limit: args.limit }))
       },
     }),
 
     opencomms_history: tool({
       description:
-        "Show the message history of a channel, newest first, including delivery status of each message.",
+        "Show the message history of a channel you belong to, newest first, including delivery status. Member-only: sessions outside the channel cannot read its transcript.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
         limit: tool.schema.number().optional().describe("Max messages to list (default 20, max 100)."),
       },
-      async execute(args) {
+      async execute(args, ctx: ToolContext) {
         const state = load()
-        return JSON.stringify(history(state, { channel: args.channel, limit: args.limit }))
+        return JSON.stringify(history(state, { channel: args.channel, session_id: ctx.sessionID, limit: args.limit }))
       },
     }),
 
@@ -242,31 +388,37 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
         role_prompt: tool.schema.string().describe("New persistent role instructions."),
       },
       async execute(args, ctx: ToolContext) {
-        const state = load()
-        const blocked = requireMember(state, ctx.sessionID)
-        if (blocked) return blocked
-        const result = updateRole(state, {
-          channel: args.channel,
-          session_id: ctx.sessionID,
-          role_prompt: args.role_prompt,
-        })
-        if (result.ok) save(state)
+        const result = withLockedState(
+          (state) => {
+            const blocked = requireMember(state, ctx.sessionID)
+            if (blocked) return blocked
+            return updateRole(state, {
+              channel: args.channel,
+              session_id: ctx.sessionID,
+              role_prompt: args.role_prompt,
+            })
+          },
+          (r) => r.ok,
+        )
         return JSON.stringify(result)
       },
     }),
 
     opencomms_pause: tool({
       description:
-        "Pause a channel. No messages are delivered to either member until the channel is resumed.",
+        "Pause a channel. No messages are delivered to any member until the channel is resumed.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
       },
       async execute(args, ctx: ToolContext) {
-        const state = load()
-        const blocked = requireMember(state, ctx.sessionID)
-        if (blocked) return blocked
-        const result = pauseChannel(state, { channel: args.channel, session_id: ctx.sessionID })
-        if (result.ok) save(state)
+        const result = withLockedState(
+          (state) => {
+            const blocked = requireMember(state, ctx.sessionID)
+            if (blocked) return blocked
+            return pauseChannel(state, { channel: args.channel, session_id: ctx.sessionID })
+          },
+          (r) => r.ok,
+        )
         return JSON.stringify(result)
       },
     }),
@@ -278,34 +430,83 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
       },
       async execute(args, ctx: ToolContext) {
-        const state = load()
-        const blocked = requireMember(state, ctx.sessionID)
-        if (blocked) return blocked
-        const result = resumeChannel(state, { channel: args.channel, session_id: ctx.sessionID })
-        if (result.ok) save(state)
+        const result = withLockedState(
+          (state) => {
+            const blocked = requireMember(state, ctx.sessionID)
+            if (blocked) return blocked
+            return resumeChannel(state, { channel: args.channel, session_id: ctx.sessionID })
+          },
+          (r) => r.ok,
+        )
         return JSON.stringify(result)
       },
     }),
 
     opencomms_disconnect: tool({
       description:
-        "Disconnect the current session from a channel. The channel remains for the other member, or is removed if empty. No OpenCode sessions are ever deleted.",
+        "Disconnect the current session from a channel. The channel remains for other members, or is removed if empty. No OpenCode sessions are ever deleted.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
       },
       async execute(args, ctx: ToolContext) {
-        const state = load()
-        const blocked = requireMember(state, ctx.sessionID)
-        if (blocked) return blocked
-        const result = disconnectChannel(state, { channel: args.channel, session_id: ctx.sessionID })
-        if (result.ok) save(state)
+        const result = withLockedState(
+          (state) => {
+            const blocked = requireMember(state, ctx.sessionID)
+            if (blocked) return blocked
+            return disconnectChannel(state, { channel: args.channel, session_id: ctx.sessionID })
+          },
+          (r) => r.ok,
+        )
+        return JSON.stringify(result)
+      },
+    }),
+
+    opencomms_kick: tool({
+      description:
+        "Remove ANOTHER member from a channel (Builder only). Kicking only severs the channel link — the kicked OpenCode session keeps running; it just stops receiving this channel's traffic and gets clean 'not a member' errors. Remaining members are notified with a system message. The channel survives even with one member and can be rejoined.",
+      args: {
+        channel: tool.schema.string().describe("Channel name (case-insensitive)."),
+        target_session_id: tool.schema
+          .string()
+          .optional()
+          .nullable()
+          .describe("Session id of the member to remove."),
+        target_role: tool.schema
+          .string()
+          .optional()
+          .nullable()
+          .describe("Role label of the member to remove (alternative to target_session_id)."),
+      },
+      async execute(args, ctx: ToolContext) {
+        let notifyRecipients: string[] = []
+        const result = withLockedState(
+          (state) => {
+            const blocked = requireMember(state, ctx.sessionID)
+            if (blocked) return blocked
+            const kickResult = kickChannel(state, {
+              channel: args.channel,
+              session_id: ctx.sessionID,
+              target_session_id: args.target_session_id ?? null,
+              target_role: args.target_role ?? null,
+            })
+            if (kickResult.ok) {
+              notifyRecipients =
+                ((kickResult.data as { remaining_session_ids?: string[] } | undefined)
+                  ?.remaining_session_ids ?? []).slice()
+            }
+            return kickResult
+          },
+          (r) => r.ok,
+        )
+        // Drain the queued system notices immediately, post-lock.
+        for (const rid of notifyRecipients) void deliverPending(rid)
         return JSON.stringify(result)
       },
     }),
 
     opencomms_timer: tool({
       description:
-        "Manage the chess-clock timer for a channel. Tracks cumulative active time per role (Builder/Reviewer). Use 'status' to read elapsed time and check a hard limit. The timer auto-switches on send (sender stops, recipient starts), but can also be manually started, stopped, switched, reset, or given a limit via set_limit/clear_limit.",
+        "Manage the chess-clock timer for a channel. Tracks cumulative active time PER MEMBER. Use 'status' to read elapsed time and check a hard limit. The timer auto-switches on send (sender stops, primary recipient starts), but can also be manually started, stopped, switched, reset, or given a limit via set_limit/clear_limit.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
         action: tool.schema
@@ -316,92 +517,30 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
           .optional()
           .nullable()
           .describe("For set_limit: the hard cap in milliseconds."),
-        limit_role: tool.schema
+        to: tool.schema
           .string()
           .optional()
           .nullable()
-          .describe("For set_limit: which role the limit applies to (Builder|Reviewer). Omit for total."),
+          .describe("For set_limit/switch on multi-member channels: target member by session id or role label."),
       },
       async execute(args, ctx: ToolContext) {
-        const state = load()
-        const blocked = requireMember(state, ctx.sessionID)
-        if (blocked) return blocked
-        const role = args.limit_role ? normalizeRole(args.limit_role) : null
-        const result = timerAction(state, {
-          channel: args.channel,
-          session_id: ctx.sessionID,
-          action: args.action as TimerInput["action"],
-          limit_ms: args.limit_ms ?? null,
-          limit_role: role,
-        })
-        if (result.ok) save(state)
+        const result = withLockedState(
+          (state) => {
+            const blocked = requireMember(state, ctx.sessionID)
+            if (blocked) return blocked
+            return timerAction(state, {
+              channel: args.channel,
+              session_id: ctx.sessionID,
+              action: args.action as TimerInput["action"],
+              limit_ms: args.limit_ms ?? null,
+              to: args.to ?? null,
+            })
+          },
+          (r) => r.ok,
+        )
         return JSON.stringify(result)
       },
     }),
-  }
-
-  const deliverPending = async (sessionId: string): Promise<void> => {
-    const state = load()
-    const channel = channelForSession(state, sessionId)
-    if (!channel) {
-      console.error(`[OpenComms] deliverPending: no channel for session ${sessionId}`)
-      return
-    }
-    if (channel.paused) {
-      console.error(`[OpenComms] deliverPending: channel ${channel.name} is paused`)
-      return
-    }
-    const queueBefore = state.queues[sessionId] ?? []
-    const delivered = drainQueue(state, sessionId)
-    if (delivered.length === 0) {
-      console.error(`[OpenComms] deliverPending: queue empty for ${sessionId} (queue had ${queueBefore.length} ids)`)
-      return
-    }
-    save(state)
-
-    const text = delivered
-      .map(
-        (m) =>
-          `[OpenComms message from ${m.sender_role} (${m.message_type}) — message_id ${m.message_id}, reply_to ${m.reply_to ?? "none"}, hop ${m.hop_count}]\n\n${m.content}`,
-      )
-      .join("\n\n---\n\n")
-
-    try {
-      console.error(`[OpenComms] deliverPending: prompting session ${sessionId} with ${delivered.length} message(s)`)
-      await client.session.prompt({
-        path: { id: sessionId },
-        body: {
-          parts: [{ type: "text", text: text }],
-        },
-      })
-      console.error(`[OpenComms] deliverPending: prompt succeeded for ${sessionId}`)
-    } catch (error) {
-      // Delivery failed: do NOT leave messages marked "delivered" (that would
-      // silently drop them). Re-queue each envelope back to pending so the
-      // next idle event can retry, and record the failure visibly in
-      // opencomms_status (spec: "Discard a message silently" is forbidden).
-      const state2 = load()
-      const ids = delivered.map((m) => m.message_id)
-      for (const id of ids) {
-        const msg = state2.messages[id]
-        if (msg && msg.delivery_status === "delivered") {
-          msg.delivery_status = "pending"
-          msg.delivered_at = null
-        }
-      }
-      const queue = state2.queues[sessionId] ?? []
-      for (const id of ids) {
-        const msg = state2.messages[id]
-        if (msg && !queue.includes(id)) queue.unshift(id)
-      }
-      state2.queues[sessionId] = queue
-      state2.errors.push({
-        at: Date.now(),
-        message: `Delivery to session ${sessionId} failed (${(error as Error).message}); ${ids.length} message(s) re-queued for retry.`,
-      })
-      if (state2.errors.length > 200) state2.errors = state2.errors.slice(-200)
-      save(state2)
-    }
   }
 
   return {
@@ -410,9 +549,10 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
     "experimental.chat.system.transform": async (input, output) => {
       if (!input.sessionID) return
       const state = load()
-      const prompt = rolePromptFor(state, input.sessionID)
-      if (prompt) {
-        output.system.push(buildRolePrompt(promptRole(state, input.sessionID) ?? "Builder", prompt))
+      // A session may belong to multiple channels; inject one labeled section
+      // per membership so roles/prompts never blur across channels.
+      for (const info of memberInfosFor(state, input.sessionID)) {
+        output.system.push(buildRolePrompt(info.role, info.prompt, info.channel_name))
       }
     },
 
@@ -420,32 +560,39 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
       const e = event as Event
       if (e.type === "session.idle") {
         const sessionId = e.properties.sessionID
-        const state = load()
-        if (isMember(state, sessionId)) {
+        const linked = store.withLock(() => {
+          const state = load()
+          if (!isMember(state, sessionId)) return false
           clearStale(state, sessionId)
-          save(state)
-          void deliverPending(sessionId)
-        }
+          store.save(state)
+          return true
+        })
+        if (linked) void deliverPending(sessionId)
         return
       }
       if (e.type === "session.deleted") {
         const sessionId = e.properties.info.id
-        const state = load()
-        if (isMember(state, sessionId)) {
+        const linked = store.withLock(() => {
+          const state = load()
+          if (!isMember(state, sessionId)) return false
           markStale(state, sessionId)
-          save(state)
-        }
+          store.save(state)
+          return true
+        })
+        void linked
         return
       }
       if (e.type === "session.status") {
         const sessionId = e.properties.sessionID
         if (e.properties.status.type === "idle") {
-          const state = load()
-          if (isMember(state, sessionId)) {
+          const linked = store.withLock(() => {
+            const state = load()
+            if (!isMember(state, sessionId)) return false
             clearStale(state, sessionId)
-            save(state)
-            void deliverPending(sessionId)
-          }
+            store.save(state)
+            return true
+          })
+          if (linked) void deliverPending(sessionId)
         }
         return
       }
@@ -453,42 +600,27 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
 
     "command.execute.before": async (input, output) => {
       if (input.command !== "OpenComms") return
-      const args = parseArgs(input.arguments)
-      const rest = stripArgs(input.arguments)
-      const sub = rest.split(/\s+/)[0]?.toLowerCase() ?? ""
-      const channel = args["Channel"] ?? args["channel"]
-      const role = args["As"] ?? args["role"]
-      const rolePrompt = args["RolePrompt"] ?? args["role_prompt"] ?? rest.replace(/^\S+\s*/, "")
+      const sub = slashSub(input.arguments)
+      const { params, rest } = extractSlashArgs(input.arguments)
+      const channel = params["channel"]
+      const roleRaw = params["as"]
+      // Free-form prompt: recognized keys removed, then drop the leading
+      // subcommand word; explicit RolePrompt wins when present.
+      const remainder = rest.replace(/^\S+\s*/, "")
+      const rolePrompt = params["roleprompt"] ?? remainder
 
-      const state = load()
       let result: { ok: boolean; message: string; data?: unknown }
 
       switch (sub) {
-        case "create": {
-          const r = normalizeRole(role ?? "")
-          if (!r) {
-            result = { ok: false, message: "Usage: /OpenComms Create Channel=<name> As=<Builder|Reviewer> [role instructions]" }
-            break
-          }
-          const rootReject = await requireRootSession(input.sessionID)
-          if (rootReject) {
-            result = { ok: false, message: rootReject }
-            break
-          }
-          result = createChannel(state, {
-            channel: channel ?? "",
-            role: r,
-            role_prompt: rolePrompt,
-            session_id: input.sessionID,
-            project_id: projectId,
-            worktree: worktreePath,
-          })
-          break
-        }
+        case "create":
         case "join": {
-          const r = normalizeRole(role ?? "")
-          if (!r) {
-            result = { ok: false, message: "Usage: /OpenComms Join Channel=<name> As=<Builder|Reviewer> [role instructions]" }
+          const isCreate = sub === "create"
+          const usage = isCreate
+            ? "Usage: /OpenComms Create Channel=<name> As=<role> [role instructions]"
+            : "Usage: /OpenComms Join Channel=<name> As=<role> [role instructions]"
+          const role = roleRaw ? normalizeRole(roleRaw) : null
+          if (!role) {
+            result = { ok: false, message: `${ROLE_RULES} ${usage}` }
             break
           }
           const rootReject = await requireRootSession(input.sessionID)
@@ -496,53 +628,102 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
             result = { ok: false, message: rootReject }
             break
           }
-          result = joinChannel(state, {
-            channel: channel ?? "",
-            role: r,
-            role_prompt: rolePrompt,
-            session_id: input.sessionID,
-            project_id: projectId,
-            worktree: worktreePath,
+          result = store.withLock(() => {
+            const state = load()
+            const r = isCreate
+              ? createChannel(state, {
+                  channel: channel ?? "",
+                  role,
+                  role_prompt: rolePrompt,
+                  session_id: input.sessionID,
+                  project_id: projectId,
+                  worktree: worktreePath,
+                })
+              : joinChannel(state, {
+                  channel: channel ?? "",
+                  role,
+                  role_prompt: rolePrompt,
+                  session_id: input.sessionID,
+                  project_id: projectId,
+                  worktree: worktreePath,
+                })
+            if (r.ok) store.save(state)
+            return r
           })
           break
         }
         case "status":
-          result = status(state, { channel })
+          result = status(load(), { channel })
           break
         case "pause":
-          result = pauseChannel(state, { channel: channel ?? "", session_id: input.sessionID })
-          break
         case "resume":
-          result = resumeChannel(state, { channel: channel ?? "", session_id: input.sessionID })
-          break
         case "disconnect":
-          result = disconnectChannel(state, { channel: channel ?? "", session_id: input.sessionID })
-          break
-        case "update_role":
-          result = updateRole(state, {
-            channel: channel ?? "",
-            session_id: input.sessionID,
-            role_prompt: rolePrompt,
+        case "inbox": {
+          result = store.withLock(() => {
+            const state = load()
+            let r: ToolResult
+            if (sub === "pause") r = pauseChannel(state, { channel: channel ?? "", session_id: input.sessionID })
+            else if (sub === "resume") r = resumeChannel(state, { channel: channel ?? "", session_id: input.sessionID })
+            else if (sub === "disconnect")
+              r = disconnectChannel(state, { channel: channel ?? "", session_id: input.sessionID })
+            else r = inbox(state, { channel: channel ?? "", session_id: input.sessionID })
+            const shouldSave = r.ok && sub !== "inbox"
+            if (shouldSave) store.save(state)
+            return r
           })
           break
-        case "inbox":
-          result = inbox(state, { channel: channel ?? "", session_id: input.sessionID })
+        }
+        case "kick": {
+          let notifyRecipients: string[] = []
+          result = store.withLock(() => {
+            const state = load()
+            const r = kickChannel(state, {
+              channel: channel ?? "",
+              session_id: input.sessionID,
+              target_session_id: params["target"] ?? null,
+              target_role: params["target"] ?? null,
+            })
+            if (r.ok) {
+              notifyRecipients =
+                ((r.data as { remaining_session_ids?: string[] } | undefined)?.remaining_session_ids ?? []).slice()
+            }
+            if (r.ok) store.save(state)
+            return r
+          })
+          for (const rid of notifyRecipients) void deliverPending(rid)
           break
+        }
         case "history":
-          result = history(state, { channel: channel ?? "" })
+          result = history(load(), { channel: channel ?? "", session_id: input.sessionID })
           break
+        case "updaterole": {
+          result = store.withLock(() => {
+            const state = load()
+            const r = updateRole(state, {
+              channel: channel ?? "",
+              session_id: input.sessionID,
+              role_prompt: rolePrompt,
+            })
+            if (r.ok) store.save(state)
+            return r
+          })
+          break
+        }
         case "timer": {
-          const action = (args["Action"] ?? args["action"] ?? "status").toLowerCase() as
-            | "start" | "stop" | "switch" | "reset" | "status" | "set_limit" | "clear_limit"
-          const limitMs = args["LimitMs"] ?? args["limit_ms"]
-          const limitRoleStr = args["LimitRole"] ?? args["limit_role"]
-          const limitRole = limitRoleStr ? normalizeRole(limitRoleStr) : null
-          result = timerAction(state, {
-            channel: channel ?? "",
-            session_id: input.sessionID,
-            action,
-            limit_ms: limitMs !== undefined ? Number(limitMs) : null,
-            limit_role: limitRole,
+          const action = ((params["action"] ?? "status").toLowerCase()) as TimerInput["action"]
+          const limitMsRaw = params["limitms"]
+          const toRaw = params["to"] ?? params["limitrole"] // legacy LimitRole alias
+          result = store.withLock(() => {
+            const state = load()
+            const r = timerAction(state, {
+              channel: channel ?? "",
+              session_id: input.sessionID,
+              action,
+              limit_ms: limitMsRaw !== undefined ? Number(limitMsRaw) : null,
+              to: toRaw ?? null,
+            })
+            if (r.ok) store.save(state)
+            return r
           })
           break
         }
@@ -550,11 +731,10 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
           result = {
             ok: false,
             message:
-              "Unknown /OpenComms subcommand. Supported: Create, Join, Status, Pause, Resume, Disconnect, UpdateRole, Inbox, History, Timer.",
+              "Unknown /OpenComms subcommand. Supported: Create, Join, Status, Pause, Resume, Disconnect, Kick, UpdateRole, Inbox, History, Timer.",
           }
       }
 
-      if (result.ok) save(state)
       output.parts.push({
         type: "text",
         text: `OpenComms: ${result.message}`,
@@ -564,14 +744,6 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
       } as never)
     },
   }
-}
-
-function promptRole(state: State, sessionId: string): Role | null {
-  for (const channel of Object.values(state.channels)) {
-    const member = channel.members.find((m) => m.session_id === sessionId)
-    if (member) return member.role
-  }
-  return null
 }
 
 export default OpenCommsPlugin

@@ -4,7 +4,7 @@
 
 ## 1. What OpenComms Is
 
-Project-local TypeScript OpenCode plugin that **links two existing root OpenCode sessions** into a communication channel (e.g. Builder <-> Reviewer) **without creating or owning sessions**.
+Project-local TypeScript OpenCode plugin that **links existing root OpenCode sessions** (2..N) into a communication channel with an **open role vocabulary** (e.g. Builder <-> Reviewer, or Lead/Coder/Tester trios) **without creating or owning sessions**.
 
 - Package: `opencomms` v1.0.0, ESM, `opencode >=1.18.0`
 - 4 source files: `src/types.ts`, `src/store.ts`, `src/engine.ts`, `src/plugin.ts`
@@ -97,13 +97,19 @@ Tests in `test/unit/engine.test.ts` (timer + channel/queue tests), `store.test.t
 
 ## 8. Gotchas
 
-- Channel names lowercased on creation (`engine.ts:92`); lookups must use `normalizeChannelName`.
-- `seen_content` dedup uses `contentHash` (sha256, first 32 hex chars, `engine.ts:50`) with `stale_event_ms` window — not permanent.
-- `drainQueue` (`engine.ts:375`) only cooldown-blocks the **first** message in batch; rest of batch delivers immediately to avoid starvation (`engine.ts:410`).
-- `StateStore.save` (`store.ts:64`) does atomic temp+rename with Windows retry (Atomics.wait 50ms + fallback direct write).
-- Corrupt `state.json` never bricks plugin — returns `emptyState()` + records error (`store.ts:52`).
-- `plugin.ts:48` `parseArgs` regex handles `key="value"` / `key='value'` / `key=value`; `stripArgs` removes them leaving subcommand.
-- Timer auto-switches on `sendMessage` (`engine.ts`): sender's segment folds into `elapsed_ms`, recipient's starts. Use `timerAction` for manual control. `markStale` also folds/stops the segment if the stale session was on the clock.
+- Channels hold **N members** (`Channel.max_members`, default 8, clamped to >= 2 at creation). On a two-member channel `sendMessage` targets the lone peer; with 3+ members a send **fails** unless you pass `to=<session_id|role>` or `broadcast=true` — targeting is never guessed.
+- Roles are an **open vocabulary** (structural check: letter first, 1-32 chars of letters/digits/space/-/_), unique per channel, spelling preserved verbatim; all role lookups compare case-insensitively.
+- Every load->mutate->save runs under `StateStore.withLock` (exclusive-create `.state.lock`, stale-broken after 15s). Bare reads stay lock-free because writes are atomic renames. Never call anything that takes the lock while already inside it — deadlocks until timeout.
+- Message types are whitelisted: senders may send only `review_request|review_response|manual`; `"system"` is reserved for internal notices (e.g. kick notifications).
+- Delivered peer content is wrapped in `<<<UNTRUSTED_PEER_MESSAGE>>>` markers with provenance (`formatUntrustedMessage`) before entering another session's prompt — keep that framing intact.
+- `seen_content` dedup keys are `${sender_session_id}:${hash}` — identical content from *different* senders is legitimate.
+- Reads are member-scoped: `history` requires membership (`HistoryInput.session_id`); transcripts never leak to outsiders. Root-session checks on Create/Join now **fail closed** on SDK lookup errors.
+- Retention: `MAX_PERSISTED_MESSAGES = 2000`; `pruneMessages` keeps newest and cleans queues/`delivered_to`. History scans are bounded by the cap instead of a separate index (deliberate tradeoff).
+- Kick: Builder-only removal of another member via `kickChannel` / `/OpenComms Kick Channel=.. Target=<id|role>`. Kicking severs only the channel link; the session lives on. Single-member channels survive kicks and accept rejoin.
+- Channel names must match `^[a-z0-9][a-z0-9-_]*$` after lowercasing (blocks `__proto__` key games); lookups use `normalizeChannelName`.
+- Timer keys members by **session id** (`timer.elapsed_ms[sessionId]`, `active_member_id`); it auto-switches on `sendMessage`, folds/stops on `markStale`/kick/disconnect if the departing member held the clock.
+- Corrupt/tampered `state.json` never bricks the plugin: schema_version + shape validated (`validateState`), wrong version or forged member rows -> `emptyState()` + recorded error; legacy files get timer/max_members backfilled.
+- Slash args use `extractSlashArgs`: only recognized keys (`Channel/As/Target/To/Broadcast/Action/LimitMs/LimitRole/RolePrompt`) are consumed; unknown `x=y` stays in free-form prompt text. Subcommand matching ignores `_`/`-` and case (`UpdateRole` == `updaterole`).
 
 ---
 *For deeper detail, see `docs/README.md` navigation hub.*

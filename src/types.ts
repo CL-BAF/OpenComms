@@ -4,17 +4,23 @@
  * All persisted state lives under `<project>/.opencode-comms/` and is written
  * atomically (temp file + rename) so a crash mid-write can never corrupt a
  * channel definition or a message queue.
+ *
+ * Roles are an OPEN vocabulary: any short human-readable label ("Builder",
+ * "Reviewer", "Architect", ...). They are validated structurally by
+ * normalizeRole and kept unique per channel (one role per member), not drawn
+ * from a fixed union. Channels support N members up to max_members.
  */
 
 export const STATE_DIR = ".opencode-comms"
 export const STATE_FILE = "state.json"
 export const SCHEMA_VERSION = 1
 
+/** Default per-channel membership cap (channels hold N members). */
+export const DEFAULT_MAX_MEMBERS = 8
+
+/** Legacy default roles, kept for docs/fallbacks only — not a closed set. */
 export const ROLE_BUILDER = "Builder"
 export const ROLE_REVIEWER = "Reviewer"
-
-export const VALID_ROLES = [ROLE_BUILDER, ROLE_REVIEWER] as const
-export type Role = (typeof VALID_ROLES)[number]
 
 export type DeliveryStatus =
   | "pending"
@@ -23,19 +29,31 @@ export type DeliveryStatus =
   | "rejected"
   | "stale"
 
-export type MessageType =
+/**
+ * Message types a sender may choose freely. The "system" type is RESERVED:
+ * it can appear in persisted envelopes produced internally, but senders may
+ * never set it, preventing peer messages from masquerading as system traffic.
+ */
+export type SenderMessageType =
   | "review_request"
   | "review_response"
   | "manual"
-  | "system"
+
+export type MessageType = SenderMessageType | "system"
+
+export const VALID_SENDER_MESSAGE_TYPES: readonly SenderMessageType[] = [
+  "review_request",
+  "review_response",
+  "manual",
+]
 
 export interface MessageEnvelope {
   message_id: string
   channel_id: string
   sender_session_id: string
-  sender_role: Role
+  sender_role: string
   recipient_session_id: string
-  recipient_role: Role
+  recipient_role: string
   timestamp: number
   message_type: MessageType
   content: string
@@ -49,7 +67,8 @@ export interface MessageEnvelope {
 
 export interface Member {
   session_id: string
-  role: Role
+  /** Open vocabulary role label, unique within the channel. */
+  role: string
   role_prompt: string
   joined_at: number
   /** Set when the linked session no longer exists after a restart. */
@@ -66,6 +85,8 @@ export interface Channel {
   paused: boolean
   paused_at: number | null
   members: Member[]
+  /** Membership cap for this channel (>= 2). */
+  max_members: number
   /** Per-channel rate limiting: window start (ms) and message count. */
   rate: { window_start: number; count: number }
   /** Delivery cooldown: next allowed delivery timestamp per recipient. */
@@ -82,21 +103,21 @@ export interface Channel {
   delivery_cooldown_ms: number
   /** Stale events (older than this, in ms) are rejected. */
   stale_event_ms: number
-  /** Chess-clock timer: tracks cumulative per-role active time. */
+  /** Chess-clock timer: tracks cumulative active time per member. */
   timer: ChannelTimer
 }
 
 export interface ChannelTimer {
-  /** Which role is currently on the clock, or null when stopped. */
-  active_role: Role | null
+  /** Which member (session id) is currently on the clock, null when stopped. */
+  active_member_id: string | null
   /** Epoch ms when the current active segment started, or null when stopped. */
   segment_started_at: number | null
-  /** Cumulative active ms per role (excludes the in-progress segment). */
-  elapsed_ms: Record<Role, number>
+  /** Cumulative active ms keyed by member session id (excludes running segment). */
+  elapsed_ms: Record<string, number>
   /** Optional hard cap in ms; agents can query it and self-limit. */
   limit_ms: number | null
-  /** Which role the limit applies to (null = total across both). */
-  limit_role: Role | null
+  /** Session id the limit applies to (null = total across all members). */
+  limit_member_id: string | null
 }
 
 export interface State {
@@ -117,9 +138,10 @@ export interface ChannelSummary {
   worktree: string
   created_at: number
   paused: boolean
+  max_members: number
   members: Array<{
     session_id: string
-    role: Role
+    role: string
     stale: boolean
     joined_at: number
   }>
@@ -139,20 +161,29 @@ export interface SendInput {
   type?: MessageType
   content: string
   reply_to?: string | null
+  /**
+   * Explicit recipient: another member's session id OR their unique role
+   * label (case-insensitive). Omit on a two-member channel to target the
+   * single peer; required on channels with 3+ members unless broadcast=true.
+   */
+  to?: string | null
+  /** Deliver to every other member of the channel instead of one target. */
+  broadcast?: boolean
 }
 
 export interface CreateInput {
   channel: string
-  role: Role
+  role: string
   role_prompt: string
   session_id: string
   project_id: string
   worktree: string
+  max_members?: number
 }
 
 export interface JoinInput {
   channel: string
-  role: Role
+  role: string
   role_prompt: string
   session_id: string
   project_id: string
@@ -180,6 +211,15 @@ export interface DisconnectInput {
   session_id: string
 }
 
+export interface KickInput {
+  channel: string
+  /** The caller requesting the kick — must hold a privileged role. */
+  session_id: string
+  /** Exactly one of these identifies the member to remove. */
+  target_session_id?: string | null
+  target_role?: string | null
+}
+
 export interface InboxInput {
   channel: string
   session_id: string
@@ -188,6 +228,8 @@ export interface InboxInput {
 
 export interface HistoryInput {
   channel: string
+  /** History reads are member-only: content stays inside the channel. */
+  session_id: string
   limit?: number
 }
 
@@ -200,7 +242,8 @@ export interface TimerInput {
   session_id: string
   action: "start" | "stop" | "switch" | "reset" | "status" | "set_limit" | "clear_limit"
   limit_ms?: number | null
-  limit_role?: Role | null
+  /** For set_limit/switch: target member by session id or role label. */
+  to?: string | null
 }
 
 export interface ToolResult {

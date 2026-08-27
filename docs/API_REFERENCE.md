@@ -1,39 +1,40 @@
 # API_REFERENCE.md — Complete Symbol Catalog
 
-> Every exported symbol with `file:line`, signature, and notes. Use this instead of opening `src/*.ts`.
+> Every exported symbol with signature and notes. Line anchors are approximate after the multi-agent refactor — signatures here are the source of truth; use `rg "export function <name>" src/` for exact positions.
 
-## src/types.ts:1 — Constants & Types
+## src/types.ts — Constants & Types
 
 ### Constants
 
-| Symbol | Line | Value / Type | Notes |
-|--------|------|--------------|-------|
-| `STATE_DIR` | `types.ts:9` | `".opencode-comms"` | Subdir under project root |
-| `STATE_FILE` | `types.ts:10` | `"state.json"` | Inside `STATE_DIR` |
-| `SCHEMA_VERSION` | `types.ts:11` | `1` | Bump on breaking State shape change |
-| `ROLE_BUILDER` | `types.ts:13` | `"Builder"` | |
-| `ROLE_REVIEWER` | `types.ts:14` | `"Reviewer"` | |
-| `VALID_ROLES` | `types.ts:16` | `readonly ["Builder","Reviewer"]` | |
+| Symbol | Value / Type | Notes |
+|--------|--------------|-------|
+| `STATE_DIR` | `".opencode-comms"` | Subdir under project root |
+| `STATE_FILE` | `"state.json"` | Inside `STATE_DIR` |
+| `SCHEMA_VERSION` | `1` | Bump on breaking State shape change |
+| `ROLE_BUILDER` | `"Builder"` | Legacy default label (kick policy v1 checks this) |
+| `ROLE_REVIEWER` | `"Reviewer"` | Legacy default label |
+| `DEFAULT_MAX_MEMBERS` | `8` | Per-channel membership cap; clamped ≥2 at creation |
+| `VALID_SENDER_MESSAGE_TYPES` | `["review_request","review_response","manual"]` | Whitelist; `"system"` is internal-only |
 
 ### Type Aliases
 
-| Type | Line | Definition |
-|------|------|------------|
-| `Role` | `types.ts:17` | `(typeof VALID_ROLES)[number]` → `"Builder"\|"Reviewer"` |
-| `DeliveryStatus` | `types.ts:19` | `"pending"\|"delivered"\|"failed"\|"rejected"\|"stale"` |
-| `MessageType` | `types.ts:26` | `"review_request"\|"review_response"\|"manual"\|"system"` |
+| Type | Definition |
+|------|------------|
+| `Role` | `string` — OPEN vocabulary, validated structurally by `normalizeRole` (`/^[A-Za-z][A-Za-z0-9 _-]{0,31}$/`, spelling preserved) |
+| `SenderMessageType` | `"review_request"\|"review_response"\|"manual"` — what senders may set |
+| `MessageType` | `SenderMessageType \| "system"` — `"system"` appears only in internally-generated envelopes |
+| `DeliveryStatus` | `"pending"\|"delivered"\|"failed"\|"rejected"\|"stale"` |
 
 ### Interfaces
 
 ```ts
-// types.ts:32
 interface MessageEnvelope {
   message_id: string              // ocm_<hex>
   channel_id: string              // chn_<hex>
   sender_session_id: string
-  sender_role: Role
+  sender_role: string             // open-vocab role label
   recipient_session_id: string
-  recipient_role: Role
+  recipient_role: string
   timestamp: number
   message_type: MessageType
   content: string
@@ -45,32 +46,39 @@ interface MessageEnvelope {
   attempts: number
 }
 
-// types.ts:50
 interface Member {
   session_id: string
-  role: Role
+  role: string                    // open vocab, unique per channel
   role_prompt: string
   joined_at: number
   stale: boolean
   stale_at: number | null
 }
 
-// types.ts:60
 interface Channel {
   id: string; name: string; project_id: string; worktree: string
   created_at: number; paused: boolean; paused_at: number | null
-  members: Member[]               // ≤2
+  members: Member[]               // ≤ max_members
+  max_members: number             // default 8, clamped ≥2 at creation
   rate: { window_start:number, count:number }
   cooldown_until: Record<string,number>
-  seen_content: Record<string,number>
-  processed_correlations: string[] // capped 500
-  max_hops: number                 // default 4
-  rate_limit: number               // default 20
-  delivery_cooldown_ms: number     // default 1000
-  stale_event_ms: number           // default 300000 (5min)
+  seen_content: Record<string,number>   // keys `${sender_session_id}:${hash}`; TTL = stale_event_ms
+  processed_correlations: string[]      // capped 500
+  max_hops: number                      // default 4
+  rate_limit: number                    // default 20/min; broadcast counts as ONE send
+  delivery_cooldown_ms: number          // default 1000
+  stale_event_ms: number                // default 300000 (5min)
+  timer: ChannelTimer
 }
 
-// types.ts:87
+interface ChannelTimer {
+  active_member_id: string | null       // member ON the clock (session id)
+  segment_started_at: number | null
+  elapsed_ms: Record<string, number>    // keyed BY SESSION ID
+  limit_ms: number | null
+  limit_member_id: string | null        // null → limit applies to channel TOTAL
+}
+
 interface State {
   schema_version: number
   channels: Record<string,Channel>        // key = normalizedName
@@ -80,126 +88,121 @@ interface State {
   errors: Array<{at:number,message:string}> // capped 200
 }
 
-// types.ts:98 / 115
-interface ChannelSummary { id, name, project_id, worktree, created_at, paused, members:{session_id,role,stale,joined_at}[], queue_lengths:Record<string,number>, last_message_at:number|null }
+interface ChannelSummary { id, name, project_id, worktree, created_at, paused, max_members,
+  members:{session_id,role,stale,joined_at}[], queue_lengths:Record<string,number>, last_message_at:number|null }
 interface StatusReport { channels: ChannelSummary[], total_messages:number, pending_messages:number, errors:{at,message}[] }
 
-// Input types — all in types.ts:122-181
-SendInput      { channel:string, type?:MessageType, content:string, reply_to?:string|null } // :122
-CreateInput    { channel:string, role:Role, role_prompt:string, session_id:string, project_id:string, worktree:string } // :129
-JoinInput      { channel:string, role:Role, role_prompt:string, session_id:string, project_id:string, worktree:string } // :138
-UpdateRoleInput{ channel:string, session_id:string, role_prompt:string } // :147
-PauseInput     { channel:string, session_id:string } // :153
-ResumeInput    { channel:string, session_id:string } // :158
-DisconnectInput{ channel:string, session_id:string } // :163
-InboxInput     { channel:string, session_id:string, limit?:number } // :168
-HistoryInput   { channel:string, limit?:number } // :174
-StatusInput    { channel?:string } // :179
-TimerInput     { channel:string, session_id:string, action:"start"|"stop"|"switch"|"reset"|"status"|"set_limit"|"clear_limit", limit_ms?:number|null, limit_role?:Role|null }
-ToolResult     { ok:boolean, message:string, data?:unknown } // :183
+// Inputs
+SendInput      { channel:string, type?:MessageType, content:string, reply_to?:string|null,
+                 to?:string|null /* other member's session_id or role */, broadcast?:boolean }
+CreateInput    { channel:string, role:string, role_prompt:string, session_id, project_id, worktree,
+                 max_members?:number }
+JoinInput      { channel:string, role:string, role_prompt:string, session_id, project_id, worktree }
+UpdateRoleInput{ channel:string, session_id:string, role_prompt:string }
+PauseInput     { channel:string, session_id:string }
+ResumeInput    { channel:string, session_id:string }
+DisconnectInput{ channel:string, session_id:string }
+KickInput      { channel:string, session_id:string /* caller */,
+                 target_session_id?:string|null, target_role?:string|null }  // exactly one required
+InboxInput     { channel:string, session_id:string, limit?:number }
+HistoryInput   { channel:string, session_id:string /* MEMBER-SCOPED reads */, limit?:number }
+StatusInput    { channel?:string }
+TimerInput     { channel:string, session_id:string,
+                 action:"start"|"stop"|"switch"|"reset"|"status"|"set_limit"|"clear_limit",
+                 limit_ms?:number|null, to?:string|null /* member by id-or-role */ }
+ToolResult     { ok:boolean, message:string, data?:unknown }
 ```
 
 ---
 
-## src/engine.ts:1 — Pure Logic
+## src/engine.ts — Pure Logic
 
 Constants:
 
-| Symbol | Line | Value |
-|--------|------|-------|
-| `DEFAULT_MAX_HOPS` | `engine.ts:34` | `4` |
-| `DEFAULT_RATE_LIMIT` | `engine.ts:35` | `20` (per minute) |
-| `DEFAULT_DELIVERY_COOLDOWN_MS` | `engine.ts:36` | `1000` |
-| `DEFAULT_STALE_EVENT_MS` | `engine.ts:37` | `300000` (5 min) |
+| Symbol | Value |
+|--------|-------|
+| `DEFAULT_MAX_HOPS` | `4` |
+| `DEFAULT_RATE_LIMIT` | `20` (per minute) |
+| `DEFAULT_DELIVERY_COOLDOWN_MS` | `1000` |
+| `DEFAULT_STALE_EVENT_MS` | `300000` (5 min) |
+| `MAX_PERSISTED_MESSAGES` | `2000` retention cap enforced by `pruneMessages` |
 
 Utilities:
 
-| Function | Line | Signature | Notes |
-|----------|------|-----------|-------|
-| `normalizeChannelName` | `engine.ts:39` | `(name:string)=>string` | `trim().toLowerCase()` |
-| `normalizeRole` | `engine.ts:43` | `(role:string)=>Role\|null` | Case-insensitive, only Builder/Reviewer |
-| `assertRootSession` | `engine.ts:51` | `(parentID:string\|undefined\|null, sessionId:string)=>string\|null` | Returns rejection message if session is a child (has parentID), else null |
-| `contentHash` | `engine.ts:50` | `(content:string)=>string` | sha256, first 32 hex chars |
-| `newMessageId` | `engine.ts:54` | `()=>string` | `ocm_<32hex>` |
-| `newChannelId` | `engine.ts:58` | `()=>string` | `chn_<32hex>` |
-| `newCorrelationId` | `engine.ts:62` | `()=>string` | `cor_<32hex>` |
-| `defaultTimer` | `engine.ts:66` | `()=>ChannelTimer` | Fresh timer with both roles at 0 |
-| `timerElapsed` | `engine.ts:73` | `(timer:ChannelTimer, role:Role, now?:number)=>number` | Cumulative ms for role incl. in-progress segment |
-| `timerTotal` | `engine.ts:79` | `(timer:ChannelTimer, now?:number)=>number` | Sum of both roles incl. in-progress segment |
-| `timerLimitReached` | `engine.ts:84` | `(timer:ChannelTimer, now?:number)=>boolean` | True when configured limit reached |
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `normalizeChannelName` | `(name:string)=>string` | `trim().toLowerCase()`; creation additionally enforces `^[a-z0-9][a-z0-9-_]*$` + ≤64 |
+| `normalizeRole` | `(role:string)=>string\|null` | Open vocabulary; trims, collapses inner whitespace, structural check; spelling preserved |
+| `assertRootSession` | `(parentID, sessionId)=>string\|null` | Rejection message if child session, else null |
+| `contentHash` | `(content:string)=>string` | sha256, first 32 hex chars |
+| `newMessageId` / `newChannelId` / `newCorrelationId` | `()=>string` | `ocm_` / `chn_` / `cor_` prefixed hex |
+| `defaultTimer` | `()=>ChannelTimer` | All-null, empty `elapsed_ms` record |
+| `timerElapsed(timer, memberId, now?)` | `=>number` | Cumulative ms for one MEMBER incl. running segment |
+| `timerElapsedAll(timer, now?)` | `=>Record<string,number>` | Per-member snapshot incl. running segment |
+| `timerTotal(timer, now?)` | `=>number` | Sum across all members incl. running segment |
+| `timerLimitReached(timer, now?)` | `=>boolean` | Member-scoped when `limit_member_id` set, else TOTAL |
+| `resolveSwitchTarget(channel, requesterId, to?)` | `{result?, target?}` | Never-guess switch resolution: explicit `to` (others only) > implied single peer > ERROR on N>1 |
+| `memberInfosFor(state, sessionId)` | `=>MemberInfo[]` | ALL memberships `{role, prompt, channel_name}` — one labeled prompt section per channel |
+| `drainForDelivery(state, recipientSessionId)` | `=>DeliveryPair[]` | Drains queue; annotates each envelope with ITS OWN channel name for provenance |
+| `requeueFailedDelivery(state, sessionId, ids)` | `=>void` | Restores pending status + ORIGINAL FIFO order on prompt failure |
+| `pruneMessages(state)` | `=>void` | Keeps newest `MAX_PERSISTED_MESSAGES`, cleans queues/delivered_to of pruned ids |
+| `formatUntrustedMessage(msg, channelName)` | `=>string` | `<<<UNTRUSTED_PEER_MESSAGE>>>` framing + provenance + do-not-follow notice |
+| `formatDeliveryBatch(delivered, channelName)` | `=>string` | Batch joiner for the above |
 
 Channel ops (all `state` mutated in place, return `ToolResult`):
 
-| Function | Line | Signature | Failure cases |
-|----------|------|-----------|---------------|
-| `createChannel` | `engine.ts:91` | `(state:State, input:CreateInput)=>ToolResult` | empty name, len>64, missing session/project/worktree/role_prompt, already exists |
-| `joinChannel` | `engine.ts:142` | `(state:State, input:JoinInput)=>ToolResult` | no channel, project/worktree mismatch, already member (same or diff role), role already taken, missing role_prompt |
-| `updateRole` | `engine.ts:200` | `(state:State, input:UpdateRoleInput)=>ToolResult` | no channel, not member, empty role_prompt |
-| `pauseChannel` | `engine.ts:212` | `(state:State, input:PauseInput)=>ToolResult` | no channel, not member (idempotent if already paused) |
-| `resumeChannel` | `engine.ts:225` | `(state:State, input:ResumeInput)=>ToolResult` | no channel, not member (ok if not paused) |
-| `disconnectChannel` | `engine.ts:238` | `(state:State, input:DisconnectInput)=>ToolResult` | no channel, not member; marks its queue msgs `rejected`, deletes `queues[sessionId]`, deletes channel if empty |
+| Function | Signature | Failure cases |
+|----------|-----------|---------------|
+| `createChannel(state, input)` | Slug/role validation, dupes, clamps `max_members∈[2,8]` | bad slug (`__proto__` etc.), len>64, malformed role, missing fields, already exists |
+| `joinChannel(state, input)` | Project/worktree match, dupe-session, MAX_MEMBERS FIRST, then case-insensitive role-taken | full channel → `is full`; taken role → holder listed |
+| `updateRole(state, input)` | membership + non-empty prompt | not member |
+| `pauseChannel` / `resumeChannel` | Idempotent no-op messages | not member |
+| `disconnectChannel(state, input)` | Shared `removeMember`: purge own queue as rejected, fold+stop held timer segment | deletes channel if empty |
+| `kickChannel(state, input)` | Builder-only caller; self-kick denied (id OR role spellings); target must exist | queues distinct `system` notice per remaining member; returns `{kicked_session_id, kicked_role, remaining_session_ids}`; single-member channel survives |
 
 Messaging:
 
-| Function | Line | Signature | Key validations |
-|----------|------|-----------|-----------------|
-| `sendMessage` | `engine.ts:268` | `(state:State, input:SendInput, senderSessionId:string)=>ToolResult` | no channel, not member, no peer, peer stale, paused, empty content, len>100k, rate limit, duplicate content (hash within stale window), hop_count>max_hops |
-| `drainQueue` | `engine.ts:375` | `(state:State, recipientSessionId:string, opts?:{now?:number, canDeliver?:(msg:MessageEnvelope)=>boolean})=>MessageEnvelope[]` | See delivery pipeline in ARCHITECTURE.md; returns delivered batch |
-| `inbox` | `engine.ts:435` | `(state:State, input:InboxInput)=>ToolResult` | no channel, not member; limit clamped 1..100 default 20; does NOT drain |
-| `history` | `engine.ts:463` | `(state:State, input:HistoryInput)=>ToolResult` | no channel; returns newest-first, limit 1..100 |
-| `status` | `engine.ts:486` | `(state:State, input:StatusInput)=>ToolResult` | If `input.channel` set, only that channel; else all |
-| `timerAction` | `engine.ts:500` | `(state:State, input:TimerInput)=>ToolResult` | no channel, not member, invalid action, bad limit |
+| Function | Signature | Key validations |
+|----------|-----------|-----------------|
+| `sendMessage(state, input, senderSessionId)` | Type whitelist ("system" reserved + unknown rejected); recipients resolved via never-guess policy; paused; size ≤100k; rate window (broadcast = ONE count); per-sender dedup (`${sender}:${hash}`, TTL sweep); hops ≤ max_hops | Returns `{message_ids[], recipients[], delivery_status}` |
+| `drainQueue(state, recipientSessionId, opts?)` | See ARCHITECTURE.md delivery pipeline; per-envelope pause/cooldown/stale/canDeliver guards; calls pruneMessages | Returns delivered `MessageEnvelope[]` |
+| `inbox(state, input)` | MEMBER-ONLY | Does NOT drain |
+| `history(state, input)` | MEMBER-ONLY (`HistoryInput.session_id`) | Newest-first, limit 1..100 default 20 |
+| `status(state, input)` | Metadata only (no content) | Optional single-channel filter |
+| `timerAction(state, input)` | start/stop/switch/reset/status/set_limit/clear_limit; switch REQUIRES `to=` on 3+-member channels; set_limit w/o `to=` scopes TOTAL deliberately; `Number.isFinite` gate rejects NaN limits | Not member / invalid action / bad limit |
 
-Session helpers (read-only):
-
-| Function | Line | Signature |
-|----------|------|-----------|
-| `markStale` | `engine.ts:525` | `(state:State, sessionId:string)=>void` |
-| `clearStale` | `engine.ts:535` | `(state:State, sessionId:string)=>void` |
-| `isMember` | `engine.ts:545` | `(state:State, sessionId:string)=>boolean` |
-| `rolePromptFor` | `engine.ts:549` | `(state:State, sessionId:string)=>string\|null` | 
-| `channelForSession` | `engine.ts:557` | `(state:State, sessionId:string)=>Channel\|undefined` |
-| `deliveryStatusOf` | `engine.ts:561` | `(state:State, messageId:string)=>DeliveryStatus\|null` |
+Session helpers (read-only): `markStale(state, sessionId)`, `clearStale(state, sessionId)`, `isMember(state, sessionId)`, `channelForSession(state, sessionId)` (first match — only used for presence now), `deliveryStatusOf(state, messageId)`.
 
 ---
 
-## src/store.ts:1 — Persistence
+## src/store.ts — Persistence
 
-| Symbol | Line | Signature / Value | Notes |
-|--------|------|-------------------|-------|
-| `emptyState()` | `store.ts:17` | `()=>State` | schema_version=1, all maps `{}`, errors `[]` |
-| `class StateStore` | `store.ts:28` | `constructor(projectDir:string)` | `dir = join(projectDir, STATE_DIR)`, `file = join(dir, STATE_FILE)` |
-| `.dir` | `store.ts:29` | `string` | Absolute dir path |
-| `.file` | `store.ts:30` | `string` | Absolute file path |
-| `.load()` | `store.ts:37` | `()=>State` | Returns `emptyState` if missing; on corrupt, returns `emptyState` + pushes error |
-| `.save(state)` | `store.ts:64` | `(state:State)=>void` | Atomic tmp+rename; Windows retry 50ms + fallback direct write |
-| `.update(fn)` | `store.ts:95` | `(mutate:(state:State)=>void)=>State` | load→mutate→save |
-| `stateDirFor` | `store.ts:103` | `(projectDir:string)=>string` | `join(projectDir, STATE_DIR)` |
-| `isInsideStateDir` | `store.ts:107` | `(projectDir:string, candidate:string)=>boolean` | Checks dirname |
+| Symbol | Signature / Value | Notes |
+|--------|-------------------|-------|
+| `emptyState()` | `()=>State` | schema_version=SCHEMA_VERSION, all maps empty |
+| `class StateStore` | `constructor(projectDir:string)` | `dir`, `file`, private `lockPath` |
+| `.withLock(fn)` | `<T>(fn:()=>T)=>T` | Exclusive-create `.state.lock` (`<pid>@<ts>`); LOCK_TIMEOUT_MS=5s; locks older than LOCK_STALE_MS=15s broken. R5 tradeoff documented in ARCHITECTURE.md |
+| `.load()` | `()=>State` | validateState gate (schema_version, shapes, key/name agreement) → reject to fresh + error; backfillState for legacy files |
+| `.save(state)` | `(state:State)=>void` | Atomic tmp+rename; blocking-sleep retry; direct-write fallback |
+| `.update(fn)` | `(mutate:(state:State)=>void)=>State` | `withLock(load → mutate → save)` |
+| `LOCK_TIMEOUT_MS` / `LOCK_STALE_MS` | `5000` / `15000` | Exported for tests |
+| `stateDirFor` / `isInsideStateDir` | path helpers | |
 
 ---
 
-## src/plugin.ts:1 — OpenCode Glue
+## src/plugin.ts — OpenCode Glue
 
-| Symbol | Line | Kind | Notes |
-|--------|------|------|-------|
-| `OpenCommsPlugin` | `plugin.ts:64` | `Plugin` | Async factory `( {client, project, directory, worktree} ) => PluginInstance` |
-| `ROLE_PROMPT_HEADER` | `plugin.ts:42` | `const string` | `"## OpenComms role instructions"` |
-| `buildRolePrompt` | `plugin.ts:44` | `(role:Role, prompt:string)=>string` | `${HEADER}\n\nYou are the ${role}...\n\n${prompt.trim()}` |
-| `parseArgs` | `plugin.ts:48` | `(raw:string)=>Record<string,string>` | Regex `/([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(?:"((?:[^"\\]|\.)*)"|'((?:[^'\\]|\.)*)'|(\S+))/g` |
-| `stripArgs` | `plugin.ts:60` | `(raw:string)=>string` | Removes key=value tokens, trims |
-| `promptRole` | `plugin.ts:441` | `(state:State, sessionId:string)=>Role\|null` | Private helper, scans channels for member |
-| `deliverPending` | `plugin.ts:271` | `(sessionId:string)=>Promise<void>` | Loads state, checks `channelForSession`, paused, calls `drainQueue`, saves, prompts via `client.session.prompt`; on error records to `errors` |
-| `tools` | `plugin.ts:79` | 10 entries | See TOOLS_AND_COMMANDS.md |
-| `experimental.chat.system.transform` | `plugin.ts:307` | hook | Injects role prompt |
-| `event` | `plugin.ts:316` | hook | Handles idle/deleted/status |
-| `command.execute.before` | `plugin.ts:351` | hook | Handles `/OpenComms` slash |
-
-Re-export:
-
-| Symbol | Line |
-|--------|------|
-| `default` | `plugin.ts:449` | `export default OpenCommsPlugin` |
+| Symbol | Kind | Notes |
+|--------|------|-------|
+| `OpenCommsPlugin` (default export) | `Plugin` factory | Receives `{client, project, directory, worktree}` |
+| `buildRolePrompt(role, prompt, channelName?)` | helper | Labeled per-channel when channelName given |
+| `extractSlashArgs(raw)` | helper | Consumes ONLY recognized keys (Channel/As/RolePrompt/Action/LimitMs/LimitRole/To/Broadcast/Target); quotes supported; unknown `x=y` stays in text |
+| `slashSub(raw)` | helper | First word, strips `_`/`-`, lowercased |
+| `deliverPending(sessionId)` | async | Phase 1 locked `drainForDelivery`+save; Phase 2 unlocked framed prompt; Phase 3 locked requeue on failure. Delivery fires strictly post-lock |
+| `requireRootSession(sessionId)` | async guard | FAILS CLOSED on SDK error (create/join refuse + record) |
+| `withLockedState(mutate, shouldSave)` | helper | Every tool mutation runs through it |
+| `tools` | 12 entries | create, join, send, status, inbox, history, update_role, pause, resume, disconnect, kick, timer — see TOOLS_AND_COMMANDS.md |
+| hooks | 3 | system.transform (per-membership prompts), event (idle/deleted/status), command.execute.before (/OpenComms) |
 
 ---
 
@@ -207,7 +210,7 @@ Re-export:
 
 | Output | Source | Config |
 |--------|--------|--------|
-| `dist/*.js` | `src/*.ts` | `tsconfig.build.json:1` (`outDir: dist`, include `src/**/*.ts`) |
-| `dist-test/**/*.js` | `src/*.ts` + `test/**/*.ts` | `tsconfig.test.json:1` (`outDir: dist-test`) |
+| `dist/*.js` | `src/*.ts` | `tsconfig.build.json` (`outDir: dist`) + esbuild bundle `dist/plugin.bundled.js` |
+| `dist-test/**/*.js` | `src/*.ts` + `test/**/*.ts` | `tsconfig.test.json` (`outDir: dist-test`) |
 
-Strict flags (`tsconfig.json:7`): `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `forceConsistentCasingInFileNames`.
+Strict flags (`tsconfig.json`): `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `forceConsistentCasingInFileNames`.
