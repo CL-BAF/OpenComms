@@ -1,15 +1,15 @@
-/**
- * OpenComms — persistent state store.
+﻿/**
+ * OpenComms â€” persistent state store.
  *
- * State is stored in `<project>/.opencode-comms/state.json`. Writes are
+ * State is stored in `<project>/.opencomms/state.json`. Writes are
  * atomic: we serialize to a temp file in the same directory, flush it, then
  * rename over the target. On Windows, `rename` over an existing file is
  * supported by Node's fs.rename (it maps to MoveFileEx with REPLACE_EXISTING),
  * but we defensively retry once after a short delay because antivirus or
  * OneDrive can briefly hold a handle.
  *
- * Concurrency: two OpenCode sessions share one state.json. A bare
- * load→mutate→save sequence can lose updates when interleaved across
+ * Concurrency: multiple host sessions share one state.json. A bare
+ * loadâ†’mutateâ†’save sequence can lose updates when interleaved across
  * processes. Every mutating read-modify-write therefore runs under an
  * exclusive-create lockfile (`.state.lock`) via `withLock`. The lock carries
  * PID + timestamp and is considered stale (breakable) after LOCK_STALE_MS so
@@ -22,6 +22,7 @@ import {
   renameSync,
   writeFileSync,
   existsSync,
+  copyFileSync,
   openSync,
   closeSync,
   unlinkSync,
@@ -30,14 +31,32 @@ import {
 } from "node:fs"
 import { dirname, join } from "node:path"
 import { randomBytes } from "node:crypto"
-import { DEFAULT_MAX_MEMBERS, SCHEMA_VERSION, STATE_DIR, STATE_FILE, type Channel, type State } from "./types.js"
-import { defaultTimer } from "./engine.js"
+import {
+  DEFAULT_MAX_MEMBERS,
+  LEGACY_HOST_ID,
+  LEGACY_STATE_DIR,
+  MIGRATION_MARKER,
+  SCHEMA_VERSION,
+  STATE_DIR,
+  STATE_FILE,
+  type Channel,
+  type DeliveryMode,
+  type HostSurface,
+  type State,
+  type StalePolicy,
+} from "./types.js"
+import { defaultTimer, makeMember } from "./engine.js"
 
 const LOCK_FILE = ".state.lock"
 /** How long to keep retrying lock acquisition before giving up. */
 export const LOCK_TIMEOUT_MS = 5_000
 /** Locks older than this are presumed abandoned by a dead process and broken. */
 export const LOCK_STALE_MS = 15_000
+
+/** Classic PUSH-distribution stale window (v1 behavior). */
+export const DEFAULT_STALE_POLICY: StalePolicy = { mode: "window", window_ms: 5 * 60_000 }
+/** PULL members never age out; retention + explicit expiry bound the queue. */
+export const PULL_STALE_POLICY: StalePolicy = { mode: "none", window_ms: null }
 
 export function emptyState(): State {
   return {
@@ -50,7 +69,7 @@ export function emptyState(): State {
   }
 }
 
-// ── Load-time validation ────────────────────────────────────────────────────
+// â”€â”€ Load-time validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const ROLE_PATTERN = /^[A-Za-z][A-Za-z0-9 _-]{0,31}$/
 
@@ -58,7 +77,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function isValidMember(m: unknown): boolean {
+function isValidMember(m: unknown, legacy = false): boolean {
   if (!isRecord(m)) return false
   return (
     typeof m["session_id"] === "string" &&
@@ -67,11 +86,14 @@ function isValidMember(m: unknown): boolean {
     typeof m["role"] === "string" &&
     ROLE_PATTERN.test(m["role"]) &&
     typeof m["role_prompt"] === "string" &&
-    typeof m["joined_at"] === "number"
+    typeof m["joined_at"] === "number" &&
+    // v2 rows must carry the full member model; v1 rows are migrated instead.
+    (legacy ||
+      (typeof m["host"] === "string" && typeof m["surface"] === "string" && typeof m["delivery_mode"] === "string"))
   )
 }
 
-function isValidChannel(ch: unknown): boolean {
+function isValidChannel(ch: unknown, legacy = false): boolean {
   if (!isRecord(ch)) return false
   if (typeof ch["id"] !== "string" || typeof ch["name"] !== "string") return false
   if (typeof ch["project_id"] !== "string" || typeof ch["worktree"] !== "string") return false
@@ -80,7 +102,7 @@ function isValidChannel(ch: unknown): boolean {
   // Empty channels are transiently possible but never persisted; treat any
   // member count beyond the hard cap as tampering.
   if (members.length === 0 || members.length > DEFAULT_MAX_MEMBERS) return false
-  return members.every(isValidMember)
+  return members.every((m) => isValidMember(m, legacy))
 }
 
 /**
@@ -89,13 +111,19 @@ function isValidChannel(ch: unknown): boolean {
  * forged member row would let arbitrary text into the system prompt
  * (role_prompt injection), and a wrong schema_version would silently skip
  * guards this version assumes.
+ *
+ * `legacy` true relaxes member validation for v1 rows (which lack the v2
+ * member fields; migration backfills them).
  */
-function validateState(parsed: unknown): { ok: true; state: State } | { ok: false; reason: string } {
+function validateState(
+  parsed: unknown,
+  opts: { legacy?: boolean } = {},
+): { ok: true; state: State } | { ok: false; reason: string } {
   if (!isRecord(parsed)) return { ok: false, reason: "state root is not an object" }
-  if (parsed["schema_version"] !== SCHEMA_VERSION) {
+  if (parsed["schema_version"] !== (opts.legacy ? 1 : SCHEMA_VERSION)) {
     return {
       ok: false,
-      reason: `schema_version mismatch: expected ${SCHEMA_VERSION}, got ${String(parsed["schema_version"])}`,
+      reason: `schema_version mismatch: expected ${opts.legacy ? 1 : SCHEMA_VERSION}, got ${String(parsed["schema_version"])}`,
     }
   }
   const channels = parsed["channels"]
@@ -105,7 +133,7 @@ function validateState(parsed: unknown): { ok: true; state: State } | { ok: fals
   const errors = parsed["errors"]
   if (!isRecord(channels)) return { ok: false, reason: "channels is not an object" }
   for (const key of Object.keys(channels)) {
-    if (!isValidChannel((channels as Record<string, unknown>)[key])) {
+    if (!isValidChannel((channels as Record<string, unknown>)[key], opts.legacy)) {
       return { ok: false, reason: `channel "${key}" has invalid shape or members` }
     }
     // Keys must equal the normalized channel name inside.
@@ -161,8 +189,7 @@ function backfillState(state: State): void {
     if (!legacyTimer || typeof legacyTimer !== "object") {
       channel.timer = defaultTimer()
     } else if (
-      (legacyTimer.active_member_id === undefined ||
-        legacyTimer.elapsed_ms === undefined) &&
+      (legacyTimer.active_member_id === undefined || legacyTimer.elapsed_ms === undefined) &&
       typeof legacyTimer.active_role === "string"
     ) {
       // Map role -> first matching live member where possible, and re-key
@@ -183,8 +210,7 @@ function backfillState(state: State): void {
       }
       channel.timer = {
         active_member_id: byRole?.session_id ?? null,
-        segment_started_at:
-          typeof legacyTimer.segment_started_at === "number" ? legacyTimer.segment_started_at : null,
+        segment_started_at: typeof legacyTimer.segment_started_at === "number" ? legacyTimer.segment_started_at : null,
         elapsed_ms: elapsed,
         limit_ms: typeof legacyTimer.limit_ms === "number" ? legacyTimer.limit_ms : null,
         limit_member_id: byRole?.session_id ?? null,
@@ -192,35 +218,40 @@ function backfillState(state: State): void {
     } else {
       // Ensure every field exists even on partially-written timers.
       channel.timer = {
-        active_member_id:
-          typeof legacyTimer.active_member_id === "string" ? legacyTimer.active_member_id : null,
-        segment_started_at:
-          typeof legacyTimer.segment_started_at === "number" ? legacyTimer.segment_started_at : null,
+        active_member_id: typeof legacyTimer.active_member_id === "string" ? legacyTimer.active_member_id : null,
+        segment_started_at: typeof legacyTimer.segment_started_at === "number" ? legacyTimer.segment_started_at : null,
         elapsed_ms:
           legacyTimer.elapsed_ms && isRecord(legacyTimer.elapsed_ms)
             ? (legacyTimer.elapsed_ms as Record<string, number>)
             : {},
         limit_ms: typeof legacyTimer.limit_ms === "number" ? legacyTimer.limit_ms : null,
-        limit_member_id:
-          typeof legacyTimer.limit_member_id === "string" ? legacyTimer.limit_member_id : null,
+        limit_member_id: typeof legacyTimer.limit_member_id === "string" ? legacyTimer.limit_member_id : null,
       }
     }
   }
   if (!Array.isArray(state.errors)) state.errors = []
 }
 
-// ── Store ───────────────────────────────────────────────────────────────────
+// â”€â”€ Store â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function sleepBusy(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+/**
+ * Yield to the event loop instead of blocking it. Lock acquisition can wait
+ * up to LOCK_TIMEOUT_MS; freezing every session sharing this process for
+ * that long (Atomics.wait) would turn one wedged lock-holder into a
+ * whole-process stall. Callers must therefore treat withLock as async.
+ */
+function sleepAsync(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export class StateStore {
   readonly dir: string
   readonly file: string
+  readonly projectDir: string
   private lockPath: string
 
   constructor(projectDir: string) {
+    this.projectDir = projectDir
     this.dir = join(projectDir, STATE_DIR)
     this.file = join(this.dir, STATE_FILE)
     this.lockPath = join(this.dir, LOCK_FILE)
@@ -232,8 +263,12 @@ export class StateStore {
    * LOCK_STALE_MS are treated as abandoned and broken. Throws when no lock
    * could be acquired within LOCK_TIMEOUT_MS (callers should surface that;
    * refusing to proceed is what prevents lost updates).
+   *
+   * Async on purpose: waiting for the lock yields to the event loop
+   * (setTimeout polling) rather than blocking the whole process, so one
+   * contended lock can never freeze unrelated sessions.
    */
-  withLock<T>(fn: () => T): T {
+  async withLock<T>(fn: () => T): Promise<T> {
     mkdirSync(this.dir, { recursive: true })
     const deadline = Date.now() + LOCK_TIMEOUT_MS
     let fd: number | null = null
@@ -255,14 +290,14 @@ export class StateStore {
             }
           }
         } catch {
-          /* stat failed → lock vanished between open and stat; just retry */
+          /* stat failed â†’ lock vanished between open and stat; just retry */
         }
         if (Date.now() >= deadline) {
           throw new Error(
             "OpenComms: timed out waiting for the state lock (.state.lock). Another session may be stuck holding it.",
           )
         }
-        sleepBusy(10)
+        await sleepAsync(10)
       }
     }
     try {
@@ -282,8 +317,111 @@ export class StateStore {
     }
   }
 
+  /**
+   * One-time cutover from the legacy single-host layout:
+   *   legacy state dir / state.json (schema v1)
+   *     -> <project>/.opencomms/state.json (schema v2)
+   *
+   * Discipline (Reviewer Item 4): when the new dir is absent and a VALID v1
+   * state exists, back it up, migrate it, and write MIGRATED_FROM_V1 so a
+   * second load never re-migrates (no double-members, no duplication). The
+   * legacy dir is left untouched; the legacy plugin, if still loaded, reads
+   * v1 with its own validator â€” it cannot fork v2 state (it fails validation
+   * and starts empty with a recorded error, never dual-writes).
+   *
+   * Tampered legacy files are NOT migrated: fail-closed to empty state, with
+   * the reason recorded in errors.
+   *
+   * Returns a migration notice for the errors/audit trail (or null).
+   */
+  migrateFromLegacyIfPresent(): string | null {
+    const markerPath = join(this.dir, MIGRATION_MARKER)
+    if (existsSync(markerPath) || existsSync(this.file)) return null
+    const legacyFile = join(this.projectDir, LEGACY_STATE_DIR, STATE_FILE)
+    if (!existsSync(legacyFile)) return null
+
+    let legacyRaw: string
+    try {
+      legacyRaw = readFileSync(legacyFile, "utf8")
+    } catch (error) {
+      return `Legacy state at ${LEGACY_STATE_DIR}/ unreadable (${(error as Error).message}); starting fresh in ${STATE_DIR}/.`
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(legacyRaw)
+    } catch (error) {
+      return `Legacy state unreadable (not JSON: ${(error as Error).message}); starting fresh in ${STATE_DIR}/.`
+    }
+    const result = validateState(parsed, { legacy: true })
+    if (!result.ok) {
+      return `Legacy state rejected (${result.reason}); starting fresh in ${STATE_DIR}/. Original file left untouched.`
+    }
+
+    // Migrate: v1 -> v2 member model (legacy rows keep their era defaults), keep everything
+    // else verbatim; backfill handles timer/max_members normalization.
+    const migrated = result.state
+    migrated.schema_version = SCHEMA_VERSION
+    backfillState(migrated)
+    for (const channel of Object.values(migrated.channels)) {
+      channel.members = channel.members.map((m) =>
+        makeMember(
+          {
+            session_id: m.session_id,
+            role: m.role,
+            role_prompt: m.role_prompt,
+            host: LEGACY_HOST_ID,
+            surface: "cli",
+            delivery_mode: "push",
+            host_session_id: m.session_id,
+            stale_policy: { mode: "window", window_ms: DEFAULT_STALE_POLICY.window_ms },
+          },
+          m.joined_at,
+        ),
+      )
+    }
+    if (!Array.isArray(migrated.errors)) migrated.errors = []
+    migrated.errors.push({
+      at: Date.now(),
+      message: `Migrated OpenComms state from ${LEGACY_STATE_DIR}/state.json (schema v1) to ${STATE_DIR}/state.json (schema v2); legacy file backed up as state.v1.bak.json and left in place.`,
+    })
+
+    mkdirSync(this.dir, { recursive: true })
+    try {
+      copyFileSync(legacyFile, join(this.dir, "state.v1.bak.json"))
+    } catch {
+      /* backup is best-effort; migration itself is still safe */
+    }
+    this.save(migrated)
+    writeFileSync(
+      markerPath,
+      JSON.stringify({ migrated_at: Date.now(), from: LEGACY_STATE_DIR, schema: 1 }, null, 2),
+      "utf8",
+    )
+    return `Migrated OpenComms state from ${LEGACY_STATE_DIR}/state.json (schema v1) to ${STATE_DIR}/state.json (schema v2). Channels, members, queues, and timers preserved.`
+  }
+
   load(): State {
-    if (!existsSync(this.file)) return emptyState()
+    // Cutover: migrate legacy v1 state before any read path can miss it.
+    if (!existsSync(this.file) && !existsSync(join(this.dir, MIGRATION_MARKER))) {
+      const notice = this.migrateFromLegacyIfPresent()
+      if (notice) {
+        // Return the MIGRATED state (not just a notice): the migration already
+        // persisted it, and the caller expects the channels to be live.
+        const migrated = this.readStateFile()
+        if (migrated) return migrated
+        const base = emptyState()
+        base.errors.push({ at: Date.now(), message: notice })
+        return base
+      }
+    }
+    const state = this.readStateFile()
+    if (state) return state
+    return emptyState()
+  }
+
+  /** Read + validate + backfill <new-dir>/state.json; null when absent/broken. */
+  private readStateFile(): State | null {
+    if (!existsSync(this.file)) return null
     try {
       const raw = readFileSync(this.file, "utf8")
       const parsed: unknown = JSON.parse(raw)
@@ -320,9 +458,15 @@ export class StateStore {
     try {
       renameSync(tmp, this.file)
     } catch (error) {
-      // Windows: retry once after a short blocking pause (AV/OneDrive races).
+      // Windows: retry once after a short yielding pause (AV/OneDrive races).
+      // A blocking 50ms stall is acceptable here: the write already happened,
+      // and this path is rare; the atomic-rename guarantee is what matters.
       try {
-        sleepBusy(50)
+        // save() is intentionally synchronous (callers rely on durability
+        // when it returns), so this rare retry path uses a bounded 50ms
+        // blocking wait rather than async. LOCK acquisition â€” the path that
+        // can wait seconds â€” uses yielding sleepAsync instead.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
         renameSync(tmp, this.file)
       } catch (second) {
         try {
@@ -336,8 +480,8 @@ export class StateStore {
     }
   }
 
-  /** Convenience: load, mutate, save — all under the cross-process lock. */
-  update(mutate: (state: State) => void): State {
+  /** Convenience: load, mutate, save â€” all under the cross-process lock. */
+  async update(mutate: (state: State) => void): Promise<State> {
     return this.withLock(() => {
       const state = this.load()
       mutate(state)
