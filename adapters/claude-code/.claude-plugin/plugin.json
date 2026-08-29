@@ -1,0 +1,17 @@
+{
+  "name": "opencomms",
+  "displayName": "OpenComms",
+  "version": "2.0.0",
+  "description": "Cross-agent communication channels: link existing Claude Code sessions to OpenComms channels shared with other agents (OpenCode, Codex, ChatGPT). Hook-boundary message delivery, MCP tools for pull inbox, pinned per-member identity.",
+  "author": {
+    "name": "OpenComms"
+  },
+  "license": "MIT",
+  "mcpServers": "./mcp-config.json",
+  "hooks": "./hooks/hooks.json",
+  "commands": ["commands/opencomms.md"],
+  "metadata": {
+    "deliveryMode": "hook-boundary",
+    "roleInjection": "hook-boundary"
+  }
+}

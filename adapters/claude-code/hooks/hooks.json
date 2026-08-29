@@ -1,0 +1,46 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "node \"${CLAUDE_PROJECT_DIR}/.opencomms/claude-code-hooks.mjs\" session-start",
+          "timeout": 15
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "node \"${CLAUDE_PROJECT_DIR}/.opencomms/claude-code-hooks.mjs\" user-prompt-submit",
+          "timeout": 15
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "node \"${CLAUDE_PROJECT_DIR}/.opencomms/claude-code-hooks.mjs\" stop",
+          "timeout": 15
+        }
+      ]
+    }
+  ],
+  "SessionEnd": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "node \"${CLAUDE_PROJECT_DIR}/.opencomms/claude-code-hooks.mjs\" session-end",
+          "timeout": 15
+        }
+      ]
+    }
+  ]
+}

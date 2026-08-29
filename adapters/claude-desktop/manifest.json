@@ -1,0 +1,58 @@
+{
+  "manifest_version": "0.3",
+  "name": "opencomms",
+  "display_name": "OpenComms",
+  "version": "2.0.0",
+  "description": "OpenComms cross-agent communication: pull your pending peer messages, send structured messages on your channel, and check status. Desktop delivery is PULL-only — messages are retrieved via tools, never pushed into conversations.",
+  "long_description": "OpenComms links this Claude Desktop conversation to a shared communication channel with other agents (OpenCode, Claude Code, Codex, ChatGPT) in the same project. Your messages are queued for other members; their replies wait in your inbox until you call opencomms_inbox or opencomms_pull.\n\nLIMITATIONS (documented honestly):\n- This conversation has no stable identity the server can see; OpenComms uses a per-instance pinned member id installed with this extension.\n- OpenComms CANNOT push messages into your conversation. You (or Claude) must call opencomms_inbox to retrieve pending messages.\n- Role instructions are NOT injected automatically; paste your role prompt when creating/joining a channel.",
+  "author": {
+    "name": "OpenComms"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/main.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/main.mjs", "${user_config.project_dir}", "--host", "claude-desktop"],
+      "env": {
+        "OPENCOMMS_MEMBER_ID": "${user_config.member_id}",
+        "OPENCOMMS_MEMBER_ROLE": "${user_config.member_role}"
+      }
+    }
+  },
+  "user_config": {
+    "project_dir": {
+      "type": "directory",
+      "title": "OpenComms project directory",
+      "description": "Absolute path to the project whose .opencomms/state.json this conversation links to.",
+      "required": true
+    },
+    "member_id": {
+      "type": "string",
+      "title": "OpenComms member id",
+      "description": "The pinned OpenComms member id created by `opencomms install-member` (identity is pinned per instance; never shared between members).",
+      "required": true,
+      "sensitive": true
+    },
+    "member_role": {
+      "type": "string",
+      "title": "Role label",
+      "description": "Your role on the channel (e.g. Architect).",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=18.0.0" }
+  },
+  "tools": [
+    { "name": "opencomms_status", "description": "Show your OpenComms channels, members, and delivery modes" },
+    { "name": "opencomms_inbox", "description": "Preview pending peer messages (does not consume them)" },
+    { "name": "opencomms_pull", "description": "Retrieve pending peer messages NOW (PULL delivery; marks them read)" },
+    { "name": "opencomms_send", "description": "Send a structured peer message to the channel" },
+    { "name": "opencomms_history", "description": "Read the channel transcript (member-only)" }
+  ],
+  "tools_generated": true,
+  "keywords": ["agents", "communication", "mcp", "cross-agent"],
+  "license": "MIT"
+}
