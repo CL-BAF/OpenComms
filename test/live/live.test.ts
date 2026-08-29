@@ -131,7 +131,11 @@ test("live: full Builder<->Reviewer acceptance flow", async () => {
 
   try {
     // 3. Register the first exact session as Builder via the tool.
-    await promptSession(c, builderId, "Call opencomms_create with channel=\"live-feature\", role=\"Builder\", role_prompt=\"Implement requests and send completed work to Reviewer.\"")
+    await promptSession(
+      c,
+      builderId,
+      'Call opencomms_create with channel="live-feature", role="Builder", role_prompt="Implement requests and send completed work to Reviewer."',
+    )
     const createRes = await waitForToolResult(c, builderId, "opencomms_create")
     assert.equal(createRes.ok, true, "create succeeded")
 
@@ -141,7 +145,11 @@ test("live: full Builder<->Reviewer acceptance flow", async () => {
     assert.equal(ocmSessions.length, 2, "no extra sessions created")
 
     // 4. Register the second exact session as Reviewer.
-    await promptSession(c, reviewerId, "Call opencomms_join with channel=\"live-feature\", role=\"Reviewer\", role_prompt=\"Inspect Builder work and send findings.\"")
+    await promptSession(
+      c,
+      reviewerId,
+      'Call opencomms_join with channel="live-feature", role="Reviewer", role_prompt="Inspect Builder work and send findings."',
+    )
     const joinRes = await waitForToolResult(c, reviewerId, "opencomms_join")
     assert.equal(joinRes.ok, true, "join succeeded")
 
@@ -155,22 +163,36 @@ test("live: full Builder<->Reviewer acceptance flow", async () => {
     assert.notEqual(builderMember.role_prompt, reviewerMember.role_prompt, "different role prompts")
 
     // 7-8. User prompts Builder independently; Builder explicitly sends.
-    await promptSession(c, builderId, "Call opencomms_send with channel=\"live-feature\", type=\"review_request\", content=\"Implementation ready.\"")
+    await promptSession(
+      c,
+      builderId,
+      'Call opencomms_send with channel="live-feature", type="review_request", content="Implementation ready."',
+    )
     const sendRes = await waitForToolResult(c, builderId, "opencomms_send")
     assert.equal(sendRes.ok, true, "builder send succeeded")
 
     // 9. Message appears in the existing Reviewer session's history.
-    await promptSession(c, reviewerId, "Call opencomms_inbox with channel=\"live-feature\"")
+    await promptSession(c, reviewerId, 'Call opencomms_inbox with channel="live-feature"')
     const inboxRes = await waitForToolResult(c, reviewerId, "opencomms_inbox")
-    assert.ok((inboxRes.data as any).messages.some((m: any) => m.content.includes("Implementation ready")), "message reached reviewer inbox")
+    assert.ok(
+      (inboxRes.data as any).messages.some((m: any) => m.content.includes("Implementation ready")),
+      "message reached reviewer inbox",
+    )
 
     // 10-11. Reviewer responds; response appears in Builder inbox.
-    await promptSession(c, reviewerId, "Call opencomms_send with channel=\"live-feature\", type=\"review_response\", content=\"PASS.\"")
+    await promptSession(
+      c,
+      reviewerId,
+      'Call opencomms_send with channel="live-feature", type="review_response", content="PASS."',
+    )
     const replyRes = await waitForToolResult(c, reviewerId, "opencomms_send")
     assert.equal(replyRes.ok, true, "reviewer reply succeeded")
-    await promptSession(c, builderId, "Call opencomms_inbox with channel=\"live-feature\"")
+    await promptSession(c, builderId, 'Call opencomms_inbox with channel="live-feature"')
     const builderInbox = await waitForToolResult(c, builderId, "opencomms_inbox")
-    assert.ok((builderInbox.data as any).messages.some((m: any) => m.content.includes("PASS")), "reply reached builder inbox")
+    assert.ok(
+      (builderInbox.data as any).messages.some((m: any) => m.content.includes("PASS")),
+      "reply reached builder inbox",
+    )
 
     // 12. User can still prompt Reviewer independently.
     await promptSession(c, reviewerId, "Reply with the single word: OK")
@@ -178,18 +200,18 @@ test("live: full Builder<->Reviewer acceptance flow", async () => {
     assert.ok(true, "reviewer independently promptable")
 
     // 15. Pause prevents delivery.
-    await promptSession(c, builderId, "Call opencomms_pause with channel=\"live-feature\"")
+    await promptSession(c, builderId, 'Call opencomms_pause with channel="live-feature"')
     await waitForToolResult(c, builderId, "opencomms_pause")
-    await promptSession(c, builderId, "Call opencomms_send with channel=\"live-feature\", content=\"paused message\"")
+    await promptSession(c, builderId, 'Call opencomms_send with channel="live-feature", content="paused message"')
     const pausedSend = await waitForToolResult(c, builderId, "opencomms_send")
     assert.equal(pausedSend.ok, false, "send rejected while paused")
 
     // 16. Resume continues delivery.
-    await promptSession(c, builderId, "Call opencomms_resume with channel=\"live-feature\"")
+    await promptSession(c, builderId, 'Call opencomms_resume with channel="live-feature"')
     await waitForToolResult(c, builderId, "opencomms_resume")
 
     // 17-18. Disconnect stops communication but does not delete sessions.
-    await promptSession(c, builderId, "Call opencomms_disconnect with channel=\"live-feature\"")
+    await promptSession(c, builderId, 'Call opencomms_disconnect with channel="live-feature"')
     await waitForToolResult(c, builderId, "opencomms_disconnect")
     const bInfoAfter = await c.session.get({ path: { id: builderId } })
     const rInfoAfter = await c.session.get({ path: { id: reviewerId } })
@@ -197,7 +219,11 @@ test("live: full Builder<->Reviewer acceptance flow", async () => {
     assert.ok(rInfoAfter.data, "reviewer session still exists after disconnect")
   } finally {
     // Clean up: delete the test sessions we created. OpenComms never does this.
-    try { await c.session.delete({ path: { id: builderId } }) } catch {}
-    try { await c.session.delete({ path: { id: reviewerId } }) } catch {}
+    try {
+      await c.session.delete({ path: { id: builderId } })
+    } catch {}
+    try {
+      await c.session.delete({ path: { id: reviewerId } })
+    } catch {}
   }
 })
