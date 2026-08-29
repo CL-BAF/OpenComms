@@ -1,12 +1,12 @@
-import { test } from "node:test"
+﻿import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { spawn } from "node:child_process"
-import { StateStore, emptyState } from "../../src/store.js"
-import { createChannel } from "../../src/engine.js"
+import { StateStore, emptyState } from "../../src/core/store.js"
+import { createChannel } from "../../src/core/engine.js"
 
 function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), "opencomms-store-"))
@@ -30,7 +30,12 @@ test("StateStore persists and reloads state", () => {
     const reloaded = new StateStore(dir).load()
     assert.ok(reloaded.channels["persist"])
     assert.equal(reloaded.channels["persist"]!.members[0]!.session_id, "s1")
-    assert.equal(reloaded.schema_version, 1)
+    assert.equal(reloaded.schema_version, 2)
+    // Schema v2 member defaults (generic CLI-style PUSH member).
+    const member = reloaded.channels["persist"]!.members[0]!
+    assert.equal(member.host, "generic")
+    assert.equal(member.delivery_mode, "push")
+    assert.deepEqual(member.stale_policy, { mode: "window", window_ms: 5 * 60_000 })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -68,7 +73,7 @@ test("StateStore writes atomically (temp file + rename)", () => {
   }
 })
 
-// ── Load-time validation (tampered / stale-schema rejection) ──
+// â”€â”€ Load-time validation (tampered / stale-schema rejection) â”€â”€
 
 function seedValidState(dir: string): void {
   const store = new StateStore(dir)
@@ -181,14 +186,14 @@ test("load backfills max_members and migrates legacy role-keyed timers", () => {
   }
 })
 
-// ── Cross-process locking (lost-update prevention) ──
+// â”€â”€ Cross-process locking (lost-update prevention) â”€â”€
 
 test("withLock serializes concurrent processes: no lost updates under contention", async () => {
   const dir = tmpProject()
   try {
     seedValidState(dir)
     const workerSrc = `
-import { StateStore } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "dist-test", "src", "store.js")).href)}
+import { StateStore } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "dist-test", "src", "core", "store.js")).href)}
 const store = new StateStore(process.argv[2])
 for (let i = 0; i < 25; i++) {
   store.update((state) => {
@@ -217,6 +222,56 @@ for (let i = 0; i < 25; i++) {
     const final = new StateStore(dir).load()
     assert.equal(final.queues["shared"]!.length, 50, "interleaved writes lost updates")
     assert.ok(!existsSync(join(dir, ".opencode-comms", ".state.lock")), "lock file leaked")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// â”€â”€ Regression R6: lock waiting must yield the event loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+test("withLock waiting yields the event loop (regression R6)", async () => {
+  const dir = tmpProject()
+  try {
+    seedValidState(dir)
+    const contender = new StateStore(dir)
+    const holder = new StateStore(dir)
+
+    // Event-loop probe: must fire WHILE the contender is still waiting for
+    // the lock. The old blocking Atomics.wait delayed this timer until the
+    // lock released; the async poller lets it fire on schedule.
+    let probeFiredWhileWaiting = false
+    const probe = new Promise<void>((resolve) => {
+      setTimeout(resolve, 60)
+    }).then(() => {
+      probeFiredWhileWaiting = true
+    })
+
+    // Holder occupies the lock for 300ms (busy-hold inside the critical
+    // section), then releases.
+    const holding = holder.withLock(() => {
+      const until = Date.now() + 300
+      while (Date.now() < until) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+      }
+      return null
+    })
+
+    // Contender starts BEFORE the holder releases and must poll (yielding).
+    const contending = contender.update((state) => {
+      state.queues["probe"] = ["x"]
+    })
+
+    await probe
+    assert.equal(
+      probeFiredWhileWaiting,
+      true,
+      "setTimeout fired only after lock release: lock wait blocks the event loop",
+    )
+
+    await holding
+    await contending
+    const final = new StateStore(dir).load()
+    assert.equal(final.queues["probe"]!.length, 1)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

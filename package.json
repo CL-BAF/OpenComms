@@ -5,6 +5,9 @@
   "type": "module",
   "license": "MIT",
   "main": "./dist/plugin.js",
+  "bin": {
+    "opencomms": "./dist/cli/main.js"
+  },
   "exports": {
     ".": {
       "import": "./dist/plugin.js"
@@ -22,10 +25,13 @@
     "build:bundle": "esbuild src/plugin.ts --bundle --format=esm --platform=node --outfile=dist/plugin.bundled.js --external:@opencode-ai/plugin --external:@opencode-ai/sdk --log-level=warning",
     "build:test": "tsc -p tsconfig.test.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build:test && node --test --test-concurrency=1 dist-test/test/unit/*.test.js",
-    "test:unit": "npm run build:test && node --test --test-concurrency=1 dist-test/test/unit/*.test.js",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
+    "test": "npm run build:test && node --test --test-concurrency=1 \"dist-test/test/unit/**/*.test.js\"",
+    "test:unit": "npm run build:test && node --test --test-concurrency=1 \"dist-test/test/unit/**/*.test.js\"",
+    "test:contract": "npm run build:test && node --test --test-concurrency=1 dist-test/test/contract/*.test.js",
     "test:live": "npm run build:test && node --test --test-concurrency=1 --test-timeout=300000 dist-test/test/live/live.test.js",
-    "test:all": "npm run build:test && node --test --test-concurrency=1 dist-test/test/unit/*.test.js dist-test/test/live/live.test.js",
+    "test:all": "npm run build:test && node --test --test-concurrency=1 \"dist-test/test/unit/**/*.test.js\" dist-test/test/live/live.test.js",
     "audit": "npm audit --omit=dev"
   },
   "dependencies": {
@@ -35,6 +41,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "esbuild": "^0.28.2",
+    "prettier": "^3.9.6",
     "typescript": "^5.7.0"
   }
 }
