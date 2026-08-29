@@ -7,6 +7,11 @@ dist-test/
 
 # Plugin state (runtime)
 .opencode-comms/
+.opencomms/
+.opencode/
+
+# Local test artifacts
+test/output/
 
 # Logs
 *.log
@@ -27,3 +32,6 @@ probe-*.mjs
 # Environment
 .env
 .env.local
+
+# Local installer artifacts (this dev repo's own plugin registration)
+opencode.json
