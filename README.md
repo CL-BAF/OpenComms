@@ -1,8 +1,21 @@
-# OpenComms
+﻿# OpenComms
 
-> A project-local **TypeScript OpenCode plugin** that links two existing root OpenCode sessions (e.g. a Builder and a Reviewer) into a named communication channel — **without creating, owning, or replacing any sessions**.
+> A host-neutral, project-local **TypeScript communication platform for coding agents** — link existing sessions from OpenCode, Claude Code, Claude Desktop, and Codex into named channels with open role vocabulary (the classic pair being Builder + Reviewer) — **without creating, owning, or replacing any sessions**.
 
-OpenComms is **not** a Python application, a separate web server, a standalone desktop app, a browser extension, an MCP server, or a keyboard/mouse automation tool. It is a single OpenCode plugin that runs inside OpenCode Desktop and uses OpenCode's plugin hooks, custom tools, injected client, and session APIs.
+OpenComms v2 is a shared Core + thin host adapters:
+
+- **OpenCode** (plugin; PUSH delivery on idle) — the reference adapter
+- **Claude Code** (hooks + MCP; hook-boundary delivery, PULL tools)
+- **Claude Desktop** (.mcpb extension; strictly PULL)
+- **Codex** (config.toml MCP + optional trust-gated hooks; strictly PULL)
+- **ChatGPT** (remote-MCP scaffold — deliberately not a working integration without operator-hosted auth)
+
+Delivery modes are explicit per member (`push | pull | poll |
+managed_thread`); capabilities are honest (see
+[docs/CAPABILITIES.md](docs/CAPABILITIES.md)) — where a host cannot do
+something, OpenComms says UNSUPPORTED instead of faking parity. Shared
+CLI: `opencomms install|install-member|uninstall|doctor|status|channels|
+members|version`. Threat model: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Table of Contents
 
@@ -23,7 +36,7 @@ OpenComms is **not** a Python application, a separate web server, a standalone d
 
 ## What it does
 
-OpenComms connects **two root OpenCode sessions that you have already opened** in separate tabs for the same project. It never silently creates replacement sessions. Both linked sessions remain:
+OpenComms connects **root OpenCode sessions that you have already opened** in separate tabs for the same project. It never silently creates replacement sessions. All linked sessions remain:
 
 - Visible in OpenCode Desktop
 - Independently accessible in their original tabs
@@ -48,7 +61,7 @@ This produces `dist/` with the compiled plugin. The entry point is `dist/plugin.
 
 ### Project-local installation
 
-The bundled installer builds the plugin, copies it into your project's `.opencode/plugins/` directory, and patches your `opencode.json` to register it — all in one command:
+The bundled installer builds the plugin, copies it into your project's `.opencode/plugins/` directory, and patches your `opencode.json` to register it â€” all in one command:
 
 ```bash
 # from the OpenComms repo root
@@ -73,9 +86,9 @@ If you prefer to wire it manually instead, copy the built plugin into your proje
 
 ```text
 <your-project>/
-└── .opencode/
-    └── plugins/
-        └── opencomms.js   # copy of dist/plugin.js (+ dist/*.js)
+â””â”€â”€ .opencode/
+    â””â”€â”€ plugins/
+        â””â”€â”€ opencomms.js   # copy of dist/plugin.js (+ dist/*.js)
 ```
 
 ```jsonc
@@ -91,14 +104,14 @@ OpenComms is developed and tested on Windows. It uses Windows-safe atomic file w
 State is stored at:
 
 ```text
-<project>\.opencode-comms\state.json
+<project>\.opencomms\state.json
 ```
 
 This directory is created on first use and should be added to `.gitignore`.
 
 ## The two-tab pairing workflow
 
-### First tab — create the channel
+### First tab â€” create the channel
 
 Open a normal OpenCode session in your project and run:
 
@@ -108,7 +121,7 @@ Open a normal OpenCode session in your project and run:
 
 The plugin obtains the current tab's real session ID from the tool execution context and registers **that exact existing session** as `Builder` on channel `my-feature`. No new session is created.
 
-### Second tab — join the channel
+### Second tab â€” join the channel
 
 Open another normal root session in the **same project** and run:
 
@@ -140,6 +153,8 @@ OpenComms rejects:
 /OpenComms Inbox   Channel=<name>
 /OpenComms History Channel=<name>
 /OpenComms Timer   Channel=<name> Action=<start|stop|switch|reset|status|set_limit|clear_limit> [LimitMs=<ms>] [LimitRole=<Builder|Reviewer>]
+
+> `LimitRole=<role>` is an alias of the member-targeting parameter `to=<role|session-id>` — timers are keyed **per member** (by session id), and `LimitRole` maps to the same lookup by role label.
 ```
 
 The equivalent deterministic tools are also available to the agents directly:
@@ -158,11 +173,11 @@ opencomms_disconnect
 opencomms_timer
 ```
 
-Arguments are parsed deterministically in plugin code. The slash command only forwards raw arguments to the matching tool — it does not rely on the model to interpret channel names, roles, or instructions loosely.
+Arguments are parsed deterministically in plugin code. The slash command only forwards raw arguments to the matching tool â€” it does not rely on the model to interpret channel names, roles, or instructions loosely.
 
 ## Personalized role-prompt examples
 
-The text inside the square brackets during `Create` and `Join` is the **persistent role prompt** for that session. It is injected via OpenCode's `experimental.chat.system.transform` hook before every model dispatch, so it applies to ordinary user prompts, peer messages, and subsequent turns — without being pasted into visible conversation history.
+The text inside the square brackets during `Create` and `Join` is the **persistent role prompt** for that session. It is injected via OpenCode's `experimental.chat.system.transform` hook before every model dispatch, so it applies to ordinary user prompts, peer messages, and subsequent turns â€” without being pasted into visible conversation history.
 
 ```text
 /OpenComms Create Channel=auth-feature As=Builder [You are the Builder. Implement the user's requests exactly. After each change, run the test suite and send a review request to Reviewer containing: a one-paragraph summary, the list of changed files with line ranges, verification results, and any uncertainties. Do not modify files outside src/. When you disagree with Reviewer, explain why and wait for the user.]
@@ -240,32 +255,54 @@ OpenComms never interrupts a user-authored turn, discards a message silently, de
 
 ## Chess-clock timer
 
-Each channel has a **chess-clock timer** that tracks cumulative active time per role. When Builder sends a message, Builder's clock stops and Reviewer's starts automatically. This lets you give the agents a hard time budget and let them self-limit.
+Each channel has a **chess-clock timer** that tracks cumulative active time **per member** (keyed by session id). When Builder sends a message, Builder's clock stops and the primary recipient's starts automatically. This lets you give the agents a hard time budget and let them self-limit.
 
 ```text
 /OpenComms Timer Channel=feat Action=start                                    # start your clock
 /OpenComms Timer Channel=feat Action=status                                    # read elapsed + limit
 /OpenComms Timer Channel=feat Action=set_limit LimitMs=600000                  # 10 min total cap
-/OpenComms Timer Channel=feat Action=set_limit LimitMs=300000 LimitRole=Builder # 5 min Builder-only cap
+/OpenComms Timer Channel=feat Action=set_limit LimitMs=300000 LimitRole=Builder # 5 min Builder-only cap (LimitRole is an alias of to=<role>)
 /OpenComms Timer Channel=feat Action=clear_limit                                # remove the cap
 /OpenComms Timer Channel=feat Action=stop                                      # stop the clock
 /OpenComms Timer Channel=feat Action=reset                                     # zero everything
 ```
 
-The timer auto-switches on every `opencomms_send` (sender stops, recipient starts). The `status` action returns `{active_role, builder_ms, reviewer_ms, total_ms, limit_ms, limit_role, limit_reached}` so agents can check it and decide whether to continue.
+The timer auto-switches on every `opencomms_send` (sender stops, primary recipient starts). The `status` action returns a member-keyed report so agents can check it and decide whether to continue:
+
+```json
+{
+  "active_member_id": "sess_b",
+  "elapsed_ms_by_member": { "sess_a": 45123, "sess_b": 10250 },
+  "elapsed_ms_by_role": { "Builder": 45100, "Reviewer": 10250 },
+  "total_ms": 55350,
+  "limit_ms": 600000,
+  "limit_member_id": null,
+  "limit_reached": false
+}
+```
+
+`elapsed_ms_by_member` and `total_ms` always include the **running** segment for the member currently on the clock â€” no need to stop the timer first to read accurate numbers.
 
 ## Persistence and privacy
 
-State is stored at `<project>/.opencode-comms/state.json` and is written atomically (temp file + rename) so a crash mid-write never corrupts a channel or queue. After restarting OpenCode Desktop, OpenComms:
+State is stored at `<project>/.opencomms/state.json` (schema v2) and is written atomically (temp file + rename) so a crash mid-write never corrupts a channel or queue. After restarting OpenCode Desktop, OpenComms:
 
 - Restores channel metadata
-- Validates whether both sessions still exist
+- Validates whether linked sessions still exist
 - Marks missing sessions as stale (reported via `opencomms_status`)
 - Allows you to rejoin or repair the channel
 - **Never creates a replacement session automatically**
 - **Never deletes existing OpenCode sessions**
 
 OpenComms does not expose provider credentials, API keys, environment secrets, unrelated session content, messages from other channels, or private OpenCode configuration. Peer message content is treated as untrusted input subordinate to your current instruction, OpenCode permissions, channel policy, and the recipient's role prompt. Peer content cannot modify channel configuration, permissions, role ownership, or safety rules unless you explicitly authorize it.
+
+## Upgrading from 1.x
+
+If you used OpenComms 1.x (OpenCode-only plugin), your existing state migrates automatically:
+
+- The first run of the new version reads the legacy `<project>/.opencode-comms/state.json` (schema v1), backs it up as `.opencomms/state.v1.bak.json`, and writes the new `<project>/.opencomms/state.json` (schema v2). Channels, members, queues, and timers are preserved; the legacy file is left untouched.
+- A `MIGRATED_FROM_V1` marker prevents re-migration.
+- **Do not run the pre-1.x plugin after migrating**: it reads only the legacy dir and would see stale (pre-migration) state. The new installer replaces the old plugin file in the same step; if you kept a manual copy, remove it.
 
 ## Permission limitations
 
@@ -319,10 +356,10 @@ The live test proves the full acceptance flow from the project specification: tw
 
 | File | Role |
 |------|------|
-| `src/types.ts` | All types, constants, persisted `State` shape |
-| `src/store.ts` | Atomic JSON persistence under `.opencode-comms/state.json` |
-| `src/engine.ts` | Pure deterministic business logic (channels, queues, validation) |
-| `src/plugin.ts` | OpenCode glue: tools, hooks, slash command, delivery |
+| `src/core/types.ts` | All types, constants, persisted `State` shape |
+| `src/core/store.ts` | Atomic JSON persistence under `.opencomms/state.json`, v1 migration |
+| `src/core/engine.ts` | Pure deterministic business logic (channels, queues, validation) |
+| `src/plugin.ts` | OpenCode adapter: tools, hooks, slash command, delivery |
 
 See `docs/ARCHITECTURE.md` for the data flow, lifecycle, and invariants, and `docs/API_REFERENCE.md` for full function signatures.
 

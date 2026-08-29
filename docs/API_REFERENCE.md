@@ -1,28 +1,28 @@
-# API_REFERENCE.md — Complete Symbol Catalog
+﻿# API_REFERENCE.md â€” Complete Symbol Catalog
 
-> Every exported symbol with signature and notes. Line anchors are approximate after the multi-agent refactor — signatures here are the source of truth; use `rg "export function <name>" src/` for exact positions.
+> Every exported symbol with signature and notes. Line anchors are approximate after the multi-agent refactor â€” signatures here are the source of truth; use `rg "export function <name>" src/` for exact positions.
 
-## src/types.ts — Constants & Types
+## src/core/types.ts . Constants & Types
 
 ### Constants
 
 | Symbol | Value / Type | Notes |
 |--------|--------------|-------|
-| `STATE_DIR` | `".opencode-comms"` | Subdir under project root |
+| `STATE_DIR` | `".opencomms"` | Subdir under project root (v2) |
 | `STATE_FILE` | `"state.json"` | Inside `STATE_DIR` |
 | `SCHEMA_VERSION` | `1` | Bump on breaking State shape change |
 | `ROLE_BUILDER` | `"Builder"` | Legacy default label (kick policy v1 checks this) |
 | `ROLE_REVIEWER` | `"Reviewer"` | Legacy default label |
-| `DEFAULT_MAX_MEMBERS` | `8` | Per-channel membership cap; clamped ≥2 at creation |
+| `DEFAULT_MAX_MEMBERS` | `8` | Per-channel membership cap; clamped â‰¥2 at creation |
 | `VALID_SENDER_MESSAGE_TYPES` | `["review_request","review_response","manual"]` | Whitelist; `"system"` is internal-only |
 
 ### Type Aliases
 
 | Type | Definition |
 |------|------------|
-| `Role` | `string` — OPEN vocabulary, validated structurally by `normalizeRole` (`/^[A-Za-z][A-Za-z0-9 _-]{0,31}$/`, spelling preserved) |
-| `SenderMessageType` | `"review_request"\|"review_response"\|"manual"` — what senders may set |
-| `MessageType` | `SenderMessageType \| "system"` — `"system"` appears only in internally-generated envelopes |
+| `Role` | `string` â€” OPEN vocabulary, validated structurally by `normalizeRole` (`/^[A-Za-z][A-Za-z0-9 _-]{0,31}$/`, spelling preserved) |
+| `SenderMessageType` | `"review_request"\|"review_response"\|"manual"` â€” what senders may set |
+| `MessageType` | `SenderMessageType \| "system"` â€” `"system"` appears only in internally-generated envelopes |
 | `DeliveryStatus` | `"pending"\|"delivered"\|"failed"\|"rejected"\|"stale"` |
 
 ### Interfaces
@@ -58,8 +58,8 @@ interface Member {
 interface Channel {
   id: string; name: string; project_id: string; worktree: string
   created_at: number; paused: boolean; paused_at: number | null
-  members: Member[]               // ≤ max_members
-  max_members: number             // default 8, clamped ≥2 at creation
+  members: Member[]               // â‰¤ max_members
+  max_members: number             // default 8, clamped â‰¥2 at creation
   rate: { window_start:number, count:number }
   cooldown_until: Record<string,number>
   seen_content: Record<string,number>   // keys `${sender_session_id}:${hash}`; TTL = stale_event_ms
@@ -76,15 +76,15 @@ interface ChannelTimer {
   segment_started_at: number | null
   elapsed_ms: Record<string, number>    // keyed BY SESSION ID
   limit_ms: number | null
-  limit_member_id: string | null        // null → limit applies to channel TOTAL
+  limit_member_id: string | null        // null â†’ limit applies to channel TOTAL
 }
 
 interface State {
   schema_version: number
   channels: Record<string,Channel>        // key = normalizedName
   messages: Record<string,MessageEnvelope>
-  queues: Record<string,string[]>         // recipientSessionId → FIFO ids
-  delivered_to: Record<string,string[]>   // message_id → recipientIds
+  queues: Record<string,string[]>         // recipientSessionId â†’ FIFO ids
+  delivered_to: Record<string,string[]>   // message_id â†’ recipientIds
   errors: Array<{at:number,message:string}> // capped 200
 }
 
@@ -115,7 +115,7 @@ ToolResult     { ok:boolean, message:string, data?:unknown }
 
 ---
 
-## src/engine.ts — Pure Logic
+## src/core/engine.ts . Pure Logic
 
 Constants:
 
@@ -131,7 +131,7 @@ Utilities:
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `normalizeChannelName` | `(name:string)=>string` | `trim().toLowerCase()`; creation additionally enforces `^[a-z0-9][a-z0-9-_]*$` + ≤64 |
+| `normalizeChannelName` | `(name:string)=>string` | `trim().toLowerCase()`; creation additionally enforces `^[a-z0-9][a-z0-9-_]*$` + â‰¤64 |
 | `normalizeRole` | `(role:string)=>string\|null` | Open vocabulary; trims, collapses inner whitespace, structural check; spelling preserved |
 | `assertRootSession` | `(parentID, sessionId)=>string\|null` | Rejection message if child session, else null |
 | `contentHash` | `(content:string)=>string` | sha256, first 32 hex chars |
@@ -142,7 +142,7 @@ Utilities:
 | `timerTotal(timer, now?)` | `=>number` | Sum across all members incl. running segment |
 | `timerLimitReached(timer, now?)` | `=>boolean` | Member-scoped when `limit_member_id` set, else TOTAL |
 | `resolveSwitchTarget(channel, requesterId, to?)` | `{result?, target?}` | Never-guess switch resolution: explicit `to` (others only) > implied single peer > ERROR on N>1 |
-| `memberInfosFor(state, sessionId)` | `=>MemberInfo[]` | ALL memberships `{role, prompt, channel_name}` — one labeled prompt section per channel |
+| `memberInfosFor(state, sessionId)` | `=>MemberInfo[]` | ALL memberships `{role, prompt, channel_name}` â€” one labeled prompt section per channel |
 | `drainForDelivery(state, recipientSessionId)` | `=>DeliveryPair[]` | Drains queue; annotates each envelope with ITS OWN channel name for provenance |
 | `requeueFailedDelivery(state, sessionId, ids)` | `=>void` | Restores pending status + ORIGINAL FIFO order on prompt failure |
 | `pruneMessages(state)` | `=>void` | Keeps newest `MAX_PERSISTED_MESSAGES`, cleans queues/delivered_to of pruned ids |
@@ -153,8 +153,8 @@ Channel ops (all `state` mutated in place, return `ToolResult`):
 
 | Function | Signature | Failure cases |
 |----------|-----------|---------------|
-| `createChannel(state, input)` | Slug/role validation, dupes, clamps `max_members∈[2,8]` | bad slug (`__proto__` etc.), len>64, malformed role, missing fields, already exists |
-| `joinChannel(state, input)` | Project/worktree match, dupe-session, MAX_MEMBERS FIRST, then case-insensitive role-taken | full channel → `is full`; taken role → holder listed |
+| `createChannel(state, input)` | Slug/role validation, dupes, clamps `max_membersâˆˆ[2,8]` | bad slug (`__proto__` etc.), len>64, malformed role, missing fields, already exists |
+| `joinChannel(state, input)` | Project/worktree match, dupe-session, MAX_MEMBERS FIRST, then case-insensitive role-taken | full channel â†’ `is full`; taken role â†’ holder listed |
 | `updateRole(state, input)` | membership + non-empty prompt | not member |
 | `pauseChannel` / `resumeChannel` | Idempotent no-op messages | not member |
 | `disconnectChannel(state, input)` | Shared `removeMember`: purge own queue as rejected, fold+stop held timer segment | deletes channel if empty |
@@ -164,33 +164,33 @@ Messaging:
 
 | Function | Signature | Key validations |
 |----------|-----------|-----------------|
-| `sendMessage(state, input, senderSessionId)` | Type whitelist ("system" reserved + unknown rejected); recipients resolved via never-guess policy; paused; size ≤100k; rate window (broadcast = ONE count); per-sender dedup (`${sender}:${hash}`, TTL sweep); hops ≤ max_hops | Returns `{message_ids[], recipients[], delivery_status}` |
+| `sendMessage(state, input, senderSessionId)` | Type whitelist ("system" reserved + unknown rejected); recipients resolved via never-guess policy; paused; size â‰¤100k; rate window (broadcast = ONE count); per-sender dedup (`${sender}:${hash}`, TTL sweep); hops â‰¤ max_hops | Returns `{message_ids[], recipients[], delivery_status}` |
 | `drainQueue(state, recipientSessionId, opts?)` | See ARCHITECTURE.md delivery pipeline; per-envelope pause/cooldown/stale/canDeliver guards; calls pruneMessages | Returns delivered `MessageEnvelope[]` |
 | `inbox(state, input)` | MEMBER-ONLY | Does NOT drain |
 | `history(state, input)` | MEMBER-ONLY (`HistoryInput.session_id`) | Newest-first, limit 1..100 default 20 |
 | `status(state, input)` | Metadata only (no content) | Optional single-channel filter |
 | `timerAction(state, input)` | start/stop/switch/reset/status/set_limit/clear_limit; switch REQUIRES `to=` on 3+-member channels; set_limit w/o `to=` scopes TOTAL deliberately; `Number.isFinite` gate rejects NaN limits | Not member / invalid action / bad limit |
 
-Session helpers (read-only): `markStale(state, sessionId)`, `clearStale(state, sessionId)`, `isMember(state, sessionId)`, `channelForSession(state, sessionId)` (first match — only used for presence now), `deliveryStatusOf(state, messageId)`.
+Session helpers (read-only): `markStale(state, sessionId)`, `clearStale(state, sessionId)`, `isMember(state, sessionId)`, `channelForSession(state, sessionId)` (first match â€” only used for presence now), `deliveryStatusOf(state, messageId)`.
 
 ---
 
-## src/store.ts — Persistence
+## src/core/store.ts . Persistence
 
 | Symbol | Signature / Value | Notes |
 |--------|-------------------|-------|
 | `emptyState()` | `()=>State` | schema_version=SCHEMA_VERSION, all maps empty |
 | `class StateStore` | `constructor(projectDir:string)` | `dir`, `file`, private `lockPath` |
 | `.withLock(fn)` | `<T>(fn:()=>T)=>T` | Exclusive-create `.state.lock` (`<pid>@<ts>`); LOCK_TIMEOUT_MS=5s; locks older than LOCK_STALE_MS=15s broken. R5 tradeoff documented in ARCHITECTURE.md |
-| `.load()` | `()=>State` | validateState gate (schema_version, shapes, key/name agreement) → reject to fresh + error; backfillState for legacy files |
+| `.load()` | `()=>State` | validateState gate (schema_version, shapes, key/name agreement) â†’ reject to fresh + error; backfillState for legacy files |
 | `.save(state)` | `(state:State)=>void` | Atomic tmp+rename; blocking-sleep retry; direct-write fallback |
-| `.update(fn)` | `(mutate:(state:State)=>void)=>State` | `withLock(load → mutate → save)` |
+| `.update(fn)` | `(mutate:(state:State)=>void)=>State` | `withLock(load â†’ mutate â†’ save)` |
 | `LOCK_TIMEOUT_MS` / `LOCK_STALE_MS` | `5000` / `15000` | Exported for tests |
 | `stateDirFor` / `isInsideStateDir` | path helpers | |
 
 ---
 
-## src/plugin.ts — OpenCode Glue
+## src/plugin.ts . OpenCode Adapter
 
 | Symbol | Kind | Notes |
 |--------|------|-------|
@@ -201,7 +201,7 @@ Session helpers (read-only): `markStale(state, sessionId)`, `clearStale(state, s
 | `deliverPending(sessionId)` | async | Phase 1 locked `drainForDelivery`+save; Phase 2 unlocked framed prompt; Phase 3 locked requeue on failure. Delivery fires strictly post-lock |
 | `requireRootSession(sessionId)` | async guard | FAILS CLOSED on SDK error (create/join refuse + record) |
 | `withLockedState(mutate, shouldSave)` | helper | Every tool mutation runs through it |
-| `tools` | 12 entries | create, join, send, status, inbox, history, update_role, pause, resume, disconnect, kick, timer — see TOOLS_AND_COMMANDS.md |
+| `tools` | 12 entries | create, join, send, status, inbox, history, update_role, pause, resume, disconnect, kick, timer â€” see TOOLS_AND_COMMANDS.md |
 | hooks | 3 | system.transform (per-membership prompts), event (idle/deleted/status), command.execute.before (/OpenComms) |
 
 ---

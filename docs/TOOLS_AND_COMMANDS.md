@@ -1,6 +1,6 @@
-# TOOLS_AND_COMMANDS.md — Tools & Slash Command Spec
+﻿# TOOLS_AND_COMMANDS.md â€” Tools & Slash Command Spec
 
-> 12 deterministic tools registered via `@opencode-ai/plugin` `tool()` (`plugin.ts`). All mutating tools run inside `store.withLock`: `withLock(load() → engine fn → save() if ok) → JSON.stringify(result)` (P1 concurrency fix). All `channel` args are case-insensitive (normalized via `normalizeChannelName`).
+> 12 deterministic tools registered via `@opencode-ai/plugin` `tool()` (`plugin.ts`). All mutating tools run inside `store.withLock`: `withLock(load() â†’ engine fn â†’ save() if ok) â†’ JSON.stringify(result)` (P1 concurrency fix). All `channel` args are case-insensitive (normalized via `normalizeChannelName`).
 
 ## Tool Inventory
 
@@ -26,7 +26,7 @@
 { channel: string, role: string /* open vocabulary: /^[A-Za-z][A-Za-z0-9 _-]{0,31}$/, unique per channel */,
   role_prompt: string, max_members?: number /* clamped to [2, DEFAULT_MAX_MEMBERS=8] */ }
 
-// opencomms_join — same as create minus max_members
+// opencomms_join â€” same as create minus max_members
 
 // opencomms_send
 { channel: string, type?: string /* review_request|review_response|manual ONLY ("system" is reserved), default "manual" */,
@@ -42,7 +42,7 @@
 // opencomms_inbox
 { channel: string, limit?: number /* 1..100, default 20 */ }
 
-// opencomms_history — member-scoped (session from ctx.sessionID)
+// opencomms_history â€” member-scoped (session from ctx.sessionID)
 { channel: string, limit?: number /* 1..100, default 20 */ }
 
 // opencomms_update_role
@@ -58,7 +58,7 @@
    WITH to=<id|role> it scopes to that one member (self-targeting allowed).
    switch on 3+-member channels REQUIRES to= (never guesses); single-peer channels imply the peer. */
 
-// opencomms_kick — removes another member's CHANNEL LINK only; their OpenCode session lives on
+// opencomms_kick â€” removes another member's CHANNEL LINK only; their OpenCode session lives on
 { channel: string, target_session_id?: string|null, target_role?: string|null }
 ```
 
@@ -72,11 +72,11 @@ Every tool returns `JSON.stringify(ToolResult)` where `ToolResult = {ok:boolean,
 - `history`: `{messages:{message_id,sender_role,recipient_role,message_type,content,timestamp,reply_to,hop_count,delivery_status}[]}`
 - `status`: `StatusReport {channels:ChannelSummary[], total_messages, pending_messages, errors}`
 - `timer` (status): `{active_member_id, elapsed_ms_by_member, elapsed_ms_by_role, total_ms, limit_ms, limit_member_id, limit_reached}`
-- `kick`: `{kicked_session_id, kicked_role, remaining_session_ids}` — the plugin drains the queued system notices for those ids immediately (mirroring the send path).
+- `kick`: `{kicked_session_id, kicked_role, remaining_session_ids}` â€” the plugin drains the queued system notices for those ids immediately (mirroring the send path).
 
 Membership guard (`requireMember`) rejects tools 3,5-12 with `"This session is not linked to any OpenComms channel..."`.
 
-Create/Join derive `session_id` from `ctx.sessionID` — never passed by caller. Both **fail closed** when the root-session SDK lookup errors.
+Create/Join derive `session_id` from `ctx.sessionID` â€” never passed by caller. Both **fail closed** when the root-session SDK lookup errors.
 
 ## Slash Command: `/OpenComms`
 
@@ -108,24 +108,24 @@ rolePrompt = params.RolePrompt ?? rest-minus-subcommand
 | `History` | `Channel` | `history` (member-only) | `/OpenComms History Channel=feat` |
 | `Timer` | `Channel`, `Action`, `LimitMs`?, `To`/`LimitRole`? | `timerAction` | `/OpenComms Timer Channel=feat Action=status` |
 
-Aliases: subcommand matched lowercased, so `Create`/`create`/`CREATE` all work. `Channel`/`channel` both work; `As`/`role` both work (`plugin.ts:356-358`).
+Aliases: subcommand matched lowercased, so `Create`/`create`/`CREATE` all work. `Channel`/`channel` both work; `As`/`role` both work (plugin.ts slashSub).
 
-On unknown subcommand: returns `"Unknown /OpenComms subcommand. Supported: Create, Join, Status, Pause, Resume, Disconnect, UpdateRole, Inbox, History, Timer."` (`plugin.ts:422`). Result always appended as `output.parts.push({type:"text", text:`OpenComms: ${result.message}`, ...})` (`plugin.ts:430`) and `save(state)` only if `result.ok` (`plugin.ts:429`).
+On unknown subcommand: returns `"Unknown /OpenComms subcommand. Supported: Create, Join, Status, Pause, Resume, Disconnect, UpdateRole, Inbox, History, Timer."` (plugin.ts command.execute.before default case). Result always appended as `output.parts.push({type:"text", text:`OpenComms: ${result.message}`, ...})` (plugin.ts output.parts.push) and `save(state)` only if `result.ok` (post-switch save).
 
 ## End-to-End Flow Example
 
 ```
-Session A (/OpenComms Create):  plugin.ts:364 → engine.ts:91 createChannel → save
-Session B (/OpenComms Join):    plugin.ts:380 → engine.ts:142 joinChannel → save
-Session A send:                 plugin.ts:130 tool → engine.ts:268 sendMessage → queues[B].push(id)
-Session B idle event:            plugin.ts:318 → clearStale → deliverPending → engine.ts:375 drainQueue → client.session.prompt(text)
-Session B reply:                same send path, reply_to=parentId → hop_count++
-Session A idle:                 same drain → delivers reply
+Session A (/OpenComms Create):  plugin.ts execute -> core/engine.ts createChannel â†’ save
+Session B (/OpenComms Join):    plugin.ts execute -> core/engine.ts joinChannel â†’ save
+Session A send:                 plugin.ts opencomms_send -> core/engine.ts sendMessage â†’ queues[B].push(id)
+Session B idle event:            plugin.ts event hook -> clearStale -> deliverPending -> core/engine.ts drainQueue â†’ client.session.prompt(text)
+Session B reply:                same send path, reply_to=parentId â†’ hop_count++
+Session A idle:                 same drain â†’ delivers reply
 ```
 
-Delivery text format (`plugin.ts:282`):
+Delivery text format (`formatDeliveryBatch` in core/engine.ts):
 ```
-[OpenComms message from Builder (review_request) — message_id ocm_..., reply_to none, hop 0]
+[OpenComms message from Builder (review_request) â€” message_id ocm_..., reply_to none, hop 0]
 
 <content>
 
@@ -134,10 +134,10 @@ Delivery text format (`plugin.ts:282`):
 [OpenComms message from ...]
 ```
 
-## Adding a New Tool — Checklist
+## Adding a New Tool â€” Checklist
 
-1. Add `tool({ description, args:{...}, async execute(args, ctx){...} })` in `plugin.ts:79` `tools` object.
-2. Implement pure logic in `src/engine.ts` (take `State` + input, mutate, return `ToolResult` via `ok`/`fail` helpers at `engine.ts:66`).
-3. Add types in `src/types.ts` if new input shape needed.
-4. Wire slash subcommand in `plugin.ts:363` switch if CLI access wanted.
-5. `npm run typecheck && npm run test` — engine tests at `test/unit/engine.test.ts:1`.
+1. Add `tool({ description, args:{...}, async execute(args, ctx){...} })` in `src/plugin.ts` `tools` object.
+2. Implement pure logic in `src/core/engine.ts` (take `State` + input, mutate, return `ToolResult` via the `ok`/`fail` helpers).
+3. Add types in `src/core/types.ts` if a new input shape is needed.
+4. Wire slash subcommand in the `command.execute.before` switch in `src/plugin.ts` if CLI access wanted.
+5. `npm run typecheck && npm run test` â€” engine tests at `test/unit/engine.test.ts:1`.

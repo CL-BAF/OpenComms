@@ -1,4 +1,4 @@
-# docs — Navigation Hub
+﻿# docs â€” Navigation Hub
 
 > Start at `../AGENTS.md` for the 30-second overview. This file routes you to the right detail doc without re-reading source.
 
@@ -7,26 +7,32 @@
 | Doc | Purpose | When to use |
 |-----|---------|-------------|
 | [`AGENTS.md`](../AGENTS.md) | Root AI entry point, invariants, file map | **Read first** for any task |
-| `docs/README.md` | This file — navigation | Finding which doc to read |
+| `docs/README.md` | This file â€” navigation | Finding which doc to read |
 | `docs/ARCHITECTURE.md` | System design, state diagram, lifecycles, invariants, delivery flow | Before architectural changes or debugging delivery |
 | `docs/API_REFERENCE.md` | Every exported function/type/constant with `file:line` + signature | Looking up exact args/returns without opening `src/*` |
-| `docs/TOOLS_AND_COMMANDS.md` | 11 tools + `/OpenComms` slash command, schemas, examples | Adding/modifying tools or commands |
+| `docs/TOOLS_AND_COMMANDS.md` | 12 tools + `/OpenComms` slash command, schemas, examples | Adding/modifying tools or commands |
+| [docs/CAPABILITIES.md](CAPABILITIES.md) | Honest per-surface capability matrix with citations | Before claiming host support |
+| [docs/ADAPTERS.md](ADAPTERS.md) | Adapter contract, identity models, shared MCP tools | Writing/changing any adapter |
+| [docs/SECURITY.md](SECURITY.md) | Threat model, trust boundaries, residual risks | Security review |
+| [docs/PROTOCOL.md](PROTOCOL.md) | Envelope, delivery semantics, MCP wire surface | Changing message/transport behavior |
+| [docs/MIGRATION.md](MIGRATION.md) | v1->v2 migration + cutover discipline | Upgrading projects |
+| [docs/OPENCODE.md](OPENCODE.md) / [CLAUDE_CODE.md](CLAUDE_CODE.md) / [CLAUDE_DESKTOP.md](CLAUDE_DESKTOP.md) / [CODEX.md](CODEX.md) / [CHATGPT.md](CHATGPT.md) | Per-host adapter guides | Working on a specific host |
 
 ## Quick Routing
 
 | I need to... | Read | Then edit |
 |--------------|------|-----------|
-| Understand the whole system in 2 min | `ARCHITECTURE.md` § Overview + § Data Flow | — |
-| Find a function's signature | `API_REFERENCE.md` table | `src/engine.ts` or `src/store.ts` |
-| Add a new tool | `TOOLS_AND_COMMANDS.md` + `API_REFERENCE.md` plugin section | `src/plugin.ts:79` then `src/engine.ts` |
-| Change persistence / file location | `ARCHITECTURE.md` § State Persistence | `src/store.ts:28`, `src/types.ts:9` |
-| Fix delivery / queue bug | `ARCHITECTURE.md` § Delivery Pipeline + Gotchas | `src/engine.ts:375`, `src/plugin.ts:271` |
-| Change channel validation | `ARCHITECTURE.md` § Invariants | `src/engine.ts:91`, `src/types.ts:16` |
-| Add a message type | `API_REFERENCE.md` § Types → `MessageType` | `src/types.ts:26` + `src/plugin.ts:135` |
+| Understand the whole system in 2 min | `ARCHITECTURE.md` Â§ Overview + Â§ Data Flow | â€” |
+| Find a function's signature | `API_REFERENCE.md` table | `src/core/engine.ts` or `src/core/store.ts` |
+| Add a new tool | `TOOLS_AND_COMMANDS.md` + `API_REFERENCE.md` plugin section | `src/plugin.ts` then `src/core/engine.ts` |
+| Change persistence / file location | `ARCHITECTURE.md` Â§ State Persistence | `src/core/store.ts`, `src/core/types.ts` |
+| Fix delivery / queue bug | `ARCHITECTURE.md` Â§ Delivery Pipeline + Gotchas | `src/core/engine.ts` `drainQueue`, `src/plugin.ts` `deliverPending` |
+| Change channel validation | `ARCHITECTURE.md` Â§ Invariants | `src/core/engine.ts` `createChannel`, `src/core/types.ts` |
+| Add a message type | `API_REFERENCE.md` Â§ Types â†’ `MessageType` | `src/core/types.ts` `MessageType` + `src/plugin.ts` |
 
 ## Source of Truth
 
-All `file:line` refs point to `src/` at `HEAD`. Docs are generated from source — if a signature drifts, the source wins. Run `npm run typecheck` after edits.
+All `file:line` refs point to `src/` at `HEAD`. Docs are generated from source â€” if a signature drifts, the source wins. Run `npm run typecheck` after edits.
 
 ## Build & Test Recap
 
