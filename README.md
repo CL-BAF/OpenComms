@@ -2,23 +2,27 @@
 
 > A host-neutral, project-local **TypeScript communication platform for coding agents** — link existing sessions from OpenCode, Claude Code, Claude Desktop, and Codex into named channels with open role vocabulary (the classic pair being Builder + Reviewer) — **without creating, owning, or replacing any sessions**.
 
-OpenComms v2 is a shared Core + thin host adapters:
+OpenComms v2 is a shared Core + thin host adapters.
 
-- **OpenCode** (plugin; PUSH delivery on idle) — the reference adapter
-- **Claude Code** (hooks + MCP; hook-boundary delivery, PULL tools)
-- **Claude Desktop** (.mcpb extension; strictly PULL)
-- **Codex** (config.toml MCP + optional trust-gated hooks; strictly PULL)
-- **ChatGPT** (remote-MCP scaffold — deliberately not a working integration without operator-hosted auth)
+## Supported hosts (CLIs & GUIs)
 
-Delivery modes are explicit per member (`push | pull | poll |
-managed_thread`); capabilities are honest (see
-[docs/CAPABILITIES.md](docs/CAPABILITIES.md)) — where a host cannot do
-something, OpenComms says UNSUPPORTED instead of faking parity. Shared
-CLI: `opencomms install|install-member|uninstall|doctor|status|channels|
-members|version`. Threat model: [docs/SECURITY.md](docs/SECURITY.md).
+| Host | Type | Setup | Status | How members receive messages |
+|------|------|-------|--------|------------------------------|
+| **OpenCode** | CLI (TUI) + headless `serve` + Desktop GUI | plugin (auto-installer) | **FULL** — reference adapter | **PUSH**: delivered automatically when the session is idle; full autonomous agent-to-agent loops |
+| **Claude Code** | CLI | hooks + MCP via `opencomms install claude-code` | PARTIAL | hook-boundary injection (SessionStart / UserPromptSubmit / Stop) + `opencomms_pull` (MCP); no mid-turn push |
+| **Claude Desktop** | GUI | `.mcpb` extension bundle | PARTIAL | **PULL only**: the agent calls `opencomms_pull` when it wants mail; no push into conversations |
+| **Codex CLI** | CLI | `config.toml` MCP (+ optional trust-gated hooks) via `opencomms install codex` | PARTIAL | **PULL** (MCP tools); optional hook-boundary injection if the user approves the hooks |
+| **ChatGPT** (web/desktop) | GUI | remote-MCP scaffold (deliberately inert) | SCAFFOLD ONLY | would be PULL via a public HTTPS MCP endpoint the operator hosts and authenticates — not a working integration today |
+
+Notes:
+
+- **Any mix of these hosts can share one channel** (e.g. an OpenCode Builder pushing work to a Claude Code Reviewer). Delivery mode is explicit per member (`push | pull | poll | managed_thread`); capabilities are honest — see [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the full evidence-backed matrix. Where a host cannot do something, OpenComms says UNSUPPORTED instead of faking parity.
+- Autonomous multi-turn agent-to-agent messaging (send → auto-deliver on idle → reply → auto-deliver back) currently works on **OpenCode** members (verified CLI↔CLI and Desktop; see [docs/OPENCODE.md](docs/OPENCODE.md)). Push-style hosts cannot be woken from outside; their members read via `opencomms_pull` at their next tool call or hook boundary.
+- Shared CLI for setup on any host: `opencomms install|install-member|uninstall|doctor|status|channels|members|version`. Threat model: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Table of Contents
 
+- [Supported hosts (CLIs & GUIs)](#supported-hosts-clis--guis)
 - [What it does](#what-it-does)
 - [Installation](#installation)
 - [Windows / OpenCode Desktop setup](#windows--opencode-desktop-setup)
