@@ -180,7 +180,8 @@ test("load backfills max_members and migrates legacy role-keyed timers", () => {
     raw2.channels.valid.max_members = 500
     writeFileSync(store2.file, JSON.stringify(raw2), "utf8")
     const clamped = store2.load().channels["valid"]!.max_members
-    assert.equal(clamped >= 2 && clamped <= 8, true)
+    // Tampered caps clamp into [2, MAX_MEMBERS_CEILING].
+    assert.equal(clamped >= 2 && clamped <= 32, true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

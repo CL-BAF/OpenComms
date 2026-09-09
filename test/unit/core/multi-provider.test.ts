@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Multi-provider + budget + retry-cap tests (work orders 2026-09-08).
  *
  * Scenario coverage: (1) Claude+Codex one session, (4) TWO Claude agents,
@@ -8,7 +8,7 @@
  * different members, plus the budget guards (max_runtime /
  * max_delivered_messages) and the dead-letter retry cap.
  *
- * All at the engine boundary with realistic member rows — the transports
+ * All at the engine boundary with realistic member rows â€” the transports
  * themselves are exercised in spawn-delivery.test.ts and the cross-host
  * suites; the broker never needs provider identities.
  */
@@ -305,4 +305,31 @@ test("concurrent members: interleaved sends to DIFFERENT targets never cross", (
     (state.queues["k2"] ?? []).map((id) => state.messages[id]!.content),
     ["b0", "b1", "b2", "b3"],
   )
+})
+
+test("max_members: 8 is the DEFAULT, not the ceiling (configurable up to 32)", () => {
+  const state = emptyState()
+  const created = createChannel(state, {
+    channel: "big",
+    role: "Coordinator",
+    role_prompt: "p",
+    session_id: "big0",
+    project_id: PROJECT,
+    worktree: WORKTREE,
+    max_members: 16,
+  })
+  assert.equal(created.ok, true)
+  assert.equal(state.channels["big"]!.max_members, 16, "above-default caps are honored up to the ceiling")
+  // Over-ceiling clamps to MAX_MEMBERS_CEILING (32), not the 8 default.
+  const clamped = createChannel(state, {
+    channel: "biggest",
+    role: "Coordinator",
+    role_prompt: "c",
+    session_id: "big1",
+    project_id: PROJECT,
+    worktree: WORKTREE,
+    max_members: 100,
+  })
+  assert.equal(clamped.ok, true)
+  assert.equal(state.channels["biggest"]!.max_members, 32)
 })

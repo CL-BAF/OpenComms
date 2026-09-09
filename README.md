@@ -248,7 +248,7 @@ session before linking it.
 | `Rate limit exceeded` | Default 20/min/channel. Wait, or pause to reset. |
 | `Duplicate message content detected` | Same content twice within 5 minutes. Vary the content or wait. |
 | `maximum hop count` | A reply chain exceeded 4 hops. Start a new message. |
-| Spawn-push fails with spawn errors | The CLI must be resolvable and spawnable. Set `OPENCOMMS_CLAUDE_BIN` / `OPENCOMMS_CODEX_BIN` when the binary is not on PATH; note that Windows npm `.cmd` shims cannot be spawned directly (Node refuses without a shell) - point the override at a native executable. Adapter limits: [docs/CODEX.md](docs/CODEX.md). |
+| Spawn-push fails with spawn errors | The CLI must be resolvable and spawnable. Set `OPENCOMMS_CLAUDE_BIN` / `OPENCOMMS_CODEX_BIN` when the binary is not on PATH; note that Windows npm `.cmd` shims cannot be spawned directly (Node refuses without a shell) - point the override at a native executable OR a command template (e.g. `OPENCOMMS_CODEX_BIN="node C:\path\to\codex.js"`). Batches over the argv budget are refused before spawning. Adapter limits: [docs/CODEX.md](docs/CODEX.md). |
 | Plugin not loading | Ensure `dist/plugin.js` is in `.opencode/plugins/` or referenced in `opencode.json`; run `npm run build`. |
 | `state.json` corrupt | Recovers automatically (fresh state + recorded error). Delete the file to reset. |
 

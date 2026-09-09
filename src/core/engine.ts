@@ -15,6 +15,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import {
   DEFAULT_MAX_MEMBERS,
+  MAX_MEMBERS_CEILING,
   ROLE_BUILDER,
   VALID_SENDER_MESSAGE_TYPES,
   type Channel,
@@ -430,7 +431,7 @@ export function createChannel(state: State, input: CreateInput): ToolResult {
 
   const maxMembers =
     input.max_members !== undefined
-      ? Math.max(2, Math.min(DEFAULT_MAX_MEMBERS, Math.floor(input.max_members)))
+      ? Math.max(2, Math.min(MAX_MEMBERS_CEILING, Math.floor(input.max_members)))
       : DEFAULT_MAX_MEMBERS
 
   // Conversation safeguards (clamped to sane ranges; null = unlimited).
@@ -1241,7 +1242,7 @@ export function resumeSession(
   }
   const maxMembers =
     input.max_members !== undefined
-      ? Math.max(2, Math.min(DEFAULT_MAX_MEMBERS, Math.floor(input.max_members)))
+      ? Math.max(2, Math.min(MAX_MEMBERS_CEILING, Math.floor(input.max_members)))
       : DEFAULT_MAX_MEMBERS
   const channel: Channel = {
     id: newChannelId(),

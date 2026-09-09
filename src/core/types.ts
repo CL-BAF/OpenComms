@@ -31,6 +31,12 @@ export const MIGRATION_MARKER = "MIGRATED_FROM_V1"
 
 /** Default per-channel membership cap (channels hold N members). */
 export const DEFAULT_MAX_MEMBERS = 8
+/**
+ * HARD CEILING for max_members (work order: "never hardcode 8 deep into
+ * the broker"). 8 is the DEFAULT; larger channels may be configured up to
+ * this ceiling at create/resume time.
+ */
+export const MAX_MEMBERS_CEILING = 32
 
 /** Legacy default roles, kept for docs/fallbacks only â€” not a closed set. */
 export const ROLE_BUILDER = "Builder"

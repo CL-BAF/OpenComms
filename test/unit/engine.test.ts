@@ -169,7 +169,7 @@ test("createChannel enforces the slug pattern and max_members bounds", () => {
   assert.equal(ok.ok, true)
   assert.equal(state.channels["capped"]!.max_members, 3)
 
-  // Clamped to [2, DEFAULT_MAX_MEMBERS].
+  // Clamped to [2, MAX_MEMBERS_CEILING] — 8 is the DEFAULT, not the ceiling.
   createChannel(state, {
     channel: "clamp-lo",
     role: "Builder",
@@ -189,7 +189,7 @@ test("createChannel enforces the slug pattern and max_members bounds", () => {
     project_id: PROJECT,
     worktree: WORKTREE,
   })
-  assert.equal(state.channels["clamp-hi"]!.max_members, 8)
+  assert.equal(state.channels["clamp-hi"]!.max_members, 32)
 })
 
 test("joinChannel registers the second exact session as Reviewer", () => {

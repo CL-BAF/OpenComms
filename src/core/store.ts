@@ -33,6 +33,7 @@ import { dirname, join } from "node:path"
 import { randomBytes } from "node:crypto"
 import {
   DEFAULT_MAX_MEMBERS,
+  MAX_MEMBERS_CEILING,
   LEGACY_HOST_ID,
   LEGACY_STATE_DIR,
   MIGRATION_MARKER,
@@ -108,7 +109,7 @@ function isValidChannel(ch: unknown, legacy = false): boolean {
     typeof ch["parent_channel_id"] === "string" &&
     (ch["parent_channel_id"] as string).length > 0
   if (members.length === 0 && !isResumedEmpty) return false
-  if (members.length > DEFAULT_MAX_MEMBERS) return false
+  if (members.length > MAX_MEMBERS_CEILING) return false
   return members.every((m) => isValidMember(m, legacy))
 }
 
@@ -190,7 +191,7 @@ function backfillState(state: State): void {
       channel.max_members = DEFAULT_MAX_MEMBERS
     } else {
       // Clamp out-of-range (possibly tampered) caps into sane bounds.
-      channel.max_members = Math.max(2, Math.min(DEFAULT_MAX_MEMBERS, Math.floor(channel.max_members)))
+      channel.max_members = Math.max(2, Math.min(MAX_MEMBERS_CEILING, Math.floor(channel.max_members)))
     }
     if (channel.paused === undefined) channel.paused = false
     if (channel.rate === undefined || typeof channel.rate.window_start !== "number") {
