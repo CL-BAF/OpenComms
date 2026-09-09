@@ -30,12 +30,20 @@ Then, inside a Claude Code session in that project:
 
 ```bash
 opencomms install-member --host claude-code
-# writes .opencomms/member-pin.json (machine-local identity data)
+# writes .opencomms/pins/<member_id>.json (machine-local identity data)
 ```
 
-The SessionStart hook binds the pinned member to the live Claude session
-(host_session_id) on first start — this is the identity bridge between the
-MCP member namespace and Claude's session ids.
+**Multi-member identity (per-member pins):** each member gets its OWN pin
+file; a second `install-member` run WITHOUT `--id` REFUSES (it would
+otherwise orphan the first member). Add another member with
+`install-member --id <member_id>`. The SessionStart hook binds a pinned
+member to the live Claude session (host_session_id) only when EXACTLY ONE
+pinned claude-code member is unbound — with several unbound pins the bind
+is ambiguous, so nothing auto-binds and the hook emits guidance instead
+(bind members one at a time: install -> start session -> install next, or
+set OPENCOMMS_MEMBER_ID for the session). This is the identity bridge
+between the MCP member namespace and Claude's session ids, fail-closed by
+design: one member's pin can never authorize another member's drains.
 
 ## Hook events used (verified names, 2026-08-29)
 

@@ -36,7 +36,7 @@ export const DEFAULT_MAX_MEMBERS = 8
 export const ROLE_BUILDER = "Builder"
 export const ROLE_REVIEWER = "Reviewer"
 
-export type DeliveryStatus = "pending" | "delivered" | "failed" | "rejected" | "stale"
+export type DeliveryStatus = "pending" | "in_flight" | "delivered" | "failed" | "rejected" | "stale"
 
 /**
  * Message types a sender may choose freely. The "system" type is RESERVED:

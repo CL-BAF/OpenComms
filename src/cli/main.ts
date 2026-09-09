@@ -25,9 +25,26 @@ import { scaffoldChatGptIntegration, detectChatGptDesktop } from "../adapters/ch
 import { StateStore } from "../core/store.js"
 import { status } from "../core/engine.js"
 import { SCHEMA_VERSION } from "../core/types.js"
-import { loadProjectPin } from "../mcp/identity.js"
+import { listMemberPins, loadProjectPin } from "../mcp/identity.js"
 
-export const VERSION = "2.0.0"
+/** Package version, derived from package.json so the CLI can never drift. */
+export const VERSION: string = (() => {
+  try {
+    let dir: string = import.meta.dirname ?? process.cwd()
+    for (;;) {
+      const candidate = join(dir, "package.json")
+      if (existsSync(candidate)) {
+        const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { version?: unknown }
+        if (typeof parsed.version === "string" && parsed.version) return parsed.version
+      }
+      const parent = dirname(dir)
+      if (parent === dir) return "0.0.0"
+      dir = parent
+    }
+  } catch {
+    return "0.0.0"
+  }
+})()
 
 function flagValue(tokens: string[], name: string): string | undefined {
   const idx = tokens.indexOf(name)
@@ -173,12 +190,19 @@ function fmtDoctor(projectDir: string): CliResult {
     `  ChatGPT Desktop: not directly detectable (${gpt.detected ? "?" : "by design; no documented API"}) | remote MCP scaffold: ${existsSync(join(resolve(projectDir), "opencomms-chatgpt")) ? "scaffolded" : "not scaffolded"}`,
   )
 
-  // Member pin.
+  // Member pins.
   lines.push("")
-  const pin = loadProjectPin(resolve(projectDir))
-  lines.push(
-    `Member pin: ${pin ? `present (${pin.member_id.slice(0, 12)}...)` : "not set"} - run install-member inside a host session`,
-  )
+  const pins = listMemberPins(resolve(projectDir))
+  if (pins.length > 0) {
+    lines.push(`Member pins: ${pins.length} (${pins.map((p) => p.member_id.slice(0, 12) + "...").join(", ")})`)
+  } else {
+    const legacy = loadProjectPin(resolve(projectDir))
+    lines.push(
+      legacy
+        ? `Member pin: legacy single-member file (${legacy.member_id.slice(0, 12)}...) - re-register members to migrate to per-member pins`
+        : "Member pins: none - run install-member inside a host session",
+    )
+  }
   return ok(lines.join("\n"))
 }
 
@@ -249,6 +273,7 @@ function runUninstall(host: string | undefined, projectDir: string): CliResult {
       if (existsSync(settingsPath)) {
         const raw = JSON.parse(readFileSync(settingsPath, "utf8")) as { hooks?: Record<string, unknown> }
         if (raw.hooks) {
+          let changedAny = false
           for (const event of Object.keys(raw.hooks)) {
             const entries = raw.hooks[event]
             if (Array.isArray(entries)) {
@@ -256,10 +281,12 @@ function runUninstall(host: string | undefined, projectDir: string): CliResult {
               if (filtered.length !== entries.length) {
                 raw.hooks[event] = filtered
                 removed = true
+                changedAny = true
               }
             }
           }
-          writeFileSync(settingsPath, JSON.stringify(raw, null, 2) + "\n", "utf8")
+          // Write only when something was actually removed (no format churn).
+          if (changedAny) writeFileSync(settingsPath, JSON.stringify(raw, null, 2) + "\n", "utf8")
         }
       }
       return ok(
@@ -305,7 +332,7 @@ function runInstallMember(projectDir: string, host: string | undefined, memberId
   })
   if (!result.ok) return fail(result.reason)
   return ok(
-    `Member registered: ${result.memberId} (pin file .opencomms/member-pin.json). Now run create/join inside the host session to link it to a channel.`,
+    `Member registered: ${result.memberId} (pin file ${result.pinFile.replace(/\\/g, "/")}). Now run create/join inside the host session to link it to a channel.`,
   )
 }
 

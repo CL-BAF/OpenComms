@@ -13,9 +13,12 @@ import { runCli } from "../../../src/cli/main.js"
 import { StateStore } from "../../../src/core/store.js"
 import { createChannel, joinChannel } from "../../../src/core/engine.js"
 import { emptyState } from "../../../src/core/store.js"
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs"
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+
+const repoRoot = resolve(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", ".."))
 
 function mkProject(name = "oc-cli"): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "oc-cli-"))
@@ -56,7 +59,9 @@ function seedState(dir: string): void {
 test("version command reports the version and schema", () => {
   const r = runCli(["version"])
   assert.equal(r.code, 0)
-  assert.match(r.output, /opencomms 2\.0\.0/)
+  // Version derives from package.json (P3-4): read the same source of truth.
+  const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version: string }
+  assert.match(r.output, new RegExp(`opencomms ${pkg.version.replace(/\./g, "\\.")}`))
   assert.match(r.output, /schema v2/)
 })
 
@@ -106,6 +111,59 @@ test("doctor reports state, hosts and pin without printing secrets", () => {
     assert.match(r.output, /delivery: PULL ONLY/) // Desktop row present
     // No secrets: full member id value must not appear.
     assert.ok(!r.output.includes("sess_secret_pin_value"), "doctor must not print pin values")
+  } finally {
+    p.cleanup()
+  }
+})
+
+test("doctor lists per-member pins and still hides member ids (P1-1)", () => {
+  const p = mkProject()
+  try {
+    seedState(p.dir)
+    mkdirSync(join(p.dir, ".opencomms", "pins"), { recursive: true })
+    writeFileSync(
+      join(p.dir, ".opencomms", "pins", "sess_pin_doctor_a.json"),
+      JSON.stringify({ member_id: "sess_pin_doctor_a", host: "claude-code" }),
+    )
+    writeFileSync(
+      join(p.dir, ".opencomms", "pins", "sess_pin_doctor_b.json"),
+      JSON.stringify({ member_id: "sess_pin_doctor_b", host: "claude-code" }),
+    )
+    const r = runCli(["doctor", "--project", p.dir])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /Member pins: 2/)
+    assert.ok(!r.output.includes("sess_pin_doctor_a"), "doctor must not print per-member pin values")
+  } finally {
+    p.cleanup()
+  }
+})
+
+test("install-member: blind second run refuses; explicit --id registers a second pin", () => {
+  const p = mkProject()
+  try {
+    seedState(p.dir) // state.json must exist for member registration
+    const first = runCli(["install-member", "--project", p.dir, "--host", "claude-code"])
+    assert.equal(first.code, 0, first.output)
+    assert.match(first.output, /pins\//, "pin path points at the per-member pins directory")
+
+    const blind = runCli(["install-member", "--project", p.dir, "--host", "claude-code"])
+    assert.equal(blind.code, 1, "blind second registration must fail")
+    assert.match(blind.output, /--id/, "refusal must tell the operator how to proceed")
+
+    const second = runCli([
+      "install-member",
+      "--project",
+      p.dir,
+      "--host",
+      "claude-code",
+      "--id",
+      "sess_pin_cli_second",
+    ])
+    assert.equal(second.code, 0, second.output)
+    assert.ok(existsSync(join(p.dir, ".opencomms", "pins", "sess_pin_cli_second.json")), "second member pin written")
+    // First member's pin untouched.
+    const pins = readdirSync(join(p.dir, ".opencomms", "pins")).filter((f) => f.endsWith(".json"))
+    assert.equal(pins.length, 2, "two independent member pins coexist")
   } finally {
     p.cleanup()
   }

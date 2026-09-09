@@ -9,6 +9,7 @@
  */
 
 import {
+  commitDelivery,
   createChannel,
   disconnectChannel,
   drainForDelivery,
@@ -267,6 +268,14 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
               data: { messages: [], untrusted_notice: UNTRUSTED_NOTE },
             }
           }
+          // PULL delivery completes inside THIS response: content is handed
+          // to the model as the tool result, so commit in_flight -> delivered
+          // in the same locked mutate (no crash window between drain and read).
+          commitDelivery(
+            state,
+            memberId,
+            drained.map((p) => p.message_id),
+          )
           // Per-envelope channel provenance; framed as untrusted peer data.
           const framed = drained.map((pair) => {
             const envelope = state.messages[pair.message_id]

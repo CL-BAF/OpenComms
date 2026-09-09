@@ -23,6 +23,7 @@ members|version`. Threat model: [docs/SECURITY.md](docs/SECURITY.md).
 - [Installation](#installation)
 - [Windows / OpenCode Desktop setup](#windows--opencode-desktop-setup)
 - [The two-tab pairing workflow](#the-two-tab-pairing-workflow)
+- [Multi-agent channels (3-8 members) and CLI-to-CLI autonomy](#multi-agent-channels-3-8-members-and-cli-to-cli-autonomy)
 - [Command examples](#command-examples)
 - [Personalized role-prompt examples](#personalized-role-prompt-examples)
 - [How messages are delivered](#how-messages-are-delivered)
@@ -36,7 +37,7 @@ members|version`. Threat model: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## What it does
 
-OpenComms connects **root OpenCode sessions that you have already opened** in separate tabs for the same project. It never silently creates replacement sessions. All linked sessions remain:
+OpenComms connects **root host sessions that you have already opened** for the same project — OpenCode sessions in separate tabs (or CLI terminals), plus members from Claude Code, Claude Desktop, and Codex via the shared MCP tools. Channels hold **2-8 members** under any open role labels (the classic pair being Builder + Reviewer). It never silently creates replacement sessions. All linked sessions remain:
 
 - Visible in OpenCode Desktop
 - Independently accessible in their original tabs
@@ -140,6 +141,14 @@ OpenComms rejects:
 - Linking sessions from incompatible projects or worktrees
 - Joining a nonexistent, paused, or closed channel incorrectly
 
+## Multi-agent channels (3-8 members) and CLI-to-CLI autonomy
+
+Channels are **not** limited to Builder + Reviewer. Up to `max_members` (default 8) agents with any open-vocabulary roles — Coordinator / Backend / Frontend / Security / Test / Reviewer, or Architect / Implementation A / Implementation B / Test / Reviewer — share one channel and one message history:
+
+- **Targeting:** `opencomms_send` with `to=<session_id|role>` reaches exactly one member; `broadcast=true` fans out to every other member. On a 3+ member channel an omitted target is an **error**, never a guess. On a two-member channel the single peer is implied (classic workflow unchanged).
+- **Cross-host members:** Claude Code / Claude Desktop / Codex agents join the same channels through the OpenComms MCP tools with per-member pinned identities (`.opencomms/pins/<member_id>.json` — see [docs/CLAUDE_CODE.md](docs/CLAUDE_CODE.md)); delivery mode (`push`/`pull`) is explicit per member.
+- **CLI↔CLI autonomy:** every `opencode` TUI/`serve` runs its own server + plugin instance, so delivery is **owner-side** — each instance prompts only its own sessions, and an fs-watch wake makes the recipient's own instance pick up mail the moment another process queues it. Verified against OpenCode 1.18.25 (Desktop↔Desktop, headless↔headless, and two-server CLI↔CLI: recipient's turn always executes on the recipient's own server). Topology matrix + evidence: [docs/OPENCODE.md](docs/OPENCODE.md).
+
 ## Command examples
 
 ```text
@@ -199,7 +208,7 @@ opencomms_send({
 })
 ```
 
-OpenComms uses the injected OpenCode client and the session prompt API to deliver a labelled message to the **already-linked Reviewer session**. The message appears in the Reviewer session's normal history and triggers a Reviewer turn when the session is available.
+OpenComms uses the injected OpenCode client and the session prompt API to deliver a labelled message to the **already-linked Reviewer session**. The message appears in the Reviewer session's normal history and triggers a Reviewer turn when the session is available. Delivery is **two-phase**: a message is only marked delivered when the host session actually accepted the prompt (crash-safe, startup sweep recovers stranded messages), and it is always wrapped in `<<<UNTRUSTED_PEER_MESSAGE>>>` framing as untrusted data.
 
 The Reviewer responds with:
 
@@ -326,7 +335,7 @@ If a role is meant to be read-only, investigate whether your OpenCode version ca
 ## Supported OpenCode versions
 
 - **OpenCode:** `>=1.18.0`
-- **Tested against:** `@opencode-ai/plugin` and `@opencode-ai/sdk` `1.18.23`
+- **Tested against:** `@opencode-ai/plugin` and `@opencode-ai/sdk` `1.18.23`; runtime behavior verified against OpenCode `1.18.25` (including the two-server CLI↔CLI topology lab)
 - Verified OpenCode behaviors: `sessionID` in tool context, `session.get`/`list`/`prompt`, root-vs-child detection via `parentID`, `session.idle` / `session.status` / `session.deleted` events, `command.execute.before` with `$ARGUMENTS`, `experimental.chat.system.transform`, project/worktree identity, Desktop's embedded plugin transport, Windows path resolution.
 
 ## Development and live-test instructions
@@ -347,6 +356,8 @@ Unit tests live in `test/unit/`. The live test (`test/live/live.test.ts`) is **g
 $env:OPENCODE_SERVER_URL = "http://127.0.0.1:4096"
 $env:OPENCODE_SERVER_PASSWORD = "<your password>"
 $env:OPENCOMMS_LIVE_PROJECT = "C:\path\to\your\project"
+# optional: enables the autonomous no-manual-wake scenario (needs a tool-capable model)
+$env:OPENCODE_LIVE_MODEL = "openai/qwen3:0.6b"
 npm run test:live
 ```
 
@@ -358,8 +369,12 @@ The live test proves the full acceptance flow from the project specification: tw
 |------|------|
 | `src/core/types.ts` | All types, constants, persisted `State` shape |
 | `src/core/store.ts` | Atomic JSON persistence under `.opencomms/state.json`, v1 migration |
-| `src/core/engine.ts` | Pure deterministic business logic (channels, queues, validation) |
-| `src/plugin.ts` | OpenCode adapter: tools, hooks, slash command, delivery |
+| `src/core/engine.ts` | Pure deterministic business logic (channels, queues, validation, two-phase delivery state machine) |
+| `src/plugin.ts` | OpenCode adapter: tools, hooks, slash command |
+| `src/hosts/opencode/delivery.ts` | Owner-side delivery controller (multi-server wake, fs-watch, fallback) |
+| `src/mcp/` | Shared MCP stdio server + OpenComms tools (identity-pinned) |
+| `src/adapters/` | Claude Code / Claude Desktop / Codex / ChatGPT installers + hooks |
+| `src/cli/main.ts` | `opencomms` CLI (install, install-member, doctor, status, ...) |
 
 See `docs/ARCHITECTURE.md` for the data flow, lifecycle, and invariants, and `docs/API_REFERENCE.md` for full function signatures.
 

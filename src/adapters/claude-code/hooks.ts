@@ -24,16 +24,17 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { StateStore } from "../../core/store.js"
-import { loadProjectPin } from "../../mcp/identity.js"
+import { listMemberPins, loadProjectPin } from "../../mcp/identity.js"
 import {
   clearStale,
+  commitDelivery,
   drainForDelivery,
   formatDeliveryBatch,
   isMember,
   markStale,
   resolveMemberByHostSession,
 } from "../../core/engine.js"
-import type { State } from "../../core/types.js"
+import type { Member, State } from "../../core/types.js"
 
 /** Subset of Claude Code's documented hook stdin payload. */
 export interface ClaudeHookInput {
@@ -136,42 +137,66 @@ async function drainForHook(
 ): Promise<ClaudeHookOutput> {
   try {
     const store = new StateStore(dir)
+    let boundMemberId: string | null = null
     const linked = await store.withLock(() => {
       const state = store.load()
 
       // 1. Bind host identity: SessionStart associates the live Claude
-      //    session with its OpenComms member (pin file or env pin -> row).
+      //    session with its OpenComms member (env pin, per-member pin files,
+      //    or the legacy single-member pin).
       let memberId = resolveOpenCommsMember(state, hostSessionId)
+      let guidance: string | undefined
       if (!memberId && opts.bindHostSession) {
-        memberId = bindPinnedMemberToHostSession(state, hostSessionId, dir)
+        const bound = bindPinnedMemberToHostSession(state, hostSessionId, dir)
+        memberId = bound.memberId
+        guidance = bound.guidance
         if (memberId) {
           // Binding recorded — persist immediately.
           store.save(state)
         }
       }
-      if (!memberId) return [] as Array<{ id: string; channelName: string }>
+      if (!memberId) return { pairs: [] as Array<{ id: string; channelName: string }>, guidance }
+      boundMemberId = memberId
 
       // 2. The session is live: clear staleness (mirrors OpenCode's
       //    clearStale-on-idle; without this a member stays stale forever
       //    after its first SessionEnd — Reviewer Issue 3).
       clearStaleIfMember(state, memberId)
 
-      // 3. Drain + frame, then persist the delivery marks (delivered state,
-      //    cleared staleness, and any binding) in ONE atomic save.
+      // 3. Drain + frame, then persist the delivery marks (in_flight state,
+      //    cleared staleness, and any binding) in ONE atomic save. The
+      //    commit to "delivered" happens right after the context is handed
+      //    to the host below — hook-boundary delivery completes inside this
+      //    process, so the crash window is a single synchronous step.
       const pairs = drainForDelivery(state, memberId)
       store.save(state)
-      return pairs.map((p) => ({ id: p.message_id, channelName: p.channel_name }))
+      return { pairs: pairs.map((p) => ({ id: p.message_id, channelName: p.channel_name })), guidance: undefined }
     })
-    if (linked.length === 0) return {}
+    if (linked.guidance && linked.pairs.length === 0) {
+      return { systemMessage: linked.guidance }
+    }
+    if (linked.pairs.length === 0) return {}
 
     const snapshot = store.load()
     const parts: string[] = []
-    for (const item of linked) {
+    for (const item of linked.pairs) {
       const msg = snapshot.messages[item.id]
       if (!msg) continue
       parts.push(formatDeliveryBatch([msg], item.channelName))
     }
     if (parts.length === 0) return {}
+    // Commit in_flight -> delivered: the additionalContext is returned to
+    // the host in this same response, so delivery is now complete.
+    await store.withLock(() => {
+      const state2 = store.load()
+      if (boundMemberId)
+        commitDelivery(
+          state2,
+          boundMemberId,
+          linked.pairs.map((p) => p.id),
+        )
+      store.save(state2)
+    })
     return {
       hookSpecificOutput: {
         hookEventName: eventName,
@@ -185,25 +210,69 @@ async function drainForHook(
 }
 
 /**
- * Bind the CURRENT host session to a member whose row has no host_session_id
- * yet. Pin resolution order (Reviewer Issue 9):
- *   1. env OPENCOMMS_MEMBER_ID (explicit override — tests/multi-instance)
- *   2. .opencomms/member-pin.json written by the installer (production path)
- * The bridge is needed because Claude Code hook commands carry no env block;
- * only an UNBOUND claude-code member can claim this session (fail-closed:
- * no rebind of an already-bound member here).
+ * Bind the CURRENT host session to a member. Resolution order:
+ *   1. env OPENCOMMS_MEMBER_ID (explicit operator intent — tests, scripted
+ *      multi-instance setups): binds (or REBINDS) exactly that member.
+ *   2. Per-member pin files (.opencomms/pins/<member_id>.json, written by the
+ *      installer): bind only when EXACTLY ONE claude-code member is both
+ *      pinned and unbound (Reviewer P1-1: the old single pin file could bind
+ *      the WRONG member or destroy another member's identity).
+ *   3. Legacy member-pin.json (v2.0 single-member installs): same
+ *      exactly-one-unbound rule, honored only when no per-member pins exist.
+ *
+ * Fail-closed: never rebinds an already-bound member via pins (a fresh
+ * Claude session id must not silently steal a binding), never guesses among
+ * multiple candidates. Ambiguity returns guidance for the systemMessage.
  */
-function bindPinnedMemberToHostSession(state: State, hostSessionId: string, projectDir: string): string | null {
-  const pin = process.env["OPENCOMMS_MEMBER_ID"]?.trim() ?? loadProjectPin(projectDir)?.member_id
-  if (!pin) return null
+function bindPinnedMemberToHostSession(
+  state: State,
+  hostSessionId: string,
+  projectDir: string,
+): { memberId: string | null; guidance?: string } {
+  const envPin = process.env["OPENCOMMS_MEMBER_ID"]?.trim()
+  if (envPin) {
+    for (const channel of Object.values(state.channels)) {
+      const member = channel.members.find((m) => m.session_id === envPin)
+      if (member && member.host === "claude-code") {
+        member.host_session_id = hostSessionId
+        return { memberId: member.session_id }
+      }
+    }
+    return { memberId: null, guidance: `OPENCOMMS_MEMBER_ID ${envPin} is not a claude-code member of any channel.` }
+  }
+
+  // Pin-file path: candidates are pinned claude-code members with no binding.
+  const pins = listMemberPins(projectDir, "claude-code")
+  const legacyPin = pins.length === 0 ? loadProjectPin(projectDir) : null
+  const pinnedIds = [...pins.map((p) => p.member_id), ...(legacyPin ? [legacyPin.member_id] : [])]
+  if (pinnedIds.length === 0) return { memberId: null }
+
+  const unbound: Array<{ member: Member; pin: string }> = []
   for (const channel of Object.values(state.channels)) {
-    const member = channel.members.find((m) => m.session_id === pin)
-    if (member && member.host === "claude-code" && !member.host_session_id) {
-      member.host_session_id = hostSessionId
-      return member.session_id
+    for (const member of channel.members) {
+      if (member.host !== "claude-code") continue
+      const pin = pinnedIds.find((id) => id === member.session_id)
+      // Rebindable = never bound, OR bound to a session that ENDED
+      // (SessionEnd marks stale). Without the stale case a Claude restart
+      // (new session id) would strand the member forever — silent loss.
+      if (pin && (!member.host_session_id || member.stale)) unbound.push({ member, pin })
     }
   }
-  return null
+  if (unbound.length === 1) {
+    unbound[0]!.member.host_session_id = hostSessionId
+    return { memberId: unbound[0]!.member.session_id }
+  }
+  if (unbound.length > 1) {
+    return {
+      memberId: null,
+      guidance:
+        `OpenComms: ${unbound.length} pinned members are unbound (${unbound
+          .map((u) => u.pin)
+          .join(", ")}) — binding is ambiguous, so no member was auto-bound. ` +
+        "Start sessions one at a time (install member -> start session), or set OPENCOMMS_MEMBER_ID for this session.",
+    }
+  }
+  return { memberId: null }
 }
 
 function clearStaleIfMember(state: State, memberId: string): void {

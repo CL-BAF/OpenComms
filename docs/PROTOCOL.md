@@ -27,7 +27,7 @@ content           <= 100,000 chars
 reply_to          message_id|null  (inherits correlation_id, +1 hop)
 hop_count         capped by channel.max_hops (default 4)
 correlation_id    cor_<hex>        reply chains share it
-delivery_status   pending|delivered|failed|rejected|stale
+delivery_status   pending|in_flight|delivered|failed|rejected|stale
 delivered_at      epoch ms|null
 attempts          drain count
 ```
@@ -42,23 +42,47 @@ Sender-facing rules (engine-enforced):
 
 ## Delivery semantics
 
-- **PUSH members**: `drainQueue` runs at host-idle/lifecycle hooks; age-out
-  per member `stale_policy { mode: "window", window_ms }` (v1 default
-  5 min). Failed delivery requeues in FIFO order with the batch's
-  delivered-by entries rolled back.
+Two-phase state machine (crash-window fix, Reviewer P1-2):
+
+```
+pending --drain (locked, persisted BEFORE prompt)--> in_flight
+in_flight --host accepted the prompt (commitDelivery)--> delivered
+in_flight --prompt threw (requeueFailedDelivery)----> pending (FIFO restored)
+in_flight --process crashed (sweepInFlight @start)--> pending (FIFO restored)
+```
+
+"delivered" therefore means THE HOST SESSION ACCEPTED THE PROMPT — never
+merely "we tried". Bias on the ambiguous crash window (prompt may have
+reached the host just before a crash): re-deliver (at-least-once) rather
+than silently drop. In normal operation delivery is at-most-once to the
+model: the locked drain + per-recipient in-flight guard prevent duplicate
+prompts, and committed envelopes are never resurrected.
+
+- **PUSH members**: `drainQueue` runs at host-idle/lifecycle hooks AND at
+  the fs-watch wake (owner-side delivery — see OPENCODE.md topology);
+  age-out per member `stale_policy { mode: "window", window_ms }` (v1
+  default 5 min). Failed delivery requeues in FIFO order, records the
+  error, and schedules one delayed retry (2s).
 - **PULL members** (`stale_policy { mode: "none" }`): no age-out; messages
-  live until read (bounded by retention + disconnect purge); reading marks
-  delivered (no retry loops).
+  live until read (bounded by retention + disconnect purge); the reading
+  tool commits `in_flight -> delivered` inside the same locked mutate that
+  returns the content (no retry loops, no crash window between drain and
+  read).
 - Delivery cooldowns apply per recipient; only the first message in a
   batch waits.
+- **Owner-side rule** (multi-server): a plugin instance prompts only
+  sessions hosted on its own server; mail for a non-local recipient is
+  delivered by the recipient's own instance (fs-watch wake). The 5s
+  cross-server fallback fires only for ownerless PUSH members (degraded:
+  message lands in shared storage, not on a live TUI).
 
 ## Identity
 
 - Routing: OpenComms `sess_*` ids only.
 - Host identity: `member.host_session_id` (correlation only).
-- MCP hosts: pinned identity (`member-pin.json` / `OPENCOMMS_MEMBER_ID`),
-  validated against the live roster per call; tool arguments never choose
-  an identity. See ADAPTERS.md.
+- MCP hosts: pinned identity (per-member `.opencomms/pins/<member_id>.json`
+  and/or `OPENCOMMS_MEMBER_ID`), validated against the live roster per
+  call; tool arguments never choose an identity. See ADAPTERS.md.
 
 ## MCP wire surface (stdio, JSON-RPC 2.0, newline-delimited)
 

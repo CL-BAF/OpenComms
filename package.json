@@ -1,7 +1,7 @@
 {
   "name": "opencomms",
   "version": "1.0.0",
-  "description": "OpenComms — a project-local TypeScript OpenCode plugin that links two existing root OpenCode sessions into a communication channel (e.g. Builder <-> Reviewer) without creating or owning sessions.",
+  "description": "OpenComms — a host-neutral, project-local TypeScript plugin/platform that links existing coding-agent sessions (OpenCode, Claude Code, Claude Desktop, Codex) into named multi-agent channels (2-8 members, open role vocabulary) without creating or owning sessions.",
   "type": "module",
   "license": "MIT",
   "main": "./dist/plugin.js",

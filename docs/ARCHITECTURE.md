@@ -69,7 +69,7 @@ MessageEnvelope {
   content: string,          // max 100_000 chars
   reply_to: string|null,    // parent message_id
   hop_count: number,        // 0 for new chain, parent+1 for reply
-  delivery_status: "pending"|"delivered"|"rejected"|"stale"|"failed",
+  delivery_status: "pending"|"in_flight"|"delivered"|"rejected"|"stale"|"failed",
   correlation_id: string,   // cor_<uuid>
   delivered_at: number|null,
   attempts: number
@@ -113,17 +113,53 @@ pause/resume/disconnect/kick                   // engine lifecycle fns
 
 ## Delivery Pipeline Detail
 
-1. **Trigger:** plugin event hook listens for `session.idle` and `session.statusâ†’idle` (each locked clearStaleâ†’save, then `void deliverPending`). Also `experimental.chat.system.transform` injects one labeled role prompt PER channel membership before every model dispatch.
+1. **Trigger:** plugin event hook listens for `session.idle` and `session.statusâ†’idle` (each locked clearStaleâ†’save, then `void deliverPending`). A second trigger is the **fs-watch wake**: every plugin instance stats `state.json` (`fs.watchFile`, `persistent:false`, 500ms) and drains pending queues for sessions it owns â€” this is what wakes an IDLE recipient in another process (see Topology below). Also `experimental.chat.system.transform` injects one labeled role prompt PER channel membership before every model dispatch.
 2. **Guard checks in `drainQueue`:** For each queued id in order:
    - Skip if `messages[id]` missing or `recipient_session_id` mismatch.
    - If channel gone â†’ `rejected`.
    - If its own `channel.paused` â†’ stays in `remaining`.
-   - If already `delivered` â†’ skip.
+   - If already `delivered` or `in_flight` â†’ skip.
    - If `now - msg.timestamp > stale_event_ms` â†’ `stale`.
-   - If `now < cooldown_until[recipient]` and this is first `delivered` in batch â†’ stays in `remaining` (only first msg respects cooldown; rest of batch drains immediately to avoid starvation).
+   - If `now < cooldown_until[recipient]` and this is first `drained` in batch â†’ stays in `remaining` (only first msg respects cooldown; rest of batch drains immediately to avoid starvation).
    - If `opts.canDeliver(msg) === false` â†’ stays.
-   - Else: `delivered`, `delivered_at=now`, `attempts++`, `cooldown_until = now + delivery_cooldown_ms`, update `delivered_to`, opportunistic `pruneMessages`.
-3. **Batch prompt:** plugin `deliverPending` Phase 1 (inside `withLock`) calls `drainForDelivery` and saves if anything delivered; Phase 2 (unlocked) formats each message via `formatUntrustedMessage` â€” `<<<UNTRUSTED_PEER_MESSAGE>>>` delimiters + provenance header/footer naming the SENDING channel and session â€” joins with `\n\n---\n\n`, calls `client.session.prompt`. On throw, re-acquires lock: `requeueFailedDelivery` restores FIFO order + pending status, records error, saves. Notices/kicks queue system-type envelopes that are drained proactively post-lock (never while holding it).
+   - Else: `in_flight` (persisted BEFORE any prompt leaves the process), `attempts++`, `cooldown_until = now + delivery_cooldown_ms`, update `delivered_to`, opportunistic `pruneMessages`.
+3. **Two-phase prompt (crash-window fix, Reviewer P1-2):** plugin `deliverPending` Phase 1 (inside `withLock`) calls `drainForDelivery` and saves if anything drained â€” envelopes are now `in_flight`, NOT delivered. Phase 2 (unlocked) formats each message via `formatUntrustedMessage` â€” `<<<UNTRUSTED_PEER_MESSAGE>>>` delimiters + provenance header/footer naming the SENDING channel and session â€” joins with `\n\n---\n\n`, calls `client.session.prompt`. Phase 3 (locked): on success `commitDelivery` flips `in_flight â†’ delivered` â€” "delivered" now means THE HOST ACCEPTED THE PROMPT. On throw: `requeueFailedDelivery` restores FIFO order + pending status, records the error, and schedules one delayed retry (2s). A crash between Phase 1 and Phase 3 leaves `in_flight` envelopes, which `sweepInFlight` returns to pending + requeues at the NEXT plugin start (at-least-once on that ambiguous window; silently dropping them would be worse â€” see PROTOCOL.md).
+4. **PULL members** (MCP tools, hooks) commit inside the same locked mutate that returns the content: `opencomms_pull` and the Claude Code hook drain mark `in_flight` then `commitDelivery` in the same response cycle.
+
+## Multi-Server Topology & Owner-Side Delivery (verified 2026-08-08)
+
+Every `opencode` TUI â€” and every `opencode serve` â€” runs **its own server process** with its own plugin instance and its own event bus, while session DATA lives in shared storage (global DB). Verified empirically against OpenCode 1.18.25 (see docs/OPENCODE.md for the full evidence):
+
+- `client.session.prompt(B)` from server A **resolves** and executes B's turn ON SERVER A (shared storage), even though B "lives" on server B.
+- Server B's bus emits NOTHING for B while that foreign turn runs; B's TUI never renders it live.
+- `/session/status` is per-server runtime state (lists 0 cross-server); it is NOT an ownership oracle.
+
+Therefore delivery is **owner-side**: a plugin instance only prompts sessions whose lifecycle events it has observed on its own bus (`localSessions`, learned from every `session.*` event and from `experimental.chat.system.transform`). When a sender queues mail for a non-local recipient:
+
+1. The sender's instance does NOT prompt cross-server.
+2. The recipient's owning instance is woken by the fs-watch on `state.json`, drains, and prompts via ITS OWN server â€” the recipient's TUI renders the turn live.
+3. Timed fallback (5s): if no instance owns the recipient (its TUI closed everywhere), the sender cross-prompts once for PUSH members, landing the message in shared storage (degraded but not lost; a PULL member is never cross-prompted).
+
+One prompt in flight per recipient per instance (`delivering` set) plus the locked drain make duplicate prompts impossible under normal operation; the remaining race (fallback fires before a slow owner) re-delivers to the same session at most once.
+
+## Daemon / SQLite Decision (Reviewer P2-4)
+
+Current persistence (shared `state.json` + cross-process `withLock` + atomic renames) is **adequate for the topologies OpenComms supports today**: every connected host reads/writes the same project-local file, contention is ms-scale, and the fs-watch wake makes cross-process delivery event-driven. A separate daemon (`opencommsd` owning state, with adapters connecting over local IPC) is NOT justified now:
+
+- The failure modes a daemon solves (multi-host concurrent writers, lock storms, state file growth) are bounded today by `MAX_PERSISTED_MESSAGES`, `LOCK_STALE_MS`, and small member counts.
+- A daemon adds a lifecycle problem (who starts/stops/upgrades it?), a security surface (must be loopback-only + authenticated), and an install step â€” real costs for a project-local tool.
+
+**Trigger conditions for revisiting** (documented, not aspirational): (a) multiple INDEPENDENT host applications (e.g. OpenCode + Claude Code + Codex) attached to one channel simultaneously with heavy write traffic; (b) JSON write latency visible in delivery latency; (c) a need for cross-project channels. When that happens: SQLite (WAL) as the store, daemon bound to a localhost socket or named pipe ONLY, token-authenticated local clients, and adapters become thin clients. No network exposure, ever.
+
+## Per-Member Runtime State Decision (Reviewer P2-5)
+
+The brief asks for per-member runtime states (idle/working/waiting/blocked/reviewing/offline). Current model: `Member.stale` (liveness) + `stale_policy` + `delivery_mode` + the chess-clock timer. **We deliberately do NOT fabricate richer states** because no connected host can honestly produce them:
+
+- OpenCode exposes only idle/busy transitions (`session.status`), not intent ("waiting", "blocked").
+- Claude Code / Codex expose hook boundaries only; Claude Desktop exposes nothing.
+- A "status" field that some hosts fake and others leave empty would be worse than none â€” agents would branch on fiction.
+
+What exists instead, honestly: `stale` (offline proxy, host-verified), `delivery_mode` (how mail is consumed), per-member `timer.elapsed_ms` (work attribution without claiming exclusivity â€” the chess clock remains opt-in and two-agent-oriented; concurrent workers are not forced into a single "active" slot for delivery correctness, only for time accounting). If richer states are added later, the additive path is a schema v3 via the existing migration machinery (`backfillState` + `validateState` version gate), adding `status/status_since/last_activity_at` per member with "unknown" as the default â€” never a breaking rewrite.
 
 ## State Persistence
 

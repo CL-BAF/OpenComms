@@ -19,6 +19,9 @@ import {
   assertNotChildSession,
   markStale,
   requeueFailedDelivery,
+  commitDelivery,
+  sweepInFlight,
+  pendingRecipients,
   pruneMessages,
   formatUntrustedMessage,
   formatDeliveryBatch,
@@ -411,14 +414,22 @@ test("drainQueue delivers once and preserves ordering", () => {
   createPair(state)
   sendMessage(state, { channel: "my-feature", content: "first" }, SESSION_A)
   sendMessage(state, { channel: "my-feature", content: "second" }, SESSION_A)
-  const delivered = drainQueue(state, SESSION_B)
-  assert.equal(delivered.length, 2)
-  assert.equal(delivered[0]!.content, "first")
-  assert.equal(delivered[1]!.content, "second")
-  assert.equal(delivered[0]!.delivery_status, "delivered")
+  const drained = drainQueue(state, SESSION_B)
+  assert.equal(drained.length, 2)
+  assert.equal(drained[0]!.content, "first")
+  assert.equal(drained[1]!.content, "second")
+  // Drain marks in_flight (persisted before the host prompt); commit marks
+  // delivered only after the host accepted the prompt.
+  assert.equal(drained[0]!.delivery_status, "in_flight")
   assert.equal(state.queues[SESSION_B]!.length, 0)
+  commitDelivery(
+    state,
+    SESSION_B,
+    drained.map((d) => d.message_id),
+  )
+  assert.equal(state.messages[drained[0]!.message_id]!.delivery_status, "delivered")
 
-  // Second drain delivers nothing (dedup).
+  // Second drain delivers nothing (already committed/removed).
   const again = drainQueue(state, SESSION_B)
   assert.equal(again.length, 0)
 })
@@ -481,7 +492,7 @@ test("requeueFailedDelivery restores FIFO order and pending status", () => {
     canDeliver: (m: MessageEnvelope) => m.content !== "m3",
   })
   const deliveredIds = Object.values(state.messages)
-    .filter((m) => m.delivery_status === "delivered")
+    .filter((m) => m.delivery_status === "in_flight")
     .sort((a, b) => a.timestamp - b.timestamp)
     .map((m) => m.message_id)
   assert.equal(deliveredIds.length, 2)
@@ -494,6 +505,189 @@ test("requeueFailedDelivery restores FIFO order and pending status", () => {
     assert.equal(state.messages[id]!.delivery_status, "pending")
     assert.equal(state.messages[id]!.delivered_at, null)
   }
+})
+
+test("crash between drain and prompt: startup sweep restores pending and FIFO (no silent loss)", () => {
+  const state = freshState()
+  createPair(state)
+  sendMessage(state, { channel: "my-feature", content: "m1" }, SESSION_A)
+  sendMessage(state, { channel: "my-feature", content: "m2" }, SESSION_A)
+  // Process drains (marks in_flight, persists) then dies before prompting.
+  const drained = drainQueue(state, SESSION_B)
+  assert.equal(drained.length, 2)
+  assert.equal(state.queues[SESSION_B]!.length, 0)
+
+  // Fresh process: startup sweep must resurrect both envelopes as pending,
+  // oldest first, and re-queue them for the next wake.
+  const swept = sweepInFlight(state)
+  assert.equal(swept.length, 2)
+  assert.deepEqual(
+    state.queues[SESSION_B]!.map((id) => state.messages[id]!.content),
+    ["m1", "m2"],
+  )
+  for (const m of Object.values(state.messages)) {
+    if (m.recipient_session_id === SESSION_B) {
+      assert.equal(m.delivery_status, "pending")
+      assert.equal(m.delivered_at, null)
+    }
+  }
+  // And they deliver again on the next drain (cooldown respected: advance
+  // past the 1s delivery cooldown the first drain armed).
+  const redelivered = drainQueue(state, SESSION_B, { now: Date.now() + 2_000 })
+  assert.equal(redelivered.length, 2)
+  assert.equal(redelivered[0]!.content, "m1")
+})
+
+test("sweepInFlight is a no-op after a committed delivery (no duplicate prompt)", () => {
+  const state = freshState()
+  createPair(state)
+  sendMessage(state, { channel: "my-feature", content: "only" }, SESSION_A)
+  const drained = drainQueue(state, SESSION_B)
+  commitDelivery(
+    state,
+    SESSION_B,
+    drained.map((d) => d.message_id),
+  )
+  const swept = sweepInFlight(state)
+  assert.equal(swept.length, 0, "committed envelopes must not be resurrected")
+  assert.equal(state.queues[SESSION_B]!.length, 0)
+})
+
+test("sweepInFlight with mixed in_flight and pending keeps FIFO across both", () => {
+  const state = freshState()
+  createPair(state)
+  sendMessage(state, { channel: "my-feature", content: "crashed" }, SESSION_A)
+  const first = drainQueue(state, SESSION_B)
+  assert.equal(first.length, 1)
+  // A NEW message arrives after the crash (fresh pending entry).
+  sendMessage(state, { channel: "my-feature", content: "fresh" }, SESSION_A)
+  const swept = sweepInFlight(state)
+  assert.equal(swept.length, 1)
+  // FIFO: the older crashed envelope is restored ahead of the newer one.
+  assert.deepEqual(
+    state.queues[SESSION_B]!.map((id) => state.messages[id]!.content),
+    ["crashed", "fresh"],
+  )
+})
+
+test("pendingRecipients lists only recipients with pending entries", () => {
+  const state = freshState()
+  createPair(state)
+  assert.deepEqual(pendingRecipients(state), [])
+  sendMessage(state, { channel: "my-feature", content: "hello" }, SESSION_A)
+  assert.deepEqual(pendingRecipients(state), [SESSION_B])
+  const drained = drainQueue(state, SESSION_B)
+  // Drained-but-not-committed entries are in_flight, not pending: the wake
+  // must not consider the queue deliverable while a prompt is undecided.
+  assert.equal(drained.length, 1)
+  assert.deepEqual(pendingRecipients(state), [])
+})
+
+// ── Multi-agent scale & concurrency ──
+
+test("eight-member channel: targeted routing, broadcast fan-out, never-guess", () => {
+  const state = freshState()
+  const created = createChannel(state, {
+    channel: "octo",
+    role: "Coordinator",
+    role_prompt: "coordinate",
+    session_id: "sess_coord",
+    project_id: PROJECT,
+    worktree: WORKTREE,
+    max_members: 8,
+  })
+  assert.equal(created.ok, true)
+  const roles = ["Backend", "Frontend", "Security", "Test", "Docs", "Reviewer", "Architect"]
+  for (let i = 0; i < roles.length; i++) {
+    const joined = joinChannel(state, {
+      channel: "octo",
+      role: roles[i]!,
+      role_prompt: `p${i}`,
+      session_id: `sess_octo_${i}`,
+      project_id: PROJECT,
+      worktree: WORKTREE,
+    })
+    assert.equal(joined.ok, true, `join ${roles[i]} failed: ${joined.message}`)
+  }
+  const channel = state.channels["octo"]!
+  assert.equal(channel.members.length, 8)
+
+  // Targeted by role across the 8-member roster.
+  const targeted = sendMessage(state, { channel: "octo", content: "for security", to: "Security" }, "sess_coord")
+  assert.equal(targeted.ok, true, targeted.message)
+  assert.deepEqual((targeted.data as { recipients: string[] }).recipients, ["sess_octo_2"])
+
+  // Targeted by session id.
+  const byId = sendMessage(state, { channel: "octo", content: "for docs", to: "sess_octo_4" }, "sess_coord")
+  assert.equal(byId.ok, true)
+  assert.deepEqual((byId.data as { recipients: string[] }).recipients, ["sess_octo_4"])
+
+  // Broadcast fans out to all 7 others.
+  const fan = sendMessage(state, { channel: "octo", content: "all hands", broadcast: true }, "sess_coord")
+  assert.equal(fan.ok, true)
+  assert.equal((fan.data as { recipients: string[] }).recipients.length, 7)
+
+  // Omitted target on 7 others is an ERROR, never a guess.
+  const ambiguous = sendMessage(state, { channel: "octo", content: "who?" }, "sess_coord")
+  assert.equal(ambiguous.ok, false)
+  assert.match(ambiguous.message, /Specify to=/)
+
+  // Per-recipient queues each hold exactly the right envelopes.
+  assert.equal(state.queues["sess_octo_2"]!.length, 2, "Security: targeted + broadcast copy")
+  assert.equal(state.queues["sess_coord"], undefined, "sender never queues to itself")
+  assert.equal(state.queues["sess_octo_1"]!.length, 1, "broadcast copy for Frontend")
+})
+
+test("simultaneous senders targeting one recipient: every message survives, FIFO holds", () => {
+  const state = freshState()
+  // One recipient with three peers sending "at the same time" (interleaved
+  // engine calls - the state lock serializes real processes).
+  createChannel(state, {
+    channel: "hub",
+    role: "Coordinator",
+    role_prompt: "hub",
+    session_id: "sess_hub",
+    project_id: PROJECT,
+    worktree: WORKTREE,
+  })
+  for (let i = 0; i < 3; i++) {
+    const joined = joinChannel(state, {
+      channel: "hub",
+      role: `Peer${i}`,
+      role_prompt: "p",
+      session_id: `sess_peer_${i}`,
+      project_id: PROJECT,
+      worktree: WORKTREE,
+    })
+    assert.equal(joined.ok, true)
+  }
+  // Three senders -> one recipient, round-robin interleaving.
+  for (let round = 0; round < 3; round++) {
+    for (let sender = 0; sender < 3; sender++) {
+      const sent = sendMessage(
+        state,
+        { channel: "hub", content: `r${round}s${sender}`, to: "Coordinator" },
+        `sess_peer_${sender}`,
+      )
+      assert.equal(sent.ok, true, sent.message)
+    }
+  }
+  const queue = state.queues["sess_hub"]!
+  assert.equal(queue.length, 9)
+  // FIFO order preserved per the round-robin send order.
+  const contents = queue.map((id) => state.messages[id]!.content)
+  assert.deepEqual(contents, ["r0s0", "r0s1", "r0s2", "r1s0", "r1s1", "r1s2", "r2s0", "r2s1", "r2s2"])
+
+  // One drain takes exactly the whole batch in order; nothing lost, nothing doubled.
+  const drained = drainQueue(state, "sess_hub")
+  assert.equal(drained.length, 9)
+  assert.deepEqual(
+    drained.map((m) => m.content),
+    contents,
+  )
+  assert.equal(state.queues["sess_hub"]!.length, 0)
+  const again = drainQueue(state, "sess_hub", { now: Date.now() + 2_000 })
+  assert.equal(again.length, 0, "no duplicate delivery")
 })
 
 // ── Kick / removal ──

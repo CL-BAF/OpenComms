@@ -78,7 +78,14 @@ Legend for "evidence": implementation path + test file where applicable.
 6. **OpenCode behaviors** — engine + plugin (PUSH delivery on idle,
    persistent role injection, session events): `src/core/engine.ts`,
    `src/plugin.ts`; tests: `test/unit/engine.test.ts`,
-   `test/unit/plugin.test.ts`.
+   `test/unit/plugin.test.ts`. **Topology verification 2026-09-08**
+   (OpenCode 1.18.25, headless `opencode serve` labs with real local model
+   turns): Desktop↔Desktop and headless same-server autonomous loops
+   verified both directions with no manual wake (5/5 A→B receipts, B→A
+   receipt +10.9s); two-server CLI↔CLI verified AFTER the owner-side
+   delivery fix (recipient's turn fires on the recipient's own bus; the
+   sender's bus shows zero foreign events). Full evidence:
+   docs/OPENCODE.md § "Topology & autonomy".
 
 ## Rules this matrix obeys
 

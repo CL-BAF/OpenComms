@@ -8,7 +8,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { createChannel, joinChannel, sendMessage, drainQueue, inbox } from "../../../src/core/engine.js"
+import { createChannel, joinChannel, sendMessage, drainQueue, inbox, commitDelivery } from "../../../src/core/engine.js"
 import { emptyState } from "../../../src/core/store.js"
 
 const PROJECT = "proj1"
@@ -54,9 +54,16 @@ test("PULL member's envelope survives far beyond the 5-minute window", () => {
   const future = Date.now() + 6 * 60 * 60_000
   const drained = drainQueue(state, "sess_pull", { now: future })
   assert.equal(sent.ok, true)
-  // Pull-drain must NOT have marked it stale.
+  // Pull-drain must NOT have marked it stale (drain marks in_flight; the
+  // PULL consumer commits delivered when the content is actually handed over).
   const msg = Object.values(state.messages)[0]!
-  assert.equal(msg.delivery_status, "delivered", "PULL envelope must survive until read")
+  assert.equal(msg.delivery_status, "in_flight", "PULL envelope must survive until read")
+  commitDelivery(
+    state,
+    "sess_pull",
+    drained.map((d) => d.message_id),
+  )
+  assert.equal(msg.delivery_status, "delivered", "commit marks the read envelope delivered")
 })
 
 test("PUSH member's envelope still goes stale after the window (unchanged v1 behavior)", () => {
@@ -102,10 +109,16 @@ test("mixed PUSH+PULL channel: PUSH copy goes stale, PULL copy stays readable", 
   assert.equal(data.pending, 1, "PULL envelope must survive past the PUSH window")
   assert.equal(data.messages[0]!.content, "push-to-pull")
 
-  // Pull-drain marks delivered on read (no infinite retry loop).
+  // Pull-drain marks in_flight on read; the consumer commits delivered in
+  // the same locked mutate (no infinite retry loop).
   const pulled = drainQueue(state, "sess_pull", { now })
   assert.equal(pulled.length, 1)
-  assert.equal(pulled[0]!.delivery_status, "delivered")
+  assert.equal(pulled[0]!.delivery_status, "in_flight")
+  commitDelivery(
+    state,
+    "sess_pull",
+    pulled.map((d) => d.message_id),
+  )
   assert.equal(pulled[0]!.attempts, 1)
 })
 

@@ -143,8 +143,11 @@ Utilities:
 | `timerLimitReached(timer, now?)` | `=>boolean` | Member-scoped when `limit_member_id` set, else TOTAL |
 | `resolveSwitchTarget(channel, requesterId, to?)` | `{result?, target?}` | Never-guess switch resolution: explicit `to` (others only) > implied single peer > ERROR on N>1 |
 | `memberInfosFor(state, sessionId)` | `=>MemberInfo[]` | ALL memberships `{role, prompt, channel_name}` â€” one labeled prompt section per channel |
-| `drainForDelivery(state, recipientSessionId)` | `=>DeliveryPair[]` | Drains queue; annotates each envelope with ITS OWN channel name for provenance |
-| `requeueFailedDelivery(state, sessionId, ids)` | `=>void` | Restores pending status + ORIGINAL FIFO order on prompt failure |
+| `drainForDelivery(state, recipientSessionId)` | `=>DeliveryPair[]` | Drains queue marking `in_flight` (persisted pre-prompt); annotates each envelope with ITS OWN channel name for provenance |
+| `commitDelivery(state, sessionId, ids)` | `=>void` | `in_flight`â†’`delivered` after the host ACCEPTED the prompt (two-phase delivery) |
+| `sweepInFlight(state)` | `=>string[]` | Startup crash recovery: `in_flight`â†’pending + FIFO re-queue; returns swept ids (idempotent) |
+| `pendingRecipients(state)` | `=>string[]` | Distinct recipients holding PENDING queue entries (fs-watch wake input; in_flight excluded) |
+| `requeueFailedDelivery(state, sessionId, ids)` | `=>void` | Restores pending status + ORIGINAL FIFO order on prompt failure (accepts `delivered` or `in_flight`) |
 | `pruneMessages(state)` | `=>void` | Keeps newest `MAX_PERSISTED_MESSAGES`, cleans queues/delivered_to of pruned ids |
 | `formatUntrustedMessage(msg, channelName)` | `=>string` | `<<<UNTRUSTED_PEER_MESSAGE>>>` framing + provenance + do-not-follow notice |
 | `formatDeliveryBatch(delivered, channelName)` | `=>string` | Batch joiner for the above |
@@ -198,7 +201,8 @@ Session helpers (read-only): `markStale(state, sessionId)`, `clearStale(state, s
 | `buildRolePrompt(role, prompt, channelName?)` | helper | Labeled per-channel when channelName given |
 | `extractSlashArgs(raw)` | helper | Consumes ONLY recognized keys (Channel/As/RolePrompt/Action/LimitMs/LimitRole/To/Broadcast/Target); quotes supported; unknown `x=y` stays in text |
 | `slashSub(raw)` | helper | First word, strips `_`/`-`, lowercased |
-| `deliverPending(sessionId)` | async | Phase 1 locked `drainForDelivery`+save; Phase 2 unlocked framed prompt; Phase 3 locked requeue on failure. Delivery fires strictly post-lock |
+| `deliverPending(sessionId)` | async (controller) | Now lives in `src/hosts/opencode/delivery.ts` `createDeliveryController` â€” owner-side gate, two-phase in_flight/commit, requeue+retry on failure |
+| `delivery.markLocal / notifyRecipient / startupSweep` | controller API | `markLocal`: ownership evidence (session.* events + system transform); `notifyRecipient`: immediate for local, 5s cross-server fallback for ownerless PUSH members; `startupSweep`: crash recovery |
 | `requireRootSession(sessionId)` | async guard | FAILS CLOSED on SDK error (create/join refuse + record) |
 | `withLockedState(mutate, shouldSave)` | helper | Every tool mutation runs through it |
 | `tools` | 12 entries | create, join, send, status, inbox, history, update_role, pause, resume, disconnect, kick, timer â€” see TOOLS_AND_COMMANDS.md |

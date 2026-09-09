@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process"
 import { join, resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomBytes } from "node:crypto"
-import { saveProjectPin } from "../../mcp/identity.js"
+import { saveMemberPin, listMemberPins, isValidMemberId } from "../../mcp/identity.js"
 
 const __dirname2 = dirname(fileURLToPath(import.meta.url))
 
@@ -162,10 +162,13 @@ export function installClaudeCode(projectDir: string, opts: { bundleDir?: string
   const mcpConfig = readJson(mcpJsonPath)
   const servers = isRecord(mcpConfig["mcpServers"]) ? (mcpConfig["mcpServers"] as Record<string, unknown>) : {}
   if (!servers["opencomms"]) {
+    // Absolute paths (Reviewer P3-3): a relative command path only works when
+    // Claude Code happens to cwd the MCP server at the project root; the
+    // project dir is known at install time, so pin it.
     servers["opencomms"] = {
       type: "stdio",
       command: "node",
-      args: [join(".opencomms", "opencomms-mcp.mjs"), ".", "--host", "claude-code"],
+      args: [join(opencommsDir, "opencomms-mcp.mjs"), target, "--host", "claude-code"],
       env: {
         OPENCOMMS_MEMBER_ID: "<set by: opencomms install-member>",
         OPENCOMMS_MEMBER_ROLE: "<role label>",
@@ -182,17 +185,23 @@ export function installClaudeCode(projectDir: string, opts: { bundleDir?: string
     "Claude Code receives NO session identity inside MCP tools: each member links via a hook-correlated session id. Delivery is hook-boundary (next SessionStart/UserPromptSubmit/Stop), never mid-turn push.",
   )
   report.warnings.push(
-    "Next step: run `opencomms install-member --project <dir> --host claude-code --role <label>` inside a Claude Code session to create the pinned member (writes .opencomms/member-pin.json).",
+    "Next step: run `opencomms install-member --project <dir> --host claude-code --role <label>` inside a Claude Code session to create the pinned member (writes .opencomms/pins/<member_id>.json). Additional members REQUIRE --id.",
   )
 
   return report
 }
 
 /**
- * Register a member identity for this project: writes .opencomms/member-pin.json
- * (the zero-config pin file the hooks read — Reviewer Issue 9 production wiring).
- * The member id is minted here (opencomms_* id, matching the existing id style)
- * and is validated against/created in state on first join (bootstrap).
+ * Register a member identity for this project: writes a PER-MEMBER pin file
+ * (.opencomms/pins/<member_id>.json) that SessionStart binds against
+ * (Reviewer P1-1 production wiring). The member id is minted here when not
+ * supplied (opencomms-style id) and is validated against/created in state on
+ * first join (bootstrap).
+ *
+ * Clobber protection: when pins already exist for this host and no explicit
+ * memberId was given, the registration REFUSES (a second blind run must not
+ * mint a fresh identity and orphan the first member). Pass --id to add
+ * another member; per-member files make concurrent members safe.
  */
 export function registerProjectMember(
   projectDir: string,
@@ -203,10 +212,25 @@ export function registerProjectMember(
   if (!existsSync(join(opencommsDir, "state.json"))) {
     return { ok: false, reason: "No OpenComms state in this project yet — run the host adapter's create/join first." }
   }
-  const memberId = opts.memberId?.trim() || `sess_${randomBytes(12).toString("hex")}`
-  const ok = saveProjectPin(target, memberId, opts.host)
-  if (!ok) return { ok: false, reason: "Could not write .opencomms/member-pin.json (permissions?)" }
-  return { ok: true, memberId, pinFile: join(opencommsDir, "member-pin.json") }
+  let memberId = opts.memberId?.trim() ?? ""
+  if (!memberId) {
+    const existing = listMemberPins(target, opts.host)
+    if (existing.length > 0) {
+      return {
+        ok: false,
+        reason:
+          `Pins already exist for host "${opts.host}" (${existing.map((p) => p.member_id).join(", ")}). ` +
+          "Re-running without --id would orphan an existing member. Pass --id <member_id> to register an ADDITIONAL member explicitly.",
+      }
+    }
+    memberId = `sess_${randomBytes(12).toString("hex")}`
+  }
+  if (!isValidMemberId(memberId)) {
+    return { ok: false, reason: `Invalid member id "${memberId}" (allowed: letters/digits/-/_ , max 64).` }
+  }
+  const ok = saveMemberPin(target, memberId, opts.host)
+  if (!ok) return { ok: false, reason: `Could not write .opencomms/pins/${memberId}.json (permissions?)` }
+  return { ok: true, memberId, pinFile: join(opencommsDir, "pins", `${memberId}.json`) }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

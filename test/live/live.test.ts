@@ -35,6 +35,15 @@ import { createOpencodeClient } from "@opencode-ai/sdk"
 const SERVER_URL = process.env.OPENCODE_SERVER_URL ?? "http://127.0.0.1:4096"
 const SERVER_PASSWORD = process.env.OPENCODE_SERVER_PASSWORD ?? ""
 const PROJECT_DIR = process.env.OPENCOMMS_LIVE_PROJECT ?? ""
+/** "providerID/modelID" for the autonomous-wake scenario (e.g. "openai/qwen3:0.6b"). */
+const LIVE_MODEL = process.env.OPENCODE_LIVE_MODEL ?? ""
+
+function parseModel(): { providerID: string; modelID: string } | null {
+  if (!LIVE_MODEL.includes("/")) return null
+  const [providerID = "", modelID = ""] = LIVE_MODEL.split("/", 2)
+  if (!providerID || !modelID) return null
+  return { providerID, modelID }
+}
 
 function authHeader(): string {
   return "Basic " + Buffer.from(`opencode:${SERVER_PASSWORD}`).toString("base64")
@@ -224,6 +233,120 @@ test("live: full Builder<->Reviewer acceptance flow", async () => {
     } catch {}
     try {
       await c.session.delete({ path: { id: reviewerId } })
+    } catch {}
+  }
+})
+
+/**
+ * NO-MANUAL-WAKE acceptance scenario (brief goal #1): after A sends, NEITHER
+ * session is prompted by the test again. The message must reach B
+ * automatically (idle -> owner-side prompt), B must process it, and a reply
+ * via opencomms_send must reach A automatically. Requires a model that can
+ * actually call tools: set OPENCODE_LIVE_MODEL=providerID/modelID.
+ */
+test("live: two sessions exchange >=2 turns autonomously (no manual wake)", async () => {
+  if (!(await serverReachable())) return
+  const model = parseModel()
+  if (!PROJECT_DIR || !model) {
+    console.log("SKIP: set OPENCOMMS_LIVE_PROJECT and OPENCODE_LIVE_MODEL=provider/model to run the wake scenario")
+    return
+  }
+  const c = client()
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const a = (await c.session.create({ body: { title: "ocm-live-wake-a" }, query: { directory: PROJECT_DIR } })).data!
+  const b = (await c.session.create({ body: { title: "ocm-live-wake-b" }, query: { directory: PROJECT_DIR } })).data!
+  try {
+    // Register both members via real model turns.
+    await c.session.prompt({
+      path: { id: a.id },
+      body: {
+        model,
+        parts: [
+          {
+            type: "text",
+            text: `Call opencomms_create with channel="wake" role="Builder" role_prompt="Reply to any UNTRUSTED_PEER_MESSAGE by calling opencomms_send on channel wake with a short manual reply."`,
+          },
+        ],
+      },
+    })
+    await waitForToolResult(c, a.id, "opencomms_create")
+    await c.session.prompt({
+      path: { id: b.id },
+      body: {
+        model,
+        parts: [
+          {
+            type: "text",
+            text: `Call opencomms_join with channel="wake" role="Reviewer" role_prompt="Reply to any UNTRUSTED_PEER_MESSAGE by calling opencomms_send on channel wake with a short manual reply."`,
+          },
+        ],
+      },
+    })
+    await waitForToolResult(c, b.id, "opencomms_join")
+
+    // THE SEND. From here on the test never prompts either session again.
+    const t0 = Date.now()
+    await c.session.prompt({
+      path: { id: a.id },
+      body: {
+        model,
+        parts: [
+          {
+            type: "text",
+            text: `Call opencomms_send with channel="wake" type="manual" content="wake-ping". Then stop.`,
+          },
+        ],
+      },
+    })
+    await waitForToolResult(c, a.id, "opencomms_send")
+
+    const deadline = Date.now() + 180_000
+    let bGot = false,
+      bSent = false,
+      aGot = false
+    while (Date.now() < deadline && !(bGot && bSent && aGot)) {
+      const bMsgs = await c.session.messages({ path: { id: b.id } })
+      const bUser = (bMsgs.data ?? []).filter((m) => m.info?.role === "user").at(-1)
+      if (!bGot) {
+        const text = (bUser?.parts ?? [])
+          .filter((p: any) => p.type === "text")
+          .map((p: any) => p.text)
+          .join("\n")
+        if (text.includes("wake-ping")) bGot = true
+      }
+      if (bGot && !bSent) {
+        const tools = (bMsgs.data ?? [])
+          .flatMap((m) => m.parts ?? [])
+          .filter(
+            (p: any) =>
+              p.type === "tool" &&
+              p.tool === "opencomms_send" &&
+              p.state?.status === "completed" &&
+              (p.state?.time?.end ?? 0) >= t0,
+          )
+        if (tools.some((p: any) => (p.state?.output ?? "").includes('"ok":true'))) bSent = true
+      }
+      if (bSent && !aGot) {
+        const aMsgs = await c.session.messages({ path: { id: a.id } })
+        const aUser = (aMsgs.data ?? []).filter((m) => m.info?.role === "user").at(-1)
+        const text = (aUser?.parts ?? [])
+          .filter((p: any) => p.type === "text")
+          .map((p: any) => p.text)
+          .join("\n")
+        if (text.includes("UNTRUSTED_PEER_MESSAGE")) aGot = true
+      }
+      await sleep(700)
+    }
+    console.log(`wake scenario: bGot=${bGot} bSent=${bSent} aGot=${aGot} in ${Date.now() - t0}ms`)
+    assert.ok(bGot, "B must auto-receive the message with no manual wake")
+    assert.ok(bSent, "B must reply via opencomms_send autonomously")
+    assert.ok(aGot, "A must auto-receive B's reply with no manual wake")
+  } finally {
+    try {
+      await c.session.delete({ path: { id: a.id } })
+    } catch {}
+    try {
+      await c.session.delete({ path: { id: b.id } })
     } catch {}
   }
 })

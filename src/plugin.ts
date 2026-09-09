@@ -22,12 +22,11 @@
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import { StateStore } from "./core/store.js"
+import { createDeliveryController } from "./hosts/opencode/delivery.js"
 import {
   clearStale,
   createChannel,
   disconnectChannel,
-  drainForDelivery,
-  formatDeliveryBatch,
   history,
   inbox,
   isMember,
@@ -111,6 +110,22 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
   // reader never observes a torn write.
   const load = (): State => store.load()
 
+  const recordError = (message: string): void => {
+    void store.withLock(() => {
+      const state = load()
+      state.errors.push({ at: Date.now(), message })
+      if (state.errors.length > 200) state.errors = state.errors.slice(-200)
+      store.save(state)
+    })
+  }
+
+  // Owner-side delivery controller (see src/hosts/opencode/delivery.ts):
+  // multi-server topology fix + two-phase in_flight delivery + fs-watch wake.
+  const delivery = createDeliveryController({ store, load, client, recordError })
+  void delivery
+    .startupSweep()
+    .catch((error) => recordError(`Startup in-flight sweep failed: ${(error as Error).message}`))
+
   /** Mutating update that persists when `shouldSave(result)` holds true. */
   const withLockedState = async (
     mutate: (state: State) => ToolResult,
@@ -157,76 +172,6 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
     }
   }
 
-  const recordError = (message: string): void => {
-    void store.withLock(() => {
-      const state = load()
-      state.errors.push({ at: Date.now(), message })
-      if (state.errors.length > 200) state.errors = state.errors.slice(-200)
-      store.save(state)
-    })
-  }
-
-  const deliverPending = async (sessionId: string): Promise<void> => {
-    // Phase 1 (locked): atomically drain queues and persist delivery marks.
-    // Each envelope carries its own channel's name â€” a session may belong to
-    // multiple channels, so provenance is resolved per message, never once
-    // for the batch. Per-channel pause handling happens inside drainQueue.
-    let batch: Array<{ id: string; channelName: string }> = []
-    try {
-      const drained = await store.withLock(() => {
-        const state = load()
-        const pairs = drainForDelivery(state, sessionId)
-        if (pairs.length > 0) store.save(state)
-        return pairs.map((p) => ({ id: p.message_id, channelName: p.channel_name }))
-      })
-      batch = drained
-    } catch (error) {
-      recordError(`Delivery drain for ${sessionId} failed: ${(error as Error).message}`)
-      return
-    }
-    if (batch.length === 0) return
-
-    // Phase 2 (unlocked): prompt the peer once per batch. Peer content is
-    // framed as untrusted data with per-envelope provenance â€” see
-    // formatDeliveryBatch.
-    const ids = batch.map((b) => b.id)
-    const text = batch.map((b) => formatOne(b)).join("\n\n---\n\n")
-
-    function formatOne(b: { id: string; channelName: string }): string {
-      const snapshot = load()
-      const msg = snapshot.messages[b.id]
-      if (!msg) return `(OpenComms: message ${b.id} no longer exists)`
-      return formatDeliveryBatch([msg], b.channelName)
-    }
-
-    try {
-      await client.session.prompt({
-        path: { id: sessionId },
-        body: {
-          parts: [{ type: "text", text }],
-        },
-      })
-    } catch (error) {
-      // Delivery failed: do NOT leave messages marked "delivered" (that
-      // would silently drop them). Rebuild the FIFO in original order and
-      // record the failure visibly in opencomms_status.
-      try {
-        await store.withLock(() => {
-          const state2 = load()
-          requeueFailedDelivery(state2, sessionId, ids)
-          state2.errors.push({
-            at: Date.now(),
-            message: `Delivery to session ${sessionId} failed (${(error as Error).message}); ${ids.length} message(s) re-queued for retry.`,
-          })
-          if (state2.errors.length > 200) state2.errors = state2.errors.slice(-200)
-          store.save(state2)
-        })
-      } catch (lockError) {
-        recordError(`Requeue after failed delivery to ${sessionId} also failed: ${(lockError as Error).message}`)
-      }
-    }
-  }
-
   const tools = {
     opencomms_create: tool({
       description:
@@ -252,6 +197,8 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
               project_id: projectId,
               worktree: worktreePath,
               max_members: args.max_members,
+              host: "opencode",
+              host_session_id: ctx.sessionID,
             }),
           (r) => r.ok,
         )
@@ -281,6 +228,8 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
               session_id: ctx.sessionID,
               project_id: projectId,
               worktree: worktreePath,
+              host: "opencode",
+              host_session_id: ctx.sessionID,
             }),
           (r) => r.ok,
         )
@@ -343,7 +292,7 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
         if (result.ok) {
           notifyRecipients = ((result.data as { recipients?: string[] } | undefined)?.recipients ?? []).slice()
         }
-        for (const rid of notifyRecipients) void deliverPending(rid)
+        for (const rid of notifyRecipients) delivery.notifyRecipient(rid)
         if (invalidType) return "Invalid message type. Valid types: review_request, review_response, manual."
         return JSON.stringify(result)
       },
@@ -504,7 +453,7 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
           (r) => r.ok,
         )
         // Drain the queued system notices immediately, post-lock.
-        for (const rid of notifyRecipients) void deliverPending(rid)
+        for (const rid of notifyRecipients) delivery.notifyRecipient(rid)
         return JSON.stringify(result)
       },
     }),
@@ -547,6 +496,9 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
 
     "experimental.chat.system.transform": async (input, output) => {
       if (!input.sessionID) return
+      // The transform runs inside THIS server for THIS session - direct
+      // ownership evidence, stronger than event inference.
+      delivery.markLocal(input.sessionID)
       const state = load()
       // A session may belong to multiple channels; inject one labeled section
       // per membership so roles/prompts never blur across channels.
@@ -557,6 +509,12 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
 
     event: async ({ event }) => {
       const e = event as Event
+      // Any session.* event on this bus proves the session is hosted on THIS
+      // server: register ownership before acting on the event.
+      if (e.type.startsWith("session.")) {
+        const props = e.properties as { sessionID?: string; info?: { id?: string } }
+        delivery.markLocal(props.info?.id ?? props.sessionID)
+      }
       if (e.type === "session.idle") {
         const sessionId = e.properties.sessionID
         const linked = await store.withLock(() => {
@@ -566,7 +524,7 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
           store.save(state)
           return true
         })
-        if (linked) void deliverPending(sessionId)
+        if (linked) void delivery.deliverPending(sessionId)
         return
       }
       if (e.type === "session.deleted") {
@@ -591,7 +549,7 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
             store.save(state)
             return true
           })
-          if (linked) void deliverPending(sessionId)
+          if (linked) void delivery.deliverPending(sessionId)
         }
         return
       }
@@ -637,6 +595,8 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
                   session_id: input.sessionID,
                   project_id: projectId,
                   worktree: worktreePath,
+                  host: "opencode",
+                  host_session_id: input.sessionID,
                 })
               : joinChannel(state, {
                   channel: channel ?? "",
@@ -645,6 +605,8 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
                   session_id: input.sessionID,
                   project_id: projectId,
                   worktree: worktreePath,
+                  host: "opencode",
+                  host_session_id: input.sessionID,
                 })
             if (r.ok) store.save(state)
             return r
@@ -690,7 +652,7 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
             if (r.ok) store.save(state)
             return r
           })
-          for (const rid of notifyRecipients) void deliverPending(rid)
+          for (const rid of notifyRecipients) delivery.notifyRecipient(rid)
           break
         }
         case "history":

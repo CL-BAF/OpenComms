@@ -52,6 +52,8 @@ interface JsonRpcRequest {
 }
 
 const PROTOCOL_VERSION = "2024-11-05"
+/** Versions this server implements; the client's request is echoed when supported. */
+const SUPPORTED_PROTOCOL_VERSIONS = [PROTOCOL_VERSION, "2025-03-26", "2025-06-18"]
 
 export class McpStdioServer {
   private readonly tools: McpToolDef[]
@@ -77,7 +79,8 @@ export class McpStdioServer {
     process.stdin.on("data", (chunk: string) => {
       buffer += chunk
       if (buffer.length > McpStdioServer.MAX_BUFFER_BYTES) {
-        // Oversized frame flood: drop the buffer and signal protocol error.
+        // Oversized frame flood: drop the buffered bytes and signal a parse
+        // error, but keep the connection alive so the client can recover.
         this.log(`inbound buffer exceeded ${McpStdioServer.MAX_BUFFER_BYTES} bytes; discarding`)
         this.write({
           jsonrpc: "2.0",
@@ -144,12 +147,18 @@ export class McpStdioServer {
 
   private async dispatch(req: JsonRpcRequest): Promise<unknown> {
     switch (req.method) {
-      case "initialize":
+      case "initialize": {
+        // Echo the client's requested version when we support it (MCP spec:
+        // server responds with a version it supports; prefer the client's).
+        const requestedRaw = req.params?.["protocolVersion"]
+        const requested = typeof requestedRaw === "string" ? requestedRaw : ""
+        const version = SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ? requested : PROTOCOL_VERSION
         return {
-          protocolVersion: PROTOCOL_VERSION,
+          protocolVersion: version,
           capabilities: { tools: {} },
           serverInfo: this.serverInfo,
         }
+      }
       case "notifications/initialized":
       case "notifications/cancelled":
         return undefined

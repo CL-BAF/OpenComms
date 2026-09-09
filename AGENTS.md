@@ -58,10 +58,16 @@ State {
   errors: Array<{at:number, message:string}>     // capped 200
 }
 // Channel: members carry host/surface/delivery_mode/host_session_id/stale_policy (schema v2); timer keyed by session id
-// MessageEnvelope â€” message_id (ocm_*), correlation_id (cor_*), hop_count, delivery_status (pending|delivered|rejected|stale|failed)
+// MessageEnvelope â€” message_id (ocm_*), correlation_id (cor_*), hop_count, delivery_status (pending|in_flight|delivered|rejected|stale|failed)
 ```
 
 Persisted at `<project>/.opencomms/state.json` (`src/core/types.ts`), `StateStore` (`src/core/store.ts`). Legacy `.opencode-comms/state.json` is migrated once (backup + MIGRATED_FROM_V1 marker); never run the pre-1.x plugin after migration.
+
+## Delivery invariants (CLIâ†”CLI autonomy, verified 2026-09-08)
+
+- **Owner-side delivery**: each OpenCode TUI/`serve` = own server + plugin instance + bus. An instance prompts ONLY sessions it has seen events for (`delivery.markLocal`); the fs-watch wake (`fs.watchFile` on state.json) makes the recipient's OWN instance pick up mail queued by another process. Cross-server prompting degrades rendering and is used only as a 5s fallback for ownerless PUSH members. Evidence + topology matrix: `docs/OPENCODE.md`.
+- **Two-phase delivery**: drain marks `in_flight` (persisted pre-prompt) â†’ `commitDelivery` after the host accepts â† `delivered`. Crash between = `sweepInFlight` re-queues at next plugin start (at-least-once on that window).
+- New engine surface: `commitDelivery`, `sweepInFlight`, `pendingRecipients` (`src/core/engine.ts`); controller: `src/hosts/opencode/delivery.ts`.
 
 ## 5. Most Common Tasks
 
@@ -102,6 +108,7 @@ Tests in `test/unit/engine.test.ts` (timer + channel/queue tests), `store.test.t
 ## 8. Gotchas
 
 - Channels hold **N members** (`Channel.max_members`, default 8, clamped to >= 2 at creation). On a two-member channel `sendMessage` targets the lone peer; with 3+ members a send **fails** unless you pass `to=<session_id|role>` or `broadcast=true` â€” targeting is never guessed.
+- Claude Code member identity uses **per-member pin files** (`.opencomms/pins/<member_id>.json`, id pattern `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`); the legacy single `member-pin.json` is read-only fallback. A blind second `install-member` run REFUSES (pass `--id`); SessionStart binds only when exactly one pinned claude-code member is unbound (ambiguity = no bind + guidance).
 - Roles are an **open vocabulary** (structural check: letter first, 1-32 chars of letters/digits/space/-/_), unique per channel, spelling preserved verbatim; all role lookups compare case-insensitively.
 - Every load->mutate->save runs under `StateStore.withLock` (exclusive-create `.state.lock`, stale-broken after 15s). Bare reads stay lock-free because writes are atomic renames. Never call anything that takes the lock while already inside it â€” deadlocks until timeout.
 - Message types are whitelisted: senders may send only `review_request|review_response|manual`; `"system"` is reserved for internal notices (e.g. kick notifications).

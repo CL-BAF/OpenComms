@@ -16,6 +16,7 @@ import {
   inbox,
   kickChannel,
   status,
+  commitDelivery,
 } from "../../../src/core/engine.js"
 import { emptyState } from "../../../src/core/store.js"
 
@@ -123,6 +124,12 @@ test("PUSH<->PULL staleness boundary: age kills PUSH copies, PULL copies survive
 
   const pulled = drainQueue(state, "sess_cd") // PULL side: still delivers
   assert.equal(pulled.length, 1)
+  assert.equal(pulled[0]!.delivery_status, "in_flight")
+  commitDelivery(
+    state,
+    "sess_cd",
+    pulled.map((d) => d.message_id),
+  )
   assert.equal(pulled[0]!.delivery_status, "delivered")
 })
 

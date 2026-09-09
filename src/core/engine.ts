@@ -813,6 +813,20 @@ export interface DeliveryPair {
 }
 
 /**
+ * Distinct recipient session ids that currently hold deliverable queue
+ * entries. Used by the fs-watch wake: each plugin instance scans for queues
+ * that belong to sessions hosted on ITS server and delivers owner-side.
+ * Read-only over the persisted state; the drain itself is locked.
+ */
+export function pendingRecipients(state: State): string[] {
+  const out: string[] = []
+  for (const [sessionId, queue] of Object.entries(state.queues)) {
+    if (queue.some((id) => state.messages[id]?.delivery_status === "pending")) out.push(sessionId)
+  }
+  return out
+}
+
+/**
  * Drain a recipient's queue and annotate every delivered envelope with ITS
  * OWN channel's name (a session may sit in multiple channels; provenance in
  * the untrusted-message framing must never borrow another channel's label).
@@ -828,12 +842,14 @@ export function drainForDelivery(state: State, recipientSessionId: string): Deli
 /**
  * Restore failed deliveries to pending state and rebuild the recipient FIFO
  * in its ORIGINAL order (the batch reached the front in array order, so
- * unshift in reverse keeps first-in-list first-in-queue).
+ * unshift in reverse keeps first-in-list first-in-queue). Accepts envelopes
+ * in either "delivered" or "in_flight" state (crash-window recovery uses the
+ * same path as a thrown prompt).
  */
 export function requeueFailedDelivery(state: State, sessionId: string, deliveredIds: string[]): void {
   for (const id of deliveredIds) {
     const msg = state.messages[id]
-    if (msg && msg.delivery_status === "delivered") {
+    if (msg && (msg.delivery_status === "delivered" || msg.delivery_status === "in_flight")) {
       msg.delivery_status = "pending"
       msg.delivered_at = null
     }
@@ -847,10 +863,69 @@ export function requeueFailedDelivery(state: State, sessionId: string, delivered
 }
 
 /**
+ * Mark a batch of in_flight envelopes as actually accepted by the host
+ * session. The plugin calls this AFTER client.session.prompt resolved —
+ * "delivered" therefore means "the host accepted the prompt", closing the
+ * gap where a crash between drain and prompt silently lost messages.
+ */
+export function commitDelivery(state: State, sessionId: string, messageIds: string[]): void {
+  for (const id of messageIds) {
+    const msg = state.messages[id]
+    if (msg && msg.delivery_status === "in_flight" && msg.recipient_session_id === sessionId) {
+      msg.delivery_status = "delivered"
+      msg.delivered_at = Date.now()
+    }
+  }
+}
+
+/**
+ * Startup crash recovery: every envelope still marked in_flight was drained
+ * but its prompt outcome is unknown (the process died mid-delivery). Sweep
+ * them back to pending and restore the FIFO so the next idle/fs-watch wake
+ * re-delivers. Idempotent and safe to run from multiple plugin instances
+ * (the state lock serializes; the second sweep finds nothing).
+ *
+ * Bias: this is at-least-once on the ambiguous crash window (the prompt may
+ * have reached the host just before the crash). The alternative — treating
+ * in_flight as delivered — silently DROPS messages, which is worse for a
+ * communication system. Documented in PROTOCOL.md.
+ */
+export function sweepInFlight(state: State): string[] {
+  const byRecipient = new Map<string, string[]>()
+  for (const msg of Object.values(state.messages)) {
+    if (msg.delivery_status !== "in_flight") continue
+    msg.delivery_status = "pending"
+    msg.delivered_at = null
+    const list = byRecipient.get(msg.recipient_session_id) ?? []
+    list.push(msg.message_id)
+    byRecipient.set(msg.recipient_session_id, list)
+  }
+  const swept: string[] = []
+  for (const [sessionId, ids] of byRecipient) {
+    // Oldest first so unshift restores original FIFO order.
+    ids.sort((a, b) => (state.messages[a]?.timestamp ?? 0) - (state.messages[b]?.timestamp ?? 0))
+    const queue = state.queues[sessionId] ?? []
+    for (let i = ids.length - 1; i >= 0; i--) {
+      const id = ids[i]!
+      if (state.messages[id] && !queue.includes(id)) queue.unshift(id)
+      swept.push(id)
+    }
+    state.queues[sessionId] = queue
+  }
+  return swept
+}
+
+/**
  * Attempt delivery of queued messages to a recipient session.
  *
+ * Drain marks envelopes "in_flight" (persisted BEFORE the plugin prompts the
+ * host) and removes them from the FIFO. The plugin must call commitDelivery
+ * after the host accepted the prompt, or requeueFailedDelivery /
+ * sweepInFlight on failure. An envelope only becomes "delivered" when the
+ * host session actually accepted the prompt.
+ *
  * `deliver` is called by the plugin layer when the recipient becomes idle.
- * It returns the list of envelopes that were actually delivered so the
+ * It returns the list of envelopes that were actually drained so the
  * caller can prompt the session once per batch.
  */
 export function drainQueue(
@@ -860,7 +935,7 @@ export function drainQueue(
 ): MessageEnvelope[] {
   const now = opts.now ?? Date.now()
   const queue = state.queues[recipientSessionId] ?? []
-  const delivered: MessageEnvelope[] = []
+  const drained: MessageEnvelope[] = []
   const remaining: string[] = []
 
   for (const id of queue) {
@@ -877,7 +952,7 @@ export function drainQueue(
       remaining.push(id)
       continue
     }
-    if (msg.delivery_status === "delivered") continue
+    if (msg.delivery_status === "delivered" || msg.delivery_status === "in_flight") continue
 
     // Stale-event rejection â€” DELIVERY-MODE AWARE (schema v2): PUSH members
     // drain within minutes, so age-based rejection bounds retry loops. PULL
@@ -897,7 +972,7 @@ export function drainQueue(
     // waits for the cooldown; the rest of the batch delivers immediately so
     // queued messages are not starved by a single cooldown.
     const cooldownUntil = channel.cooldown_until[recipientSessionId] ?? 0
-    if (now < cooldownUntil && delivered.length === 0) {
+    if (now < cooldownUntil && drained.length === 0) {
       remaining.push(id)
       continue
     }
@@ -907,19 +982,18 @@ export function drainQueue(
       continue
     }
 
-    msg.delivery_status = "delivered"
-    msg.delivered_at = now
+    msg.delivery_status = "in_flight"
     msg.attempts += 1
     channel.cooldown_until[recipientSessionId] = now + channel.delivery_cooldown_ms
     const seen = state.delivered_to[msg.message_id] ?? []
     if (!seen.includes(recipientSessionId)) seen.push(recipientSessionId)
     state.delivered_to[msg.message_id] = seen
-    delivered.push(msg)
+    drained.push(msg)
   }
 
   state.queues[recipientSessionId] = remaining
-  if (delivered.length > 0) pruneMessages(state)
-  return delivered
+  if (drained.length > 0) pruneMessages(state)
+  return drained
 }
 
 /** â”€â”€ Read paths (membership-scoped) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
