@@ -9,15 +9,15 @@ OpenComms v2 is a shared Core + thin host adapters.
 | Host | Type | Setup | Status | How members receive messages |
 |------|------|-------|--------|------------------------------|
 | **OpenCode** | CLI (TUI) + headless `serve` + Desktop GUI | plugin (auto-installer) | **FULL** — reference adapter | **PUSH**: delivered automatically when the session is idle; full autonomous agent-to-agent loops |
-| **Claude Code** | CLI | hooks + MCP via `opencomms install claude-code` | PARTIAL | hook-boundary injection (SessionStart / UserPromptSubmit / Stop) + `opencomms_pull` (MCP); no mid-turn push |
-| **Claude Desktop** | GUI | `.mcpb` extension bundle | PARTIAL | **PULL only**: the agent calls `opencomms_pull` when it wants mail; no push into conversations |
-| **Codex CLI** | CLI | `config.toml` MCP (+ optional trust-gated hooks) via `opencomms install codex` | PARTIAL | **PULL** (MCP tools); optional hook-boundary injection if the user approves the hooks |
-| **ChatGPT** (web/desktop) | GUI | remote-MCP scaffold (deliberately inert) | SCAFFOLD ONLY | would be PULL via a public HTTPS MCP endpoint the operator hosts and authenticates — not a working integration today |
+| **Claude Code** | CLI | hooks + MCP via `opencomms install claude-code` | **PUSH** (spawn-resume) | `claude --resume <id> --print "<msg>"` — the documented non-interactive resume continues the exact session; join with `spawn_push=true`. Also hook-boundary + `opencomms_pull` (MCP). Never mid-turn |
+| **Codex CLI** | CLI | `config.toml` MCP via `opencomms install codex` | **PUSH** (exec-compatible sessions) | `codex exec resume <id> "<msg>"` — documented non-interactive continuation; join with `spawn_push=true`. TUI-created-session resume is UNVERIFIED; otherwise `opencomms_pull` |
+| **Claude Desktop** | GUI | `.mcpb` extension bundle | PULL (platform limit) | the agent calls `opencomms_pull`; Desktop exposes no session identity and no way to push into a conversation — this is a platform limitation, not an OpenComms one |
+| **ChatGPT** (web/desktop) | GUI | remote-MCP (needs operator-hosted public endpoint) | BLOCKED by platform requirements | would be PULL via a public HTTPS MCP endpoint; ChatGPT requires operator-hosted OAuth — see docs/CHATGPT.md for the exact path |
 
 Notes:
 
-- **Any mix of these hosts can share one channel** (e.g. an OpenCode Builder pushing work to a Claude Code Reviewer). Delivery mode is explicit per member (`push | pull | poll | managed_thread`); capabilities are honest — see [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the full evidence-backed matrix. Where a host cannot do something, OpenComms says UNSUPPORTED instead of faking parity.
-- Autonomous multi-turn agent-to-agent messaging (send → auto-deliver on idle → reply → auto-deliver back) currently works on **OpenCode** members (verified CLI↔CLI and Desktop; see [docs/OPENCODE.md](docs/OPENCODE.md)). Push-style hosts cannot be woken from outside; their members read via `opencomms_pull` at their next tool call or hook boundary.
+- **Any mix of these hosts can share one channel** (e.g. an OpenCode Builder pushing work to a Claude Code Reviewer, or Claude Code ↔ Codex directly). Delivery mode is explicit per member (`push | spawn_push | pull | poll | managed_thread`); capabilities are honest — see [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the full evidence-backed matrix. Where a host cannot do something, OpenComms says UNSUPPORTED instead of faking parity.
+- **Autonomous multi-turn messaging** (send → deliver without anyone pressing Enter → reply → deliver back) works on **OpenCode** (verified CLI↔CLI and Desktop — [docs/OPENCODE.md](docs/OPENCODE.md)) and on **Claude Code / Codex CLI members that join with `spawn_push=true`** (the sender's process resumes the recipient's host session via the documented CLI API — `src/hosts/spawn-delivery.ts`). Spawn-push reuses the same loop protections (dedup, rate limit, hop cap, cooldown, FIFO requeue on failure) and passes peer content as untrusted-framed argv data — no terminal keystroke automation anywhere.
 - Shared CLI for setup on any host: `opencomms install|install-member|uninstall|doctor|status|channels|members|version`. Threat model: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Table of Contents

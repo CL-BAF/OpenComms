@@ -14,6 +14,7 @@ import { McpStdioServer } from "./server.js"
 import { buildMcpToolDefs } from "./opencomms-tools.js"
 import { pinnedMember } from "./identity.js"
 import { StateStore } from "../core/store.js"
+import { createSpawnDeliveryHook } from "../hosts/spawn-delivery.js"
 import type { State, ToolResult } from "../core/types.js"
 import type { McpToolDef } from "./server.js"
 
@@ -21,9 +22,27 @@ import type { McpToolDef } from "./server.js"
 export function serve(opts: { projectDir: string; host: string; admin: boolean }): void {
   const store = new StateStore(resolve(opts.projectDir))
   const projectId = process.env["OPENCOMMS_PROJECT_ID"] ?? "local-project"
+  // Spawn-push: hosts with a documented non-interactive resume (claude-code,
+  // codex) enable real push delivery from this member. Disabled for
+  // desktop-facing/web-facing instances via OPENCOMMS_NO_SPAWN=1.
+  const spawnDelivery =
+    process.env["OPENCOMMS_NO_SPAWN"] === "1"
+      ? undefined
+      : createSpawnDeliveryHook(store, (message) => {
+          void store
+            .withLock(() => {
+              const state = store.load()
+              state.errors.push({ at: Date.now(), message })
+              if (state.errors.length > 200) state.errors = state.errors.slice(-200)
+              store.save(state)
+            })
+            .catch(() => {
+              /* diagnostics only */
+            })
+        })
   const tools = buildMcpToolDefs(
     store,
-    { host: opts.host, admin: opts.admin, projectId, worktree: resolve(opts.projectDir) },
+    { host: opts.host, admin: opts.admin, projectId, worktree: resolve(opts.projectDir), spawnDelivery },
     {
       mutate: (mutate: (state: State) => ToolResult) =>
         store.withLock(() => {
@@ -38,7 +57,7 @@ export function serve(opts: { projectDir: string; host: string; admin: boolean }
   const server = new McpStdioServer({ name: "opencomms", version: "2.0.0", tools })
   const pin = pinnedMember()
   server.log(
-    `ready (pinned: ${pin ? "yes" : "NO — tools will deny"}, host: ${opts.host}, admin: ${opts.admin ? "yes" : "no"}, project: ${opts.projectDir})`,
+    `ready (pinned: ${pin ? "yes" : "NO — tools will deny"}, host: ${opts.host}, admin: ${opts.admin ? "yes" : "no"}, spawn-push: ${spawnDelivery ? "on" : "off"}, project: ${opts.projectDir})`,
   )
   server.listen()
 }

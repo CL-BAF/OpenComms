@@ -24,7 +24,7 @@ import {
   status,
   updateRole,
 } from "../core/engine.js"
-import type { SenderMessageType, State, ToolResult } from "../core/types.js"
+import type { DeliveryMode, SenderMessageType, State, ToolResult } from "../core/types.js"
 import { authorizeMember, pinnedMember } from "./identity.js"
 import type { McpStore } from "./store-types.js"
 import type { McpToolDef, ToolPayload } from "./server.js"
@@ -47,7 +47,17 @@ export interface McpToolConfig {
   worktree: string
   /** Environment holding the pinned identity (defaults to process.env). */
   env?: NodeJS.ProcessEnv
+  /**
+   * After a successful send, spawn-push to eligible recipients (hosts with a
+   * documented non-interactive resume + spawn_push delivery mode). Off by
+   * default on desktop-facing instances (nothing to resume there); the
+   * claude-code/codex CLI instances enable it.
+   */
+  spawnDelivery?: SpawnDeliveryHook
 }
+
+/** Async hook the host entrypoint provides; sees the recipients that were queued. */
+export type SpawnDeliveryHook = (recipients: string[]) => void
 
 const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback)
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined)
@@ -88,9 +98,13 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
 
   /**
    * Locked join/create call. The FIRST member on a channel may be an MCP
-   * member whose pin is not yet on the roster â€” bootstrap exception: when
+   * member whose pin is not yet on the roster — bootstrap exception: when
    * the pin is set but not a member anywhere, create/join are still allowed
    * (they are the only way back in). Everything else stays denied.
+   *
+   * `spawnPush` selects the spawn_push delivery mode (host CLI resume) for
+   * members whose host documents a non-interactive resume; default remains
+   * pull for MCP members.
    */
   const runJoinLike = (kind: "create" | "join", args: Record<string, unknown>): Promise<ToolPayload> =>
     io
@@ -103,6 +117,7 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
               "OpenComms MCP has no pinned member identity (OPENCOMMS_MEMBER_ID unset). Repair this member's configuration; identity can never be supplied by the caller.",
           }
         }
+        const deliveryMode: DeliveryMode = args["spawn_push"] === true ? "spawn_push" : "pull"
         const common = {
           channel: str(args["channel"]),
           role: str(args["role"]),
@@ -112,13 +127,16 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
           worktree: cfg.worktree,
           host: cfg.host,
           surface: "mcp" as const,
-          delivery_mode: "pull" as const,
+          delivery_mode: deliveryMode,
           // host_session_id starts EMPTY: the host's own session id lives in
           // a different namespace and is bound by the host's lifecycle hook
           // (e.g. Claude Code SessionStart records it for the pinned member).
           // Never guess it here (Reviewer Issue 2).
           host_session_id: null,
-          stale_policy: { mode: "none" as const, window_ms: null },
+          stale_policy:
+            deliveryMode === "spawn_push"
+              ? { mode: "window" as const, window_ms: 5 * 60_000 }
+              : { mode: "none" as const, window_ms: null },
         }
         return kind === "create"
           ? createChannel(state, { ...common, max_members: num(args["max_members"]) })
@@ -129,7 +147,7 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
   const createTool = (): McpToolDef => ({
     name: "opencomms_create",
     description:
-      "Create an OpenComms channel and register this pinned member under a role label (any short unique label, e.g. Builder). Persistent role instructions live in the channel state.",
+      "Create an OpenComms channel and register this pinned member under a role label (any short unique label, e.g. Builder). Persistent role instructions live in the channel state. Set spawn_push=true if this member's host CLI supports non-interactive resume (claude --resume / codex exec resume) so peers can push messages to you.",
     inputSchema: {
       type: "object",
       properties: {
@@ -137,6 +155,10 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
         role: { type: "string", description: "Role label, unique within the channel." },
         role_prompt: { type: "string", description: "Persistent role instructions." },
         max_members: { type: "number", description: "Optional membership cap (2-8, default 8)." },
+        spawn_push: {
+          type: "boolean",
+          description: "Enable spawn-push delivery (claude --resume / codex exec resume).",
+        },
       },
       required: ["channel", "role", "role_prompt"],
     },
@@ -146,13 +168,17 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
   const joinTool = (): McpToolDef => ({
     name: "opencomms_join",
     description:
-      "Join an existing OpenComms channel as this pinned member under a free role label. Rejects duplicates, full channels, and incompatible projects.",
+      "Join an existing OpenComms channel as this pinned member under a free role label. Rejects duplicates, full channels, and incompatible projects. Set spawn_push=true if this member's host CLI supports non-interactive resume so peers can push messages to you.",
     inputSchema: {
       type: "object",
       properties: {
         channel: { type: "string", description: "Channel name (case-insensitive)." },
         role: { type: "string", description: "Role label (unique within the channel)." },
         role_prompt: { type: "string", description: "Persistent role instructions." },
+        spawn_push: {
+          type: "boolean",
+          description: "Enable spawn-push delivery (claude --resume / codex exec resume).",
+        },
       },
       required: ["channel", "role", "role_prompt"],
     },
@@ -215,8 +241,8 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
         },
         required: ["channel", "content"],
       },
-      execute: async (args) =>
-        run((state, memberId) =>
+      execute: async (args) => {
+        const payload = await run((state, memberId) =>
           sendMessage(
             state,
             {
@@ -229,7 +255,20 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
             },
             memberId,
           ),
-        ),
+        )
+        // Post-send spawn push (best-effort, never affects the send result):
+        // hosts with a documented resume push into eligible recipients here.
+        if (!payload.isError && cfg.spawnDelivery) {
+          try {
+            const parsed = JSON.parse(payload.text) as ToolResult
+            const recipients = (parsed.data as { recipients?: string[] } | undefined)?.recipients
+            if (Array.isArray(recipients) && recipients.length > 0) cfg.spawnDelivery(recipients)
+          } catch {
+            /* spawn notification is optional */
+          }
+        }
+        return payload
+      },
     },
     {
       name: "opencomms_inbox",

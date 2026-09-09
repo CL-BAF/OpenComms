@@ -23,6 +23,7 @@ import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import { StateStore } from "./core/store.js"
 import { createDeliveryController } from "./hosts/opencode/delivery.js"
+import { createSpawnDeliveryHook } from "./hosts/spawn-delivery.js"
 import {
   clearStale,
   createChannel,
@@ -121,7 +122,16 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
 
   // Owner-side delivery controller (see src/hosts/opencode/delivery.ts):
   // multi-server topology fix + two-phase in_flight delivery + fs-watch wake.
-  const delivery = createDeliveryController({ store, load, client, recordError })
+  // spawnPush routes cross-host members (claude-code / codex spawn_push) to
+  // their host's documented CLI resume instead of client.session.prompt.
+  const spawnPush = createSpawnDeliveryHook(store, recordError)
+  const delivery = createDeliveryController({
+    store,
+    load,
+    client,
+    recordError,
+    spawnDelivery: (recipientSessionId) => spawnPush([recipientSessionId]),
+  })
   void delivery
     .startupSweep()
     .catch((error) => recordError(`Startup in-flight sweep failed: ${(error as Error).message}`))

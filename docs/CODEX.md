@@ -1,19 +1,24 @@
 # Codex Adapter
 
-Status: **PARTIAL, honest.** OpenComms integrates with Codex through the
-documented project MCP config (PULL tools) and optional trust-gated hooks.
-OpenComms does NOT inject into running TUI sessions, does not automate the
-terminal UI, and ships NO App Server client in v2. (Doc basis:
-developers.openai.com/codex pages — mcp, config, hooks — fetched
-2026-08-29.)
+Status: **PUSH for exec-compatible sessions; PULL otherwise.** OpenComms
+integrates with Codex through the documented project MCP config (PULL
+tools), optional trust-gated hooks, and — since 2026-09-08 — the
+documented non-interactive resume (`codex exec resume <SESSION_ID>
+"<prompt>"`, per developers.openai.com/codex/cli/reference) as a REAL push
+channel when a member joins with `spawn_push=true`. OpenComms does NOT
+inject into running TUI turns, does not automate the terminal UI, and
+ships NO App Server client in v2. (Doc basis: developers.openai.com/codex
+pages — mcp, config, hooks, cli reference — fetched 2026-08-29 /
+2026-09-08.)
 
 ## What you get
 
 | Capability | Status | How |
 |---|---|---|
 | Channel membership / PULL inbox / history / status | SUPPORTED | MCP tools via `[mcp_servers.opencomms]` |
+| **Spawn-push delivery (exec sessions)** | SUPPORTED | join with `spawn_push=true`: senders run `codex exec resume <session-id> "<framed msg>"` (argv array, no shell). TUI-created-session resume is UNVERIFIED — the resume API documents exec sessions |
 | Hook-boundary delivery | PARTIAL, OPT-IN | hooks exist but Codex skips untrusted hooks until you approve them in `/hooks` |
-| Push into running TUI session | UNSUPPORTED | no documented injection path; never attempted |
+| Push into running TUI turn | UNSUPPORTED | no documented injection path; never attempted |
 | Managed threads (App Server) | EXPERIMENTAL, DOCS-ONLY | no client shipped in v2 — nothing here claims it works |
 | Role injection | PARTIAL | AGENTS.md is the supported per-project instruction surface |
 

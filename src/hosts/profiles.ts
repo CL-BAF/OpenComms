@@ -29,19 +29,23 @@ export const OPENCODE_CAPABILITIES: HostCapabilities = {
 }
 
 /**
- * Claude Code (CLI) — hooks + MCP. Verified 2026-08-29:
+ * Claude Code (CLI) — hooks + MCP + SPAWN-PUSH. Verified 2026-09-08:
  * - Hooks (SessionStart/UserPromptSubmit/Stop/SessionEnd...) receive
-   session_id and can inject additionalContext at hook boundaries.
+ *   session_id and can inject additionalContext at hook boundaries.
+ * - The documented non-interactive resume (`claude --resume <session-id>
+ *   --print "<msg>"`) continues an existing session from a child process —
+ *   a REAL push channel without terminal automation (spawn_push mode).
  * - MCP servers (project .mcp.json, stdio) get NO session identity.
- * - No documented way for an external process to push into a running
- *   session; hook-boundary injection is the honest maximum for v2.
+ * - Mid-turn push is impossible (no API); a live TUI turn cannot be
+ *   interrupted, and resuming mid-turn may interleave (serialized per
+ *   member, failures requeue).
  */
 export const CLAUDE_CODE_CAPABILITIES: HostCapabilities = {
   sessionIdentity: true, // hooks receive session_id; MCP tools do NOT
   sessionDiscovery: false, // no documented session enumeration API
   existingSessionLinking: true, // hooks bind a running session to OpenComms
   sessionResume: true, // claude --resume <id> (documented)
-  promptDelivery: false, // no external push into a running session
+  promptDelivery: true, // spawn_push: claude --resume <id> --print <msg>
   idleDetection: false, // Stop hook fires per-turn, not idle transitions
   lifecycleEvents: true, // SessionStart/SessionEnd hooks
   roleInjection: "hook-boundary", // SessionStart additionalContext
@@ -70,16 +74,19 @@ export const CLAUDE_DESKTOP_CAPABILITIES: HostCapabilities = {
 }
 
 /**
- * Codex CLI — MCP client via config.toml, hooks (trust-gated). Verified
- * 2026-08-29: no external injection into TUI-owned interactive sessions;
- * MCP tools are PULL.
+ * Codex CLI — MCP client via config.toml, hooks (trust-gated), SPAWN-PUSH
+ * for exec-compatible sessions. Verified 2026-08-29 (hooks/MCP) and
+ * 2026-09-08 (exec resume): `codex exec resume <SESSION_ID> "<prompt>"` is
+ * the documented non-interactive continuation — a REAL push channel for
+ * exec-compatible sessions (spawn_push mode). Resuming TUI-created
+ * sessions is NOT verified (the resume docs target exec sessions).
  */
 export const CODEX_CLI_CAPABILITIES: HostCapabilities = {
   sessionIdentity: true, // hooks receive session_id; MCP tools do NOT
   sessionDiscovery: false,
   existingSessionLinking: true, // hooks bind a session
   sessionResume: true, // codex exec resume <id> (documented)
-  promptDelivery: false, // TUI not injectable from outside
+  promptDelivery: true, // spawn_push: codex exec resume <id> <msg> (exec-compatible sessions)
   idleDetection: false,
   lifecycleEvents: true, // SessionStart/SessionEnd hooks
   roleInjection: "hook-boundary",

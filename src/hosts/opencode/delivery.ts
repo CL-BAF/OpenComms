@@ -66,6 +66,12 @@ export interface DeliveryControllerOptions {
   client: DeliveryClient
   /** Visible failure recorder (surfaces in opencomms_status errors). */
   recordError(message: string): void
+  /**
+   * Spawn-push for cross-host members (claude-code/codex with spawn_push
+   * delivery mode + bound host session id). The controller routes
+   * notifications for such members here instead of client.session.prompt.
+   */
+  spawnDelivery?(recipientSessionId: string): void
 }
 
 export interface DeliveryController {
@@ -195,6 +201,20 @@ export function createDeliveryController(opts: DeliveryControllerOptions): Deliv
   }
 
   const notifyRecipient = (recipientSessionId: string): void => {
+    // Cross-host spawn_push members (claude-code / codex CLI) are delivered
+    // by resuming THEIR host session — never by client.session.prompt.
+    try {
+      const state = load()
+      for (const channel of Object.values(state.channels)) {
+        const member = channel.members.find((m) => m.session_id === recipientSessionId)
+        if (member && member.delivery_mode === "spawn_push" && opts.spawnDelivery) {
+          opts.spawnDelivery(recipientSessionId)
+          return
+        }
+      }
+    } catch {
+      /* fall through to the opencode delivery paths */
+    }
     if (localSessions.has(recipientSessionId)) {
       void deliverPending(recipientSessionId)
       return

@@ -10,11 +10,12 @@ hooks & MCP references fetched 2026-08-29.)
 | Capability | Status | How |
 |---|---|---|
 | Channel membership | SUPPORTED | MCP tools (create/join) with pinned identity |
+| **Spawn-push delivery** | SUPPORTED | join with `spawn_push=true`: senders resume your session via `claude --resume <session-id> --print "<framed message>"` (documented non-interactive resume). Requires the SessionStart hook to have bound `host_session_id`. Serialized per member; failures requeue in FIFO |
+| Hook-boundary delivery | SUPPORTED | queued messages injected via `additionalContext` at SessionStart / UserPromptSubmit / Stop |
 | Pull inbox | SUPPORTED | `opencomms_pull` / `opencomms_inbox` (MCP) |
-| Hook-boundary delivery | PARTIAL | queued messages injected via `additionalContext` at SessionStart / UserPromptSubmit / Stop |
-| Push into running session | UNSUPPORTED | documented host limit — no external push API |
+| Push into a MID-TURN session | UNSUPPORTED | no host API — a live turn cannot be interrupted or appended to mid-flight |
 | Role injection | PARTIAL | SessionStart boundary only (not persistent system prompt) |
-| Cross-host channels | SUPPORTED | same state file as every other adapter |
+| Cross-host channels | SUPPORTED | same state file as every other adapter; OpenCode/Codex peers push to you when `spawn_push=true` |
 
 ## Install
 
@@ -43,7 +44,10 @@ is ambiguous, so nothing auto-binds and the hook emits guidance instead
 (bind members one at a time: install -> start session -> install next, or
 set OPENCOMMS_MEMBER_ID for the session). This is the identity bridge
 between the MCP member namespace and Claude's session ids, fail-closed by
-design: one member's pin can never authorize another member's drains.
+design: one member's pin can never authorize another member's drains — and
+it is also the targeting key for spawn-push delivery. When joining a
+channel, pass `spawn_push=true` to `opencomms_create`/`opencomms_join` so
+peers can resume your session and push messages immediately.
 
 ## Hook events used (verified names, 2026-08-29)
 

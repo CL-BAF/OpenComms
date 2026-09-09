@@ -25,7 +25,7 @@ Legend for "evidence": implementation path + test file where applicable.
 | Membership / channels | SUPPORTED | SUPPORTED (via MCP tools) | SUPPORTED (via MCP tools) | SUPPORTED (via MCP tools) | UNSUPPORTED | SUPPORTED (via MCP tools, remote) | SUPPORTED (remote) |
 | Existing-session identity | SUPPORTED (ctx.sessionID)⁶ | PARTIAL (hooks see session_id; MCP tools do NOT)⁶ | UNSUPPORTED (no conversation id documented)³ | PARTIAL (hooks see session_id; MCP tools do NOT) | SUPPORTED (thread ids) | UNSUPPORTED | UNSUPPORTED |
 | Existing-session linking | SUPPORTED (invariant: link-only)⁶ | PARTIAL (hook-boundary correlation via pin + host_session_id) | UNSUPPORTED | PARTIAL (hook-boundary correlation if user opts in) | EXCEPTION (opencomms never attaches to TUI threads) | UNSUPPORTED | UNSUPPORTED |
-| Push delivery | SUPPORTED (deliver on idle event)⁶ | PARTIAL (hook-boundary ONLY: SessionStart / UserPromptSubmit / Stop — never mid-turn)¹ ,⁶ | UNSUPPORTED (documented: no server-initiated push)³ | UNSUPPORTED (documented: no injection into TUI sessions)⁴ | UNSUPPORTED (no app-server client shipped) | UNSUPPORTED (documented)⁵ | UNSUPPORTED (documented)⁵ |
+| Push delivery | SUPPORTED (deliver on idle event)⁶ | SUPPORTED with limits (spawn_push: `claude --resume <id> --print <msg>` documented non-interactive resume; never mid-turn; serialized per member)¹ ,⁶ ,⁷ | UNSUPPORTED (documented: no server-initiated push, no session identity)³ | SUPPORTED with limits (spawn_push: `codex exec resume <id> <msg>`; verified for exec-compatible sessions; TUI-session resume UNVERIFIED)⁴ ,⁷ | UNSUPPORTED (no app-server client shipped) | UNSUPPORTED (documented)⁵ | UNSUPPORTED (documented)⁵ |
 | Pull inbox | SUPPORTED (tools) | SUPPORTED (opencomms_pull MCP) | SUPPORTED (opencomms_pull; stale_policy=none so nothing ages out while unread) | SUPPORTED | UNSUPPORTED | SUPPORTED (remote) | SUPPORTED (remote) |
 | Polling | UNSUPPORTED (event-driven instead) | UNSUPPORTED (hook boundaries only) | UNSUPPORTED (user-invoked tools) | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED |
 | Managed threads | UNSUPPORTED (never owns sessions) | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | EXPERIMENTAL (docs only — no code shipped) | UNSUPPORTED | UNSUPPORTED |
@@ -86,6 +86,19 @@ Legend for "evidence": implementation path + test file where applicable.
    delivery fix (recipient's turn fires on the recipient's own bus; the
    sender's bus shows zero foreign events). Full evidence:
    docs/OPENCODE.md § "Topology & autonomy".
+7. **Spawn-push (2026-09-08)** — documented non-interactive resume APIs:
+   Claude Code `claude --resume <session-id> --print "<msg>"` (official
+   sessions docs + CLI reference; community-verified pattern), Codex
+   `codex exec resume <SESSION_ID> "<msg>"` (developers.openai.com/codex
+   CLI reference: "Resume an exec session by ID… Accepts an optional
+   follow-up prompt"). Implementation: `src/hosts/spawn-delivery.ts`
+   (argv-array spawn, NO shell; two-phase delivery; FIFO requeue on CLI
+   failure); tests: `test/unit/core/spawn-delivery.test.ts`. Members opt in
+   with `spawn_push: true` on opencomms_create/join; requires a bound
+   `host_session_id` (claude-code SessionStart hook). Limitations are
+   explicit: never mid-turn; Codex TUI-created session resume UNVERIFIED;
+   Claude Desktop and ChatGPT have no identity and no resume API (stay
+   PULL).
 
 ## Rules this matrix obeys
 

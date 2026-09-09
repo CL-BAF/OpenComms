@@ -94,7 +94,18 @@ export interface Member {
   capabilities?: Partial<HostCapabilities>
 }
 
-export type DeliveryMode = "push" | "pull" | "poll" | "managed_thread" | "unsupported"
+/**
+ * How a member receives messages.
+ *  - push: the host pushes into the live session in-process (idle wake).
+ *  - spawn_push: the host's documented non-interactive resume is invoked as
+ *    a child process (see hosts/spawn-delivery.ts for the per-host argv) —
+ *    real push without terminal keystroke automation.
+ *  - pull: the member reads with its own tools when it chooses.
+ *  - poll: reserved for hosts that expose a status API (none today).
+ *  - managed_thread: OpenComms owns/starts the thread (app-server hosts).
+ *  - unsupported: host cannot receive at all.
+ */
+export type DeliveryMode = "push" | "spawn_push" | "pull" | "poll" | "managed_thread" | "unsupported"
 
 export type HostSurface = "cli" | "desktop" | "web" | "api" | "app-server" | "mcp"
 
