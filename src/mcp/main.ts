@@ -14,6 +14,7 @@ import { McpStdioServer } from "./server.js"
 import { buildMcpToolDefs } from "./opencomms-tools.js"
 import { pinnedMember } from "./identity.js"
 import { StateStore } from "../core/store.js"
+import { ArchiveStore } from "../core/archive.js"
 import { createSpawnDeliveryHook } from "../hosts/spawn-delivery.js"
 import type { State, ToolResult } from "../core/types.js"
 import type { McpToolDef } from "./server.js"
@@ -42,7 +43,14 @@ export function serve(opts: { projectDir: string; host: string; admin: boolean }
         })
   const tools = buildMcpToolDefs(
     store,
-    { host: opts.host, admin: opts.admin, projectId, worktree: resolve(opts.projectDir), spawnDelivery },
+    {
+      host: opts.host,
+      admin: opts.admin,
+      projectId,
+      worktree: resolve(opts.projectDir),
+      spawnDelivery,
+      archives: new ArchiveStore(resolve(opts.projectDir)),
+    },
     {
       mutate: (mutate: (state: State) => ToolResult) =>
         store.withLock(() => {

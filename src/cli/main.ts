@@ -24,6 +24,8 @@ import { buildDesktopBundle, DESKTOP_CAPABILITIES } from "../adapters/claude-des
 import { scaffoldChatGptIntegration, detectChatGptDesktop } from "../adapters/chatgpt/install.js"
 import { StateStore } from "../core/store.js"
 import { status } from "../core/engine.js"
+import { buildSessionArchive, commitSessionSave, deleteSession, resumeSession } from "../core/engine.js"
+import { ArchiveStore } from "../core/archive.js"
 import { SCHEMA_VERSION } from "../core/types.js"
 import { listMemberPins, loadProjectPin } from "../mcp/identity.js"
 
@@ -324,7 +326,7 @@ function runUninstall(host: string | undefined, projectDir: string): CliResult {
   }
 }
 
-/** opencomms install-member [--host <host>] [--id <memberId>] */
+/** opencomms install-member [--host <host>] [--id <memberId> | --name <name>] */
 function runInstallMember(projectDir: string, host: string | undefined, memberId: string | null): CliResult {
   const result = registerProjectMember(resolve(projectDir), {
     host: host ?? "claude-code",
@@ -336,6 +338,196 @@ function runInstallMember(projectDir: string, host: string | undefined, memberId
   )
 }
 
+/**
+ * Session lifecycle commands (operator backend surface, work order
+ * 2026-09-08): list / get / save / delete / resume. Provider-independent —
+ * operates directly on project state + archives.
+ */
+function runSession(tokens: string[], projectDir: string): Promise<CliResult> {
+  const sub = (tokens[0] ?? "list").toLowerCase()
+  const rest = tokens.slice(1)
+  // First non-flag token after the subcommand is the session name.
+  let name: string | undefined
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i]!
+    if (t === "--project" || t === "--summary" || t === "--as" || t === "--host") {
+      i++
+      continue
+    }
+    if (t.startsWith("--")) continue
+    if (name === undefined) name = t
+  }
+  const store = new StateStore(resolve(projectDir))
+  const archives = new ArchiveStore(resolve(projectDir))
+  const summary = flagValue(rest, "--summary") ?? null
+  const newName = flagValue(rest, "--as") ?? null
+  const confirmed = rest.includes("--confirm")
+
+  const run = async (): Promise<CliResult> =>
+    store.withLock(() => {
+      const state = store.load()
+      switch (sub) {
+        case "list": {
+          const live = Object.values(state.channels).map((c) => ({
+            name: c.name,
+            lifecycle: c.lifecycle,
+            members: `${c.members.length}/${c.max_members}`,
+            description: c.description ?? "No description yet",
+            parent: c.parent_channel_id ?? "-",
+          }))
+          const saved = archives.list()
+          const lines = [
+            "Live sessions:",
+            ...(live.length > 0
+              ? live.map((s) => `  ${s.name} [${s.lifecycle}] ${s.members} agents — ${s.description}`)
+              : ["  (none)"]),
+            "",
+            "Archived sessions:",
+            ...(saved.length > 0
+              ? saved.map(
+                  (a) =>
+                    `  ${a.name} [saved ${new Date(a.saved_at).toISOString().slice(0, 10)}] ${a.message_count} messages — ${a.description ?? "No description yet"}`,
+                )
+              : ["  (none)"]),
+          ]
+          return ok(lines.join("\n"))
+        }
+        case "get": {
+          if (!name) return fail("Usage: opencomms session get <name>")
+          const ch = Object.values(state.channels).find((c) => c.name === name.toLowerCase())
+          if (ch) {
+            return ok(
+              [
+                `Session: ${ch.name} [${ch.lifecycle}]`,
+                `Description: ${ch.description ?? "No description yet"}`,
+                `Members (${ch.members.length}/${ch.max_members}):`,
+                ...ch.members.map(
+                  (m) => `  ${m.session_id} | ${m.role} | ${m.host} | ${m.delivery_mode}${m.stale ? " | STALE" : ""}`,
+                ),
+              ].join("\n"),
+            )
+          }
+          const archive = archives.findByName(name) ?? archives.get(name)
+          if (!archive) return fail(`No live or archived session matches "${name}".`)
+          return ok(
+            [
+              `Archived session: ${archive.name} (saved ${new Date(archive.saved_at).toISOString()})`,
+              `Description: ${archive.description ?? "No description yet"}`,
+              `Summary: ${archive.summary || "(none recorded)"}`,
+              `Messages archived: ${archive.message_count} | Roster: ${archive.members.map((m) => `${m.role}(${m.host})`).join(", ")}`,
+            ].join("\n"),
+          )
+        }
+        case "save": {
+          if (!name) return fail('Usage: opencomms session save <name> [--summary "..."]')
+          const built = buildSessionArchive(state, { channel: name, session_id: null, summary })
+          if (!built.ok) return fail(built.message)
+          const inputs = (built.data as { archive_inputs: Record<string, unknown> }).archive_inputs
+          const archive = archives.fromChannel(
+            inputs as never,
+            inputs["messages"] as never,
+            null,
+            null,
+            (inputs["summary"] as string | null) ?? null,
+          )
+          if (!archive.summary)
+            archive.summary = `Session "${archive.name}" archived. ${archive.description ?? "No description recorded."}`
+          archives.save(archive)
+          commitSessionSave(state, archive.channel_id)
+          store.save(state)
+          return ok(
+            `Session "${archive.name}" SAVED (${archive.message_count} messages archived). Resume with: opencomms session resume ${archive.name}`,
+          )
+        }
+        case "delete": {
+          if (!name) return fail("Usage: opencomms session delete <name> --confirm")
+          const decided = deleteSession(state, { channel: name, session_id: null, confirm: confirmed })
+          if (!decided.ok) return fail(decided.message)
+          const { phase, channel_id: channelId } = decided.data as { phase: string; channel_id: string }
+          if (phase === "live") {
+            // Collect THIS channel's doomed ids BEFORE deleting anything
+            // (a post-delete snapshot would contain other channels' ids).
+            const doomed = new Set(
+              Object.values(state.messages)
+                .filter((mm) => mm.channel_id === channelId)
+                .map((mm) => mm.message_id),
+            )
+            for (const id of doomed) {
+              delete state.messages[id]
+              delete state.delivered_to[id]
+            }
+            for (const key of Object.keys(state.queues)) {
+              const ids = state.queues[key] ?? []
+              const filtered = ids.filter((id) => !doomed.has(id))
+              if (filtered.length !== ids.length) state.queues[key] = filtered
+            }
+            for (const key of Object.keys(state.channels)) {
+              if (state.channels[key]!.id === channelId) delete state.channels[key]
+            }
+            store.save(state)
+            return ok(`Session ${channelId} DELETED (live state purged).`)
+          }
+          const byId = archives.get(channelId)
+          const removed = archives.delete(channelId)
+          return ok(
+            removed ? `Archived session "${byId?.name ?? channelId}" DELETED.` : `No archive found for ${channelId}.`,
+          )
+        }
+        case "resume": {
+          if (!name) return fail("Usage: opencomms session resume <name> [--as <new-name>]")
+          const archive = archives.findByName(name) ?? archives.get(name)
+          if (!archive) return fail(`No archived session matches "${name}".`)
+          const resumed = resumeSession(state, {
+            archive,
+            new_name: newName,
+            project_id: "cli-local-project",
+            worktree: resolve(projectDir),
+          })
+          if (!resumed.ok) return fail(resumed.message)
+          store.save(state)
+          const data = resumed.data as { name: string }
+          return ok(
+            `Resumed "${archive.name}" as NEW active session "${data.name}". Agents join it normally; joiners receive the compact archived context.`,
+          )
+        }
+        default:
+          return fail(
+            "Usage: opencomms session <list|get|save|delete|resume> [name] [--summary ...] [--as name] [--confirm]",
+          )
+      }
+    })
+  return run().catch((error: Error) => fail(`Session command failed: ${error.message}`))
+}
+
+/**
+ * Print the REAL, currently-valid join command for a session on a given
+ * host (work order: the GUI shows this; users never copy UUIDs).
+ */
+function runJoinCommand(projectDir: string, sessionName: string | undefined, host: string | undefined): CliResult {
+  if (!sessionName) return fail("Usage: opencomms join-command <session> [--host <opencode|claude-code|codex>]")
+  const hostId = (host ?? "opencode").toLowerCase()
+  const ch = `Channel=${sessionName}`
+  switch (hostId) {
+    case "opencode":
+      return ok(
+        `Run INSIDE an OpenCode session in this project:\n  /OpenComms Join ${ch} As=<role> [role instructions]\nor have the agent call the tool:\n  opencomms_join(channel="${sessionName}", role="<role>", role_prompt="...")`,
+      )
+    case "claude-code":
+    case "codex":
+      return ok(
+        `Run INSIDE the ${hostId === "codex" ? "Codex" : "Claude Code"} session (MCP tool call by the agent):\n  opencomms_join(channel="${sessionName}", role="<role>", role_prompt="...", spawn_push=true)\n(spawn_push=true enables push delivery via ${hostId === "codex" ? "codex exec resume" : "claude --resume"}).`,
+      )
+    case "claude-desktop":
+    case "chatgpt":
+      return ok(
+        `Run INSIDE the ${hostId} conversation (MCP tool call by the assistant; PULL delivery):\n  opencomms_join(channel="${sessionName}", role="<role>", role_prompt="...")`,
+      )
+    default:
+      return fail(`Unknown host "${hostId}". Supported: opencode, claude-code, codex, claude-desktop, chatgpt.`)
+  }
+}
+
+/** Session commands hit the async state lock and are awaited by main()/tests directly. */
 export function runCli(argv: string[]): CliResult {
   // Find the subcommand's positional arguments and --project wherever they
   // appear ("opencomms members <ch> --project <dir>" AND
@@ -367,8 +559,17 @@ export function runCli(argv: string[]): CliResult {
       return ok(`opencomms ${VERSION} (state schema v${SCHEMA_VERSION})`)
     case "install":
       return runInstall(positional, projectDir)
+    case "session":
+      return fail('Session commands are async: await runSession(["save", "<name>"]) (CLI main handles this).')
+    case "join-command":
+    case "join":
+      return runJoinCommand(projectDir, positional, flagValue(tokens, "--host"))
     case "install-member":
-      return runInstallMember(projectDir, flagValue(tokens, "--host"), flagValue(tokens, "--id") ?? null)
+      return runInstallMember(
+        projectDir,
+        flagValue(tokens, "--host"),
+        flagValue(tokens, "--id") ?? flagValue(tokens, "--name") ?? null,
+      )
     case "uninstall":
       return runUninstall(positional, projectDir)
     case "help":
@@ -382,7 +583,9 @@ export function runCli(argv: string[]): CliResult {
           "  opencomms members <channel> [--project <dir>]",
           "  opencomms doctor [--project <dir>]",
           "  opencomms install <opencode|claude-code|claude-desktop|codex|chatgpt> [--project <dir>]",
-          "  opencomms install-member [--host <id>] [--id <memberId>] [--project <dir>]",
+          "  opencomms install-member [--host <id>] [--id <memberId> | --name <name>] [--project <dir>]",
+          "  opencomms session <list|get|save|delete|resume> [name] [--summary ...] [--as name] [--confirm]",
+          "  opencomms join-command <session> [--host <opencode|claude-code|codex|claude-desktop|chatgpt>]",
           "  opencomms uninstall <host> [--project <dir>]",
           "  opencomms version",
         ].join("\n"),
@@ -396,7 +599,14 @@ export function runCli(argv: string[]): CliResult {
 import { realpathSync } from "node:fs"
 const invoked = process.argv[1] ? realpathSync(process.argv[1]).replace(/\\/g, "/") : ""
 if (/(^|[\\/])cli[\\/](opencomms|main|cli)\.(js|mjs|ts)$/.test(invoked)) {
-  const result = runCli(process.argv.slice(2))
-  if (result.output) process.stdout.write(result.output + "\n")
-  process.exitCode = result.code
+  const emit = (result: { code: number; output: string }): void => {
+    if (result.output) process.stdout.write(result.output + "\n")
+    process.exitCode = result.code
+  }
+  const argv = process.argv.slice(2)
+  if (argv[0] === "session") {
+    void runSession(argv.slice(1), projectDirFromFlag(argv, "--project") ?? process.cwd()).then(emit)
+  } else {
+    emit(runCli(argv))
+  }
 }

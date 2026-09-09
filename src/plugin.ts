@@ -24,9 +24,13 @@ import type { Event } from "@opencode-ai/sdk"
 import { StateStore } from "./core/store.js"
 import { createDeliveryController } from "./hosts/opencode/delivery.js"
 import { createSpawnDeliveryHook } from "./hosts/spawn-delivery.js"
+import { ArchiveStore, buildArchiveContext } from "./core/archive.js"
 import {
+  buildSessionArchive,
   clearStale,
+  commitSessionSave,
   createChannel,
+  deleteSession,
   disconnectChannel,
   history,
   inbox,
@@ -40,6 +44,7 @@ import {
   requeueFailedDelivery,
   REJECT_REASON_INVALID_MESSAGE_TYPE,
   resumeChannel,
+  resumeSession,
   sendMessage,
   status,
   timerAction,
@@ -104,6 +109,7 @@ function slashSub(raw: string): string {
 
 export const OpenCommsPlugin: Plugin = async ({ client, project, directory, worktree }) => {
   const store = new StateStore(directory)
+  const archives = new ArchiveStore(directory)
   const projectId = project.id
   const worktreePath = worktree || directory
 
@@ -191,6 +197,22 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
         role: tool.schema.string().describe(`Role label. ${ROLE_RULES}`),
         role_prompt: tool.schema.string().describe("Persistent role instructions for this session."),
         max_members: tool.schema.number().optional().describe(`Optional membership cap (default ${8}).`),
+        rate_limit: tool.schema
+          .number()
+          .optional()
+          .describe("Optional messages-per-minute cap (1-1000, default 20). Autonomous-loop safeguard."),
+        max_hops: tool.schema
+          .number()
+          .optional()
+          .describe("Optional reply-chain depth cap (1-50, default 4). Autonomous-loop safeguard."),
+        budget_runtime_ms: tool.schema
+          .number()
+          .optional()
+          .describe("Optional conversation runtime budget in ms (min 60000). Sends are rejected past it."),
+        budget_messages: tool.schema
+          .number()
+          .optional()
+          .describe("Optional lifetime budget of delivered messages (incl. retries)."),
       },
       async execute(args, ctx: ToolContext) {
         const role = normalizeRole(args.role)
@@ -207,6 +229,12 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
               project_id: projectId,
               worktree: worktreePath,
               max_members: args.max_members,
+              rate_limit: args.rate_limit,
+              max_hops: args.max_hops,
+              budgets: {
+                max_runtime_ms: args.budget_runtime_ms ?? null,
+                max_delivered_messages: args.budget_messages ?? null,
+              },
               host: "opencode",
               host_session_id: ctx.sessionID,
             }),
@@ -243,6 +271,21 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
             }),
           (r) => r.ok,
         )
+        // Resumed sessions hand the joiner the COMPACT archived context
+        // (purpose/summary/roster) — never the full transcript.
+        if (result.ok) {
+          const parentId = (result.data as { parent_channel_id?: string | null } | undefined)?.parent_channel_id
+          if (parentId) {
+            const archive = archives.get(parentId)
+            if (archive) {
+              const enriched: ToolResult = {
+                ...result,
+                message: `${result.message}\n\n${buildArchiveContext(archive, String((result.data as { name?: string }).name ?? args.channel))}`,
+              }
+              return JSON.stringify(enriched)
+            }
+          }
+        }
         return JSON.stringify(result)
       },
     }),
@@ -267,6 +310,12 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
           .boolean()
           .optional()
           .describe("Deliver to every other member of the channel instead of one recipient."),
+        session_description: tool.schema
+          .string()
+          .optional()
+          .describe(
+            "One-sentence session purpose (max 140 chars). Set ONCE by the first responding agent; later values are ignored.",
+          ),
       },
       async execute(args, ctx: ToolContext) {
         let invalidType = false
@@ -285,6 +334,7 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
                 reply_to: args.reply_to ?? null,
                 to: args.to ?? null,
                 broadcast: args.broadcast,
+                session_description: args.session_description ?? null,
               },
               ctx.sessionID,
             )
@@ -497,6 +547,202 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
           (r) => r.ok,
         )
         return JSON.stringify(result)
+      },
+    }),
+
+    opencomms_save_session: tool({
+      description:
+        "SAVE the current session (archival, NOT deletion): stops autonomous activity, preserves an ARCHIVE (description, summary, final roster, role prompts, full message history) and removes the session from live state. Pass a short structured `summary` of decisions/completed work/known issues for future agents. Resume later with opencomms_resume_session (creates a NEW session linked to this archive).",
+      args: {
+        channel: tool.schema.string().describe("Channel name (case-insensitive)."),
+        summary: tool.schema
+          .string()
+          .optional()
+          .describe(
+            "Structured summary for future agents: purpose, decisions, completed work, known issues (<= 2000 chars).",
+          ),
+      },
+      async execute(args, ctx: ToolContext) {
+        // Phase A (locked): build + persist the archive, then purge live state.
+        const result = await store.withLock(() => {
+          const state = load()
+          const built = buildSessionArchive(state, {
+            channel: args.channel,
+            session_id: ctx.sessionID,
+            summary: args.summary ?? null,
+          })
+          if (!built.ok) return built
+          const inputs = (built.data as { archive_inputs: Record<string, unknown> }).archive_inputs
+          const archive = archives.fromChannel(
+            inputs as never,
+            inputs["messages"] as never,
+            (inputs["saved_by"] as string | null) ?? null,
+            (inputs["saved_by_role"] as string | null) ?? null,
+            (inputs["summary"] as string | null) ?? null,
+          )
+          if (!archive.summary)
+            archive.summary = `Session "${archive.name}" archived. ${archive.description ?? "No description recorded."}`
+          archives.save(archive)
+          commitSessionSave(state, archive.channel_id)
+          store.save(state)
+          return {
+            ok: true,
+            message: `Session "${archive.name}" SAVED. Autonomous activity stopped; archive written (id ${archive.channel_id}). Resume with opencomms_resume_session.`,
+            data: {
+              archive_id: archive.channel_id,
+              message_count: archive.message_count,
+              summary: archive.summary,
+            },
+          } satisfies ToolResult
+        })
+        return JSON.stringify(result)
+      },
+    }),
+
+    opencomms_resume_session: tool({
+      description:
+        "Resume a SAVED session as a NEW active session: the archive stays intact, the new session is linked to it (parent_channel_id), and joiners receive the compact archived context. Requires membership in the archived session. Agents then join the new session normally.",
+      args: {
+        channel: tool.schema.string().describe("Saved session name (or archive id)."),
+        new_name: tool.schema
+          .string()
+          .optional()
+          .describe("Name for the new session (default: original, suffixed -r2.. when taken)."),
+      },
+      async execute(args, ctx: ToolContext) {
+        let result: ToolResult | null = null
+        await store.withLock(() => {
+          const state = load()
+          const byName = archives.findByName(args.channel)
+          const archive = byName ?? archives.get(args.channel)
+          if (!archive) {
+            result = { ok: false, message: `No saved session matches "${args.channel}".` }
+            return
+          }
+          if (!archive.members.some((m) => m.session_id === ctx.sessionID)) {
+            result = {
+              ok: false,
+              message: `Only archived members may resume "${archive.name}" (you are not in the archived roster). Ask an archived member or the operator (opencomms session resume via CLI).`,
+            }
+            return
+          }
+          result = resumeSession(state, {
+            archive,
+            new_name: args.new_name ?? null,
+            project_id: projectId,
+            worktree: worktreePath,
+          })
+          if (result.ok) store.save(state)
+        })
+        return JSON.stringify(result)
+      },
+    }),
+
+    opencomms_delete_session: tool({
+      description:
+        "DELETE a session permanently (destructive: live state AND archive; no future context). Active sessions require membership; saved sessions are operator-managed via the CLI. Requires confirm=true.",
+      args: {
+        channel: tool.schema.string().describe("Session name (or archive id for saved sessions via CLI only)."),
+        confirm: tool.schema.boolean().describe("Must be true — deletion is permanent."),
+      },
+      async execute(args, ctx: ToolContext) {
+        const result = await store.withLock(() => {
+          const state = load()
+          const decided = deleteSession(state, {
+            channel: args.channel,
+            session_id: ctx.sessionID,
+            confirm: args.confirm === true,
+          })
+          if (!decided.ok) return decided
+          const phase = (decided.data as { phase: string; channel_id: string }).phase
+          const channelId = (decided.data as { phase: string; channel_id: string }).channel_id
+          if (phase === "live") {
+            // Deletion (unlike save) discards everything.
+            const doomed = Object.values(state.messages).filter((m) => m.channel_id === channelId)
+            for (const m of doomed) {
+              delete state.messages[m.message_id]
+              delete state.delivered_to[m.message_id]
+            }
+            for (const key of Object.keys(state.queues)) {
+              const ids = state.queues[key] ?? []
+              const filtered = ids.filter((id) => !doomed.some((m) => m.message_id === id))
+              if (filtered.length !== ids.length) state.queues[key] = filtered
+            }
+            for (const [name, ch] of Object.entries(state.channels)) {
+              if (ch.id === channelId) delete state.channels[name]
+            }
+            store.save(state)
+            return {
+              ok: true,
+              message: `Session ${channelId} DELETED (live state purged; no archive existed for an active session).`,
+            } satisfies ToolResult
+          }
+          const removed = archives.delete(channelId)
+          return {
+            ok: removed,
+            message: removed ? `Archived session ${channelId} DELETED.` : `No archive found for ${channelId}.`,
+          } satisfies ToolResult
+        })
+        return JSON.stringify(result)
+      },
+    }),
+
+    opencomms_archive: tool({
+      description:
+        "Read SAVED session archives (queries, never auto-dumps): mode=list shows all archives; mode=summary gives the COMPACT context (purpose/summary/roster); mode=messages returns the archived message history (bounded). Archives are readable by archived members; operators use the opencomms CLI.",
+      args: {
+        channel: tool.schema
+          .string()
+          .optional()
+          .describe("Session name or archive id (required for summary/messages)."),
+        mode: tool.schema.string().optional().describe("list (default) | summary | messages"),
+        limit: tool.schema.number().optional().describe("Max messages for mode=messages (default 50, max 500)."),
+      },
+      async execute(args, ctx: ToolContext) {
+        const mode = args.mode ?? "list"
+        if (mode === "list") {
+          const all = archives.list()
+          return JSON.stringify({
+            ok: true,
+            message: `${all.length} archived session(s).`,
+            data: { archives: all },
+          })
+        }
+        const byName = archives.findByName(args.channel ?? "")
+        const archive = byName ?? archives.get(args.channel ?? "")
+        if (!archive) return JSON.stringify({ ok: false, message: `No saved session matches "${args.channel ?? ""}".` })
+        if (!archive.members.some((m) => m.session_id === ctx.sessionID)) {
+          return JSON.stringify({
+            ok: false,
+            message: `Only archived members may read "${archive.name}" (you are not in the archived roster).`,
+          })
+        }
+        if (mode === "summary") {
+          return JSON.stringify({
+            ok: true,
+            message: `Compact archived context for "${archive.name}".`,
+            data: { compact_context: buildArchiveContext(archive, archive.name), archive_id: archive.channel_id },
+          })
+        }
+        const limit = args.limit && args.limit > 0 ? Math.min(args.limit, 500) : 50
+        const messages = [...archive.messages].sort((a, b) => b.timestamp - a.timestamp).slice(0, limit)
+        return JSON.stringify({
+          ok: true,
+          message: `${messages.length} of ${archive.message_count} archived messages (newest first).`,
+          data: {
+            messages: messages.map((m) => ({
+              message_id: m.message_id,
+              sender_role: m.sender_role,
+              recipient_role: m.recipient_role,
+              message_type: m.message_type,
+              content: m.content,
+              timestamp: m.timestamp,
+              reply_to: m.reply_to,
+              hop_count: m.hop_count,
+              delivery_status: m.delivery_status,
+            })),
+          },
+        })
       },
     }),
   }

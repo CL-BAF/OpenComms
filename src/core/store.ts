@@ -45,7 +45,7 @@ import {
   type State,
   type StalePolicy,
 } from "./types.js"
-import { defaultTimer, makeMember } from "./engine.js"
+import { defaultTimer, effectiveEndpointCapabilities, makeMember } from "./engine.js"
 
 const LOCK_FILE = ".state.lock"
 /** How long to keep retrying lock acquisition before giving up. */
@@ -99,9 +99,16 @@ function isValidChannel(ch: unknown, legacy = false): boolean {
   if (typeof ch["project_id"] !== "string" || typeof ch["worktree"] !== "string") return false
   if (!Array.isArray(ch["members"])) return false
   const members = ch["members"] as unknown[]
-  // Empty channels are transiently possible but never persisted; treat any
-  // member count beyond the hard cap as tampering.
-  if (members.length === 0 || members.length > DEFAULT_MAX_MEMBERS) return false
+  // Empty channels are transiently possible but never persisted EXCEPT the
+  // precise resumed-not-yet-repopulated case: an ACTIVE session linked to a
+  // parent archive with zero members is the documented resume state.
+  const isResumedEmpty =
+    members.length === 0 &&
+    ch["lifecycle"] === "active" &&
+    typeof ch["parent_channel_id"] === "string" &&
+    (ch["parent_channel_id"] as string).length > 0
+  if (members.length === 0 && !isResumedEmpty) return false
+  if (members.length > DEFAULT_MAX_MEMBERS) return false
   return members.every((m) => isValidMember(m, legacy))
 }
 
@@ -170,6 +177,15 @@ function validateState(
 /** Backfill/migrate older persisted shapes into the current schema. */
 function backfillState(state: State): void {
   for (const channel of Object.values(state.channels)) {
+    for (const member of channel.members) {
+      // Endpoint capabilities are DERIVED from delivery_mode when absent
+      // (additive evolution of spawn_push — see engine
+      // effectiveEndpointCapabilities). Never a schema bump: the field is
+      // optional and mode-derived defaults keep old rows correct.
+      if (!member.endpoint_capabilities) {
+        member.endpoint_capabilities = effectiveEndpointCapabilities(member)
+      }
+    }
     if (typeof channel.max_members !== "number" || Number.isNaN(channel.max_members)) {
       channel.max_members = DEFAULT_MAX_MEMBERS
     } else {
@@ -183,6 +199,29 @@ function backfillState(state: State): void {
     if (!channel.cooldown_until) channel.cooldown_until = {}
     if (!channel.seen_content) channel.seen_content = {}
     if (!Array.isArray(channel.processed_correlations)) channel.processed_correlations = []
+    // Conversation budgets (additive; old channels default to unlimited).
+    if (!channel.budgets || typeof channel.budgets !== "object") {
+      channel.budgets = { max_runtime_ms: null, max_delivered_messages: null }
+    } else {
+      if (channel.budgets.max_runtime_ms === undefined) channel.budgets.max_runtime_ms = null
+      if (channel.budgets.max_delivered_messages === undefined) channel.budgets.max_delivered_messages = null
+      if (!Number.isFinite(channel.budgets.max_runtime_ms)) channel.budgets.max_runtime_ms = null
+      if (!Number.isFinite(channel.budgets.max_delivered_messages)) channel.budgets.max_delivered_messages = null
+    }
+    // Session lifecycle + description + lineage (additive; old channels are
+    // and always were ACTIVE sessions with no description and no parent).
+    if (channel.lifecycle !== "active" && channel.lifecycle !== "saved" && channel.lifecycle !== "deleted") {
+      channel.lifecycle = "active"
+    }
+    if (channel.description === undefined) channel.description = null
+    if (channel.parent_channel_id === undefined) channel.parent_channel_id = null
+    if (typeof channel.delivered_total !== "number" || !Number.isFinite(channel.delivered_total)) {
+      // First backfill of an old channel: count already-delivered envelopes
+      // so lifetime budget accounting does not start from zero.
+      channel.delivered_total = Object.values(state.messages).filter(
+        (m) => m.channel_id === channel.id && (m.delivery_status === "delivered" || m.delivery_status === "in_flight"),
+      ).length
+    }
     // Timer migration: pre-multi-agent timers keyed roles as active_role;
     // current timers key members by session id.
     const legacyTimer = channel.timer as unknown as Record<string, unknown> | undefined
@@ -228,6 +267,13 @@ function backfillState(state: State): void {
         limit_member_id: typeof legacyTimer.limit_member_id === "string" ? legacyTimer.limit_member_id : null,
       }
     }
+  }
+  // Envelope debug fields (additive): old envelopes get explicit nulls so
+  // reads never see undefined; new envelopes carry root_message_id (lineage)
+  // and delivery_method (transport actually used).
+  for (const msg of Object.values(state.messages)) {
+    if (msg.root_message_id === undefined) msg.root_message_id = null
+    if (msg.delivery_method === undefined) msg.delivery_method = null
   }
   if (!Array.isArray(state.errors)) state.errors = []
 }

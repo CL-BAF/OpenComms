@@ -60,11 +60,15 @@ export interface MessageEnvelope {
   message_type: MessageType
   content: string
   reply_to: string | null
+  /** First message of the reply chain this envelope belongs to (self for roots). */
+  root_message_id: string | null
   hop_count: number
   delivery_status: DeliveryStatus
   correlation_id: string
   delivered_at: number | null
   attempts: number
+  /** Transport that actually handed this envelope to the endpoint (set at commit). */
+  delivery_method: "push" | "spawn_push" | "pull" | null
 }
 
 export interface Member {
@@ -92,6 +96,12 @@ export interface Member {
   stale_policy: StalePolicy
   /** Per-member capability overrides (sparse; host profile fills the rest). */
   capabilities?: Partial<HostCapabilities>
+  /**
+   * Endpoint capabilities for delivery routing (additive; defaults are
+   * derived from delivery_mode — see engine effectiveEndpointCapabilities).
+   * Optional: rows written before this field keep working via backfill.
+   */
+  endpoint_capabilities?: Partial<EndpointCapabilities>
 }
 
 /**
@@ -106,6 +116,29 @@ export interface Member {
  *  - unsupported: host cannot receive at all.
  */
 export type DeliveryMode = "push" | "spawn_push" | "pull" | "poll" | "managed_thread" | "unsupported"
+
+/**
+ * Per-MEMBER endpoint capabilities (work order 2026-09-08): what the
+ * member's native endpoint can actually do. Providers are endpoints only —
+ * a conversation mixes push/pull/resumable members freely, and these
+ * capabilities belong to the member, never to the conversation.
+ *
+ * Defaults are DERIVED from delivery_mode (see engine
+ * effectiveEndpointCapabilities); an explicit row overrides the derived
+ * value. Additive + optional: never required, never a breaking migration.
+ *  - push: messages can be handed to the live endpoint.
+ *  - pull: the member can read queued mail with its own tools.
+ *  - resume: the endpoint can be re-opened non-interactively (CLI resume).
+ *  - queue_while_busy: mail handed mid-turn is safe (native queue).
+ *  - interrupt: a live turn can be steered/stopped (no host today).
+ */
+export interface EndpointCapabilities {
+  push: boolean
+  pull: boolean
+  resume: boolean
+  queue_while_busy: boolean
+  interrupt: boolean
+}
 
 export type HostSurface = "cli" | "desktop" | "web" | "api" | "app-server" | "mcp"
 
@@ -157,6 +190,9 @@ export interface HostCapabilities {
   mcpSupport: boolean
 }
 
+/** Session (= channel = conversation) lifecycle. Transitional states (creating/saving/deleting) are in-process only. */
+export type SessionLifecycle = "active" | "saved" | "deleted"
+
 export interface Channel {
   id: string
   name: string
@@ -165,6 +201,12 @@ export interface Channel {
   created_at: number
   paused: boolean
   paused_at: number | null
+  /** Lifecycle state: only "active" sessions accept sends/joins. */
+  lifecycle: SessionLifecycle
+  /** One-sentence session purpose, set once by the first responding agent. */
+  description: string | null
+  /** For resumed sessions: the archived session this one continues. */
+  parent_channel_id: string | null
   members: Member[]
   /** Membership cap for this channel (>= 2). */
   max_members: number
@@ -186,6 +228,16 @@ export interface Channel {
   stale_event_ms: number
   /** Chess-clock timer: tracks cumulative active time per member. */
   timer: ChannelTimer
+  /**
+   * Conversation budgets (work order 2026-09-08): autonomous-run safeguards,
+   * all optional (null = unlimited). Backfilled for old channels.
+   *  - max_runtime_ms: conversation age cap; sends rejected past it.
+   *  - max_delivered_messages: lifetime cap on handed-over envelopes
+   *    (attempts count — retries consume budget, bounding amplification).
+   */
+  budgets: { max_runtime_ms: number | null; max_delivered_messages: number | null }
+  /** Lifetime count of envelopes handed to endpoints (drain-time accounting). */
+  delivered_total: number
 }
 
 export interface ChannelTimer {
@@ -220,6 +272,10 @@ export interface ChannelSummary {
   created_at: number
   paused: boolean
   max_members: number
+  /** Conversation budgets (autonomous-run safeguards). */
+  budgets: { max_runtime_ms: number | null; max_delivered_messages: number | null }
+  /** Lifetime count of envelopes handed to endpoints. */
+  delivered_total: number
   members: Array<{
     session_id: string
     role: string
@@ -229,6 +285,7 @@ export interface ChannelSummary {
     host?: string
     surface?: string
     delivery_mode?: string
+    endpoint_capabilities?: Partial<EndpointCapabilities>
   }>
   queue_lengths: Record<string, number>
   last_message_at: number | null
@@ -254,6 +311,12 @@ export interface SendInput {
   to?: string | null
   /** Deliver to every other member of the channel instead of one target. */
   broadcast?: boolean
+  /**
+   * One-sentence session purpose (work order: session description). The
+   * FIRST responding agent sets it; max 140 chars, newlines stripped,
+   * markdown discouraged by length. Set-once: later values are ignored.
+   */
+  session_description?: string | null
 }
 
 export interface CreateInput {
@@ -270,6 +333,10 @@ export interface CreateInput {
   delivery_mode?: DeliveryMode
   host_session_id?: string | null
   stale_policy?: StalePolicy
+  /** Conversation safeguards: rate window size and reply-chain depth. */
+  rate_limit?: number
+  max_hops?: number
+  budgets?: { max_runtime_ms?: number | null; max_delivered_messages?: number | null }
 }
 
 export interface JoinInput {

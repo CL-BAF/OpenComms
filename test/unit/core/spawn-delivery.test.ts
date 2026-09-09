@@ -15,6 +15,10 @@ import {
   spawnBuilderFor,
   spawnDeliveryRefusal,
   deliverViaSpawn,
+  parseCommandTemplate,
+  resolveBinaryOverride,
+  spawnArgvBudget,
+  isWindowsShimPath,
   type SpawnCommand,
   type SpawnRunnerDeps,
 } from "../../../src/hosts/spawn-delivery.js"
@@ -92,9 +96,10 @@ interface FakeDeps {
   state: State
   spawned: Array<{ cmd: SpawnCommand; message: string }>
   failSpawn: boolean
+  errors: string[]
 }
 
-function makeFakeDeps(state: State, opts: { failSpawn?: boolean } = {}): FakeDeps {
+function makeFakeDeps(state: State, opts: { failSpawn?: boolean; spawnError?: string } = {}): FakeDeps {
   const spawned: Array<{ cmd: SpawnCommand; message: string }> = []
   const errors: string[] = []
   const deps: SpawnRunnerDeps = {
@@ -105,12 +110,12 @@ function makeFakeDeps(state: State, opts: { failSpawn?: boolean } = {}): FakeDep
     spawn: (cmd, message) => {
       spawned.push({ cmd, message })
       return opts.failSpawn
-        ? Promise.resolve({ ok: false, error: "simulated CLI failure" })
+        ? Promise.resolve({ ok: false, error: opts.spawnError ?? "simulated CLI failure" })
         : Promise.resolve({ ok: true, stdout: "ok" })
     },
     recordError: (m) => errors.push(m),
   }
-  return { deps, state, spawned, failSpawn: opts.failSpawn === true }
+  return { deps, state, spawned, failSpawn: opts.failSpawn === true, errors }
 }
 
 test("deliverViaSpawn happy path: drains, spawns with framed batch, commits delivered", async () => {
@@ -223,4 +228,125 @@ test("join with spawn_push flag records spawn_push delivery mode (MCP schema)", 
   })
   assert.equal(joined.ok, true)
   assert.equal(state.channels["spx"]!.members[1]!.delivery_mode, "spawn_push")
+})
+
+// ── P2-1: Windows npm-shim handling (command-template override) ──
+
+test("parseCommandTemplate: quote-aware split, no shell semantics", () => {
+  assert.deepEqual(parseCommandTemplate("node C:\\tools\\cli.js"), ["node", "C:\\tools\\cli.js"])
+  assert.deepEqual(parseCommandTemplate('"C:\\Program Files\\cli\\claude.exe" --flag'), [
+    "C:\\Program Files\\cli\\claude.exe",
+    "--flag",
+  ])
+  assert.deepEqual(parseCommandTemplate("  single  "), ["single"])
+  assert.deepEqual(parseCommandTemplate('""'), [""])
+  assert.throws(() => parseCommandTemplate('"unterminated'), /unterminated quote/)
+})
+
+test("resolveBinaryOverride: plain value = argv[0]; template = executable + prepended args", () => {
+  assert.deepEqual(resolveBinaryOverride(undefined, "claude"), { command: "claude", prependArgs: [] })
+  assert.deepEqual(resolveBinaryOverride("C:\\bin\\claude.exe", "claude"), {
+    command: "C:\\bin\\claude.exe",
+    prependArgs: [],
+  })
+  assert.deepEqual(resolveBinaryOverride('node "C:\\npm\\@openai\\codex bin\\codex.js"', "codex"), {
+    command: "node",
+    prependArgs: ["C:\\npm\\@openai\\codex bin\\codex.js"],
+  })
+  assert.deepEqual(resolveBinaryOverride("node D:\\codex.js --json", "codex"), {
+    command: "node",
+    prependArgs: ["D:\\codex.js", "--json"],
+  })
+})
+
+test("template override flows through the builders (extra argv before host args)", () => {
+  process.env["OPENCOMMS_CODEX_BIN"] = 'node "C:\\npm\\codex.js" --json'
+  try {
+    const cmd = CODEX_SPAWN.buildResumeCommand({ hostSessionId: "s1", cwd: "." })
+    assert.equal(cmd.command, "node")
+    assert.deepEqual(cmd.args, ["C:\\npm\\codex.js", "--json", "exec", "resume", "s1"])
+  } finally {
+    delete process.env["OPENCOMMS_CODEX_BIN"]
+  }
+  process.env["OPENCOMMS_CLAUDE_BIN"] = "node C:\\npm\\claude.js"
+  try {
+    const cmd = CLAUDE_CODE_SPAWN.buildResumeCommand({ hostSessionId: "s2", cwd: "." })
+    assert.equal(cmd.command, "node")
+    assert.deepEqual(cmd.args, ["C:\\npm\\claude.js", "--resume", "s2", "--print"])
+  } finally {
+    delete process.env["OPENCOMMS_CLAUDE_BIN"]
+  }
+})
+
+test("shim detection: .cmd/.bat on win32 only", () => {
+  assert.equal(isWindowsShimPath("C:\\npm\\codex.cmd"), process.platform === "win32")
+  assert.equal(isWindowsShimPath("C:\\bin\\codex.exe"), false)
+  assert.equal(isWindowsShimPath("codex"), false)
+})
+
+test("P2-1: spawn failure with EINVAL carries the actionable shim hint", async () => {
+  const state = emptyState()
+  const member = makeMember({ host: "codex", host_session_id: "codex-1" })
+  seedChannelWithSpawnMember(state, member)
+  sendMessage(state, { channel: "spawn-ch", content: "shim test" }, "sess_sender")
+  const { deps, errors } = makeFakeDeps(state, { failSpawn: true, spawnError: "spawn codex EINVAL" })
+  const outcome = await deliverViaSpawn(deps, member)
+  assert.equal(outcome.status, "failed")
+  assert.match(outcome.detail, /EINVAL/)
+  assert.match(outcome.detail, /OPENCOMMS_CODEX_BIN/)
+  // The failure is persisted in state.errors (visible via opencomms_status).
+  assert.ok(
+    (state.errors ?? []).some((e) => e.message.includes("Spawn delivery") && e.message.includes("EINVAL")),
+    "persisted error recorded",
+  )
+  assert.equal(errors.length, 0, "driver delegates persistence to state.errors for spawn failures")
+  // FIFO preserved after the failed spawn.
+  assert.equal((state.queues[member.session_id] ?? []).length, 1)
+})
+
+// ── P2-2: argv size guard ──
+
+test("P2-2: oversized batch refused BEFORE draining; queue untouched; no spawn", async () => {
+  const state = emptyState()
+  const member = makeMember()
+  seedChannelWithSpawnMember(state, member)
+  // Three 45k-char messages (each under the 100k single-message send limit)
+  // sum past every platform budget (win32 30k / POSIX 120k).
+  for (let i = 0; i < 3; i++) {
+    const sent = sendMessage(state, { channel: "spawn-ch", content: `m${i} ` + "x".repeat(45_000) }, "sess_sender")
+    assert.equal(sent.ok, true)
+  }
+  const { deps, spawned, errors } = makeFakeDeps(state)
+
+  const outcome = await deliverViaSpawn(deps, member)
+  assert.equal(outcome.status, "skipped")
+  assert.match(outcome.detail, /argv limit/)
+  assert.equal(spawned.length, 0, "no doomed spawn attempted")
+  assert.equal((state.queues[member.session_id] ?? []).length, 3, "queue left untouched")
+  for (const m of Object.values(state.messages)) assert.equal(m.delivery_status, "pending", "not drained")
+  assert.ok(errors.some((e) => e.includes("spawn argv limit") && e.includes("switch this member to pull")))
+
+  // Repeat attempt: no duplicate error spam (guard dedups per message id).
+  const outcome2 = await deliverViaSpawn(deps, member)
+  assert.equal(outcome2.status, "skipped")
+  assert.equal(errors.filter((e) => e.includes("spawn argv limit")).length, 1)
+})
+
+test("spawn argv budget is platform-aware and conservative", () => {
+  assert.equal(spawnArgvBudget("win32"), 30_000)
+  assert.equal(spawnArgvBudget("linux"), 120_000)
+  assert.equal(spawnArgvBudget("darwin"), 120_000)
+  assert.ok(spawnArgvBudget("win32") < 32_767, "Windows CreateProcess limit respected with headroom")
+})
+
+test("normal messages unaffected by the size guard (fit within budget)", async () => {
+  const state = emptyState()
+  const member = makeMember()
+  seedChannelWithSpawnMember(state, member)
+  const sent = sendMessage(state, { channel: "spawn-ch", content: "normal sized" }, "sess_sender")
+  assert.equal(sent.ok, true)
+  const { deps, spawned } = makeFakeDeps(state)
+  const outcome = await deliverViaSpawn(deps, member)
+  assert.equal(outcome.status, "delivered")
+  assert.equal(spawned.length, 1)
 })

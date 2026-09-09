@@ -295,4 +295,5 @@ test("unknown command exits 1 with help pointer; help lists commands", () => {
   assert.equal(help.code, 0)
   assert.match(help.output, /doctor/)
   assert.match(help.output, /install-member/)
+  assert.match(help.output, /session/)
 })

@@ -186,7 +186,8 @@ async function drainForHook(
     }
     if (parts.length === 0) return {}
     // Commit in_flight -> delivered: the additionalContext is returned to
-    // the host in this same response, so delivery is now complete.
+    // the host in this same response, so delivery is now complete. The
+    // member consumed the content at its own boundary = "pull".
     await store.withLock(() => {
       const state2 = store.load()
       if (boundMemberId)
@@ -194,6 +195,7 @@ async function drainForHook(
           state2,
           boundMemberId,
           linked.pairs.map((p) => p.id),
+          "pull",
         )
       store.save(state2)
     })

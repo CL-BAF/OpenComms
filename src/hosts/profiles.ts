@@ -135,6 +135,28 @@ export const CHATGPT_CAPABILITIES: HostCapabilities = {
   mcpSupport: true,
 }
 
+/**
+ * Ollama / local-model agents — FIRST-CLASS members WITHOUT vendor session
+ * ids (work order 2026-09-08). A local agent (any script/model server that
+ * speaks MCP over stdio) joins via the shared OpenComms MCP server with a
+ * pinned member id; its "native session" is implementation-specific and
+ * never used for routing. Delivery is PULL (the agent calls opencomms_pull)
+ * unless it fronts a spawn-capable CLI. Detection: `ollama` on PATH.
+ */
+export const OLLAMA_CAPABILITIES: HostCapabilities = {
+  sessionIdentity: false, // local agents have no vendor session ids (by design)
+  sessionDiscovery: false,
+  existingSessionLinking: false,
+  sessionResume: false,
+  promptDelivery: false, // PULL: the agent reads its queue with opencomms_pull
+  idleDetection: false,
+  lifecycleEvents: false,
+  roleInjection: "none",
+  toolRegistration: true, // shared MCP server (stdio, pinned identity)
+  commandRegistration: false,
+  mcpSupport: true,
+}
+
 export const HOST_CAPABILITY_PROFILES: Record<string, HostCapabilities> = {
   opencode: OPENCODE_CAPABILITIES,
   "claude-code": CLAUDE_CODE_CAPABILITIES,
@@ -142,4 +164,5 @@ export const HOST_CAPABILITY_PROFILES: Record<string, HostCapabilities> = {
   codex: CODEX_CLI_CAPABILITIES,
   "codex-app-server": CODEX_APP_SERVER_CAPABILITIES,
   chatgpt: CHATGPT_CAPABILITIES,
+  ollama: OLLAMA_CAPABILITIES,
 }

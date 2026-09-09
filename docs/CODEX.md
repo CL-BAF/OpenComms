@@ -16,11 +16,32 @@ pages — mcp, config, hooks, cli reference — fetched 2026-08-29 /
 | Capability | Status | How |
 |---|---|---|
 | Channel membership / PULL inbox / history / status | SUPPORTED | MCP tools via `[mcp_servers.opencomms]` |
-| **Spawn-push delivery (exec sessions)** | SUPPORTED | join with `spawn_push=true`: senders run `codex exec resume <session-id> "<framed msg>"` (argv array, no shell). TUI-created-session resume is UNVERIFIED — the resume API documents exec sessions |
+| **Spawn-push delivery (exec sessions)** | SUPPORTED | join with `spawn_push=true`: senders run `codex exec resume <session-id> "<framed msg>"` (argv array, no shell). TUI-created-session resume is UNVERIFIED — the resume API documents exec sessions. Windows: npm-distributed `codex.cmd` cannot be spawned without a shell (Node CVE-2024-27980 fix) — set `OPENCOMMS_CODEX_BIN` to a native executable or a command template, e.g. `OPENCOMMS_CODEX_BIN="node C:\path\to\codex.js"`. Batches above the argv budget (~30k chars on Windows) are refused before spawning, never truncated |
 | Hook-boundary delivery | PARTIAL, OPT-IN | hooks exist but Codex skips untrusted hooks until you approve them in `/hooks` |
 | Push into running TUI turn | UNSUPPORTED | no documented injection path; never attempted |
 | Managed threads (App Server) | EXPERIMENTAL, DOCS-ONLY | no client shipped in v2 — nothing here claims it works |
 | Role injection | PARTIAL | AGENTS.md is the supported per-project instruction surface |
+
+## Native-queue investigation (work order 2026-09-08)
+
+Question: does Codex expose a BETTER native delivery path than `codex exec
+resume`? Findings against the official CLI reference:
+
+- `codex resume <SESSION_ID>` (interactive) — OPENS THE TUI: not
+  automatable, never used by OpenComms.
+- `codex exec resume <SESSION_ID> "<prompt>"` — non-interactive
+  continuation of an existing session. This is the current spawn-push
+  transport. Verified API; targeting/exec-session caveats documented above.
+- `codex app-server` (JSON-RPC over stdio; thread/start|resume,
+  turn/start|steer, turn/completed notifications) — a REAL native queue
+  with per-turn lifecycle events, but only for threads OpenComms OWNS or
+  explicitly resumes via the app-server protocol; attaching to a
+  user-owned interactive TUI session is NOT verified. This is the
+  EXPERIMENTAL `codex-app-server` profile (managed_thread delivery mode) —
+  no client shipped in v2; it stays docs-only until implemented and
+  tested. **Decision: keep `exec resume` as the working transport; the
+  app-server path is the future upgrade, preferred only if it
+  demonstrably improves busy-behaviour/ordering for real sessions.**
 
 ## Install
 

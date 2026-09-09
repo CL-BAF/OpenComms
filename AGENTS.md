@@ -66,8 +66,12 @@ Persisted at `<project>/.opencomms/state.json` (`src/core/types.ts`), `StateStor
 ## Delivery invariants (CLIâ†”CLI autonomy, verified 2026-09-08)
 
 - **Owner-side delivery**: each OpenCode TUI/`serve` = own server + plugin instance + bus. An instance prompts ONLY sessions it has seen events for (`delivery.markLocal`); the fs-watch wake (`fs.watchFile` on state.json) makes the recipient's OWN instance pick up mail queued by another process. Cross-server prompting degrades rendering and is used only as a 5s fallback for ownerless PUSH members. Evidence + topology matrix: `docs/OPENCODE.md`.
-- **Two-phase delivery**: drain marks `in_flight` (persisted pre-prompt) â†’ `commitDelivery` after the host accepts â† `delivered`. Crash between = `sweepInFlight` re-queues at next plugin start (at-least-once on that window).
-- New engine surface: `commitDelivery`, `sweepInFlight`, `pendingRecipients` (`src/core/engine.ts`); controller: `src/hosts/opencode/delivery.ts`.
+- **Two-phase delivery**: drain marks `in_flight` (persisted pre-prompt) â†’ `commitDelivery` after the host accepts â† `delivered`. Crash between = `sweepInFlight` re-queues at next plugin start (at-least-once on that window). Retries dead-letter as `failed` after `MAX_DELIVERY_ATTEMPTS` (5).
+- **Spawn-push (Claude Code / Codex)**: documented CLI resume (`claude --resume <id> --print`, `codex exec resume <id>`) invoked as an argv-array child process (NO shell). Gate: `spawn_push` mode + bound `host_session_id` + host builder; Windows npm `.cmd` shims need `OPENCOMMS_CLAUDE_BIN`/`OPENCOMMS_CODEX_BIN` (native binary or quote-aware command template); batches over the argv budget (~30k win32) are refused pre-drain, never truncated.
+- **Endpoint capabilities** per member (`effectiveEndpointCapabilities`): mode-derived `push/pull/resume/queue_while_busy/interrupt`, explicit overrides win.
+- **Session lifecycle** (`active | saved | deleted`): Save archives (summary/roster/prompts/messages) to `.opencomms/archives/<id>.json` and purges live state; Resume creates a NEW linked session (empty members = validator-allowed only for resumed channels; joiners get COMPACT context, never the transcript); Delete is destructive (confirm-gated). Description: set-once ≤140 chars via `send.session_description`.
+- **Budgets** per channel (`budgets.max_runtime_ms`, `budgets.max_delivered_messages`): enforced at send; `delivered_total` counts handovers incl. retries. `rate_limit`/`max_hops` configurable at create.
+- New engine surface: `commitDelivery`, `sweepInFlight`, `pendingRecipients`, `effectiveEndpointCapabilities`, `buildSessionArchive`, `commitSessionSave`, `resumeSession`, `deleteSession` (`src/core/engine.ts`); controllers: `src/hosts/opencode/delivery.ts`, `src/hosts/spawn-delivery.ts`; archives: `src/core/archive.ts`.
 
 ## 5. Most Common Tasks
 

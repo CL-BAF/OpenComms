@@ -10,7 +10,10 @@
 
 import {
   commitDelivery,
+  buildSessionArchive,
+  commitSessionSave,
   createChannel,
+  deleteSession,
   disconnectChannel,
   drainForDelivery,
   formatUntrustedMessage,
@@ -20,6 +23,7 @@ import {
   kickChannel,
   pauseChannel,
   resumeChannel,
+  resumeSession,
   sendMessage,
   status,
   updateRole,
@@ -28,6 +32,7 @@ import type { DeliveryMode, SenderMessageType, State, ToolResult } from "../core
 import { authorizeMember, pinnedMember } from "./identity.js"
 import type { McpStore } from "./store-types.js"
 import type { McpToolDef, ToolPayload } from "./server.js"
+import { ArchiveStore, buildArchiveContext, type SessionArchive } from "../core/archive.js"
 
 export interface McpIo {
   /** Locked mutate + save-when-ok. */
@@ -54,6 +59,8 @@ export interface McpToolConfig {
    * claude-code/codex CLI instances enable it.
    */
   spawnDelivery?: SpawnDeliveryHook
+  /** Session archives (Save/Resume/Delete/archive reads). */
+  archives?: ArchiveStore
 }
 
 /** Async hook the host entrypoint provides; sees the recipients that were queued. */
@@ -139,7 +146,16 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
               : { mode: "none" as const, window_ms: null },
         }
         return kind === "create"
-          ? createChannel(state, { ...common, max_members: num(args["max_members"]) })
+          ? createChannel(state, {
+              ...common,
+              max_members: num(args["max_members"]),
+              rate_limit: num(args["rate_limit"]),
+              max_hops: num(args["max_hops"]),
+              budgets: {
+                max_runtime_ms: num(args["budget_runtime_ms"]) ?? null,
+                max_delivered_messages: num(args["budget_messages"]) ?? null,
+              },
+            })
           : joinChannel(state, common)
       })
       .then(wrap)
@@ -159,10 +175,26 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
           type: "boolean",
           description: "Enable spawn-push delivery (claude --resume / codex exec resume).",
         },
+        rate_limit: { type: "number", description: "Optional messages-per-minute cap (1-1000, default 20)." },
+        max_hops: { type: "number", description: "Optional reply-chain depth cap (1-50, default 4)." },
+        budget_runtime_ms: { type: "number", description: "Optional conversation runtime budget in ms (min 60000)." },
+        budget_messages: {
+          type: "number",
+          description: "Optional lifetime budget of delivered messages (incl. retries).",
+        },
       },
       required: ["channel", "role", "role_prompt"],
     },
-    execute: async (args) => runJoinLike("create", args),
+    execute: async (args) =>
+      runJoinLike("create", {
+        ...args,
+        rate_limit: num(args["rate_limit"]),
+        max_hops: num(args["max_hops"]),
+        budgets: {
+          max_runtime_ms: num(args["budget_runtime_ms"]) ?? null,
+          max_delivered_messages: num(args["budget_messages"]) ?? null,
+        },
+      }),
   })
 
   const joinTool = (): McpToolDef => ({
@@ -215,6 +247,199 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
     },
   })
 
+  const saveTool = (): McpToolDef => ({
+    name: "opencomms_save_session",
+    description:
+      "SAVE the current session (archival, NOT deletion): stops autonomous activity, archives description/summary/roster/role prompts/message history, and removes the session from live state. Pass a structured summary (purpose, decisions, completed work, known issues) for future agents. Resume later with opencomms_resume_session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channel: { type: "string", description: "Channel name (case-insensitive)." },
+        summary: { type: "string", description: "Structured summary for future agents (<= 2000 chars)." },
+      },
+      required: ["channel"],
+    },
+    execute: async (args) => {
+      if (!cfg.archives) return denial("This OpenComms MCP instance has no archive store configured.")
+      const payload = await io.mutate((state) => {
+        const a = authorizeMember(state, cfg.env)
+        if (!a.ok) return { ok: false, message: a.message }
+        const built = buildSessionArchive(state, {
+          channel: str(args["channel"]),
+          session_id: a.member_id,
+          summary: optStr(args["summary"]),
+        })
+        if (!built.ok) return built
+        const inputs = (built.data as { archive_inputs: Record<string, unknown> }).archive_inputs
+        const archive = cfg.archives!.fromChannel(
+          inputs as never,
+          inputs["messages"] as never,
+          (inputs["saved_by"] as string | null) ?? null,
+          (inputs["saved_by_role"] as string | null) ?? null,
+          (inputs["summary"] as string | null) ?? null,
+        )
+        if (!archive.summary)
+          archive.summary = `Session "${archive.name}" archived. ${archive.description ?? "No description recorded."}`
+        cfg.archives!.save(archive)
+        commitSessionSave(state, archive.channel_id)
+        return {
+          ok: true,
+          message: `Session "${archive.name}" SAVED. Autonomous activity stopped; archive written. Resume with opencomms_resume_session.`,
+          data: { archive_id: archive.channel_id, message_count: archive.message_count },
+        } satisfies ToolResult
+      })
+      return wrap(payload)
+    },
+  })
+
+  const resumeTool = (): McpToolDef => ({
+    name: "opencomms_resume_session",
+    description:
+      "Resume a SAVED session as a NEW active session: the archive stays intact, the new session links to it, and joiners receive the compact archived context. Requires membership in the archived session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channel: { type: "string", description: "Saved session name (or archive id)." },
+        new_name: {
+          type: "string",
+          description: "Optional name for the new session (default: original, suffixed -r2.. when taken).",
+        },
+      },
+      required: ["channel"],
+    },
+    execute: async (args) => {
+      if (!cfg.archives) return denial("This OpenComms MCP instance has no archive store configured.")
+      const payload = await io.mutate((state) => {
+        const a = authorizeMember(state, cfg.env)
+        if (!a.ok) return { ok: false, message: a.message }
+        const byName = cfg.archives!.findByName(str(args["channel"]))
+        const archive: SessionArchive | null = byName ?? cfg.archives!.get(str(args["channel"]))
+        if (!archive) return { ok: false, message: `No saved session matches "${str(args["channel"])}".` }
+        if (!archive.members.some((m) => m.session_id === a.member_id)) {
+          return { ok: false, message: `Only archived members may resume "${archive.name}".` }
+        }
+        return resumeSession(state, {
+          archive,
+          new_name: optStr(args["new_name"]),
+          project_id: cfg.projectId,
+          worktree: cfg.worktree,
+        })
+      })
+      return wrap(payload)
+    },
+  })
+
+  const deleteSessionTool = (): McpToolDef => ({
+    name: "opencomms_delete_session",
+    description:
+      "DELETE a session permanently (destructive: live state AND archive; no future context). Active sessions require membership; SAVED sessions are operator-managed via the CLI. Requires confirm=true.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channel: { type: "string", description: "Session name." },
+        confirm: { type: "boolean", description: "Must be true — deletion is permanent." },
+      },
+      required: ["channel", "confirm"],
+    },
+    execute: async (args) => {
+      if (!cfg.archives) return denial("This OpenComms MCP instance has no archive store configured.")
+      const payload = await io.mutate((state) => {
+        const a = authorizeMember(state, cfg.env)
+        if (!a.ok) return { ok: false, message: a.message }
+        const decided = deleteSession(state, {
+          channel: str(args["channel"]),
+          session_id: a.member_id,
+          confirm: args["confirm"] === true,
+        })
+        if (!decided.ok) return decided
+        const { phase, channel_id: channelId } = decided.data as { phase: string; channel_id: string }
+        if (phase === "live") {
+          const doomed = Object.values(state.messages).filter((m) => m.channel_id === channelId)
+          for (const m of doomed) {
+            delete state.messages[m.message_id]
+            delete state.delivered_to[m.message_id]
+          }
+          for (const key of Object.keys(state.queues)) {
+            const ids = state.queues[key] ?? []
+            const filtered = ids.filter((id) => !doomed.some((m) => m.message_id === id))
+            if (filtered.length !== ids.length) state.queues[key] = filtered
+          }
+          for (const name of Object.keys(state.channels)) {
+            const ch = state.channels[name]
+            if (ch && ch.id === channelId) delete state.channels[name]
+          }
+          return { ok: true, message: `Session ${channelId} DELETED (live state purged).` } satisfies ToolResult
+        }
+        const removed = cfg.archives!.delete(channelId)
+        return {
+          ok: removed,
+          message: removed ? `Archived session ${channelId} DELETED.` : `No archive found for ${channelId}.`,
+        } satisfies ToolResult
+      })
+      return wrap(payload)
+    },
+  })
+
+  const archiveTool = (): McpToolDef => ({
+    name: "opencomms_archive",
+    description:
+      "Read SAVED session archives (queries, never auto-dumps): mode=list shows all archives; mode=summary gives the COMPACT context; mode=messages returns the archived history (bounded). Archived members only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channel: { type: "string", description: "Session name or archive id (required for summary/messages)." },
+        mode: { type: "string", enum: ["list", "summary", "messages"], description: "Default: list" },
+        limit: { type: "number", description: "Max messages for mode=messages (default 50, max 500)." },
+      },
+      required: [],
+    },
+    execute: async (args) => {
+      if (!cfg.archives) return denial("This OpenComms MCP instance has no archive store configured.")
+      const mode = str(args["mode"]) || "list"
+      if (mode === "list") {
+        return wrap({
+          ok: true,
+          message: `${cfg.archives.list().length} archived session(s).`,
+          data: { archives: cfg.archives.list() },
+        })
+      }
+      const byName = cfg.archives.findByName(str(args["channel"]))
+      const archive: SessionArchive | null = byName ?? cfg.archives.get(str(args["channel"]))
+      if (!archive) return denial(`No saved session matches "${str(args["channel"])}".`)
+      const pin = pinnedMember(cfg.env)
+      if (!pin || !archive.members.some((m) => m.session_id === pin.member_id)) {
+        return denial(`Only archived members may read "${archive.name}".`)
+      }
+      if (mode === "summary") {
+        return wrap({
+          ok: true,
+          message: `Compact archived context for "${archive.name}".`,
+          data: { compact_context: buildArchiveContext(archive, archive.name), archive_id: archive.channel_id },
+        })
+      }
+      const limit = num(args["limit"]) ?? 50
+      const messages = [...archive.messages]
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, Math.max(1, Math.min(500, limit)))
+      return wrap({
+        ok: true,
+        message: `${messages.length} of ${archive.message_count} archived messages (newest first).`,
+        data: {
+          messages: messages.map((m) => ({
+            message_id: m.message_id,
+            sender_role: m.sender_role,
+            recipient_role: m.recipient_role,
+            message_type: m.message_type,
+            content: m.content,
+            timestamp: m.timestamp,
+            hop_count: m.hop_count,
+            delivery_status: m.delivery_status,
+          })),
+        },
+      })
+    },
+  })
+
   return [
     createTool(),
     joinTool(),
@@ -238,6 +463,10 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
             description: "Target member: session id or role label (required on 3+ member channels).",
           },
           broadcast: { type: "boolean", description: "Deliver to every other member instead of one." },
+          session_description: {
+            type: "string",
+            description: "One-sentence session purpose (max 140 chars). Set ONCE by the first responding agent.",
+          },
         },
         required: ["channel", "content"],
       },
@@ -252,6 +481,7 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
               reply_to: optStr(args["reply_to"]),
               to: optStr(args["to"]),
               broadcast: args["broadcast"] === true,
+              session_description: optStr(args["session_description"]),
             },
             memberId,
           ),
@@ -314,6 +544,7 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
             state,
             memberId,
             drained.map((p) => p.message_id),
+            "pull",
           )
           // Per-envelope channel provenance; framed as untrusted peer data.
           const framed = drained.map((pair) => {
@@ -416,5 +647,9 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
         ),
     },
     ...(cfg.admin ? [kickTool()] : []),
+    saveTool(),
+    resumeTool(),
+    deleteSessionTool(),
+    archiveTool(),
   ]
 }

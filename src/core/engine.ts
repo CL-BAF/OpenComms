@@ -24,6 +24,7 @@ import {
   type DeliveryMode,
   type DeliveryStatus,
   type DisconnectInput,
+  type EndpointCapabilities,
   type HistoryInput,
   type HostSurface,
   type InboxInput,
@@ -35,6 +36,7 @@ import {
   type PauseInput,
   type ResumeInput,
   type SendInput,
+  type SessionLifecycle,
   type State,
   type StatusInput,
   type StatusReport,
@@ -50,6 +52,23 @@ export const DEFAULT_DELIVERY_COOLDOWN_MS = 1_000
 export const DEFAULT_STALE_EVENT_MS = 5 * 60_000
 /** Hard retention cap on persisted envelopes; older ones are pruned. */
 export const MAX_PERSISTED_MESSAGES = 2_000
+/** Per-message description cap (one short sentence). */
+export const MAX_SESSION_DESCRIPTION = 140
+/**
+ * How many NEW active sessions a single archive may spawn (rename ladder
+ * name, name-r2, name-r3...). Bounds resume-name flooding.
+ */
+export const MAX_RESUME_LADDER = 8
+
+/** Lifecycle guard shared by all mutating operations. */
+export function lifecycleRefusal(channel: Channel, op: string): string | null {
+  if (channel.lifecycle === "active") return null
+  const hint =
+    channel.lifecycle === "saved"
+      ? `The session is SAVED (archived). Resume it first: opencomms session resume ${channel.name} (creates a new active session with the archived context).`
+      : "The session was DELETED and gives no future context."
+  return `Cannot ${op} on a ${channel.lifecycle} session. ${hint}`
+}
 
 /**
  * Structured rejection reason for invalid message types. The plugin layer
@@ -127,6 +146,28 @@ export function defaultStalePolicy(): StalePolicy {
 }
 
 /**
+ * Effective per-member endpoint capabilities: mode-derived defaults
+ * overridden by the member's explicit endpoint_capabilities row. Providers
+ * are endpoints only — this is the routing-facing view of what a member's
+ * native session can do, independent of provider identity.
+ */
+export function effectiveEndpointCapabilities(member: {
+  delivery_mode: DeliveryMode
+  endpoint_capabilities?: Partial<EndpointCapabilities>
+}): EndpointCapabilities {
+  const derived: Record<DeliveryMode, EndpointCapabilities> = {
+    push: { push: true, pull: true, resume: false, queue_while_busy: true, interrupt: false },
+    spawn_push: { push: true, pull: true, resume: true, queue_while_busy: false, interrupt: false },
+    pull: { push: false, pull: true, resume: false, queue_while_busy: true, interrupt: false },
+    poll: { push: false, pull: true, resume: false, queue_while_busy: true, interrupt: false },
+    managed_thread: { push: true, pull: true, resume: true, queue_while_busy: true, interrupt: false },
+    unsupported: { push: false, pull: false, resume: false, queue_while_busy: false, interrupt: false },
+  }
+  const base = derived[member.delivery_mode] ?? derived["unsupported"]!
+  return { ...base, ...(member.endpoint_capabilities ?? {}) }
+}
+
+/**
  * Fill the schema-v2 member model for a joining session. Adapters pass
  * host/surface/delivery_mode; Core fills conservative defaults so legacy
  * callers keep working unchanged (push delivery, window staleness). The
@@ -142,9 +183,11 @@ export function makeMember(
     delivery_mode?: DeliveryMode | undefined
     host_session_id?: string | null | undefined
     stale_policy?: StalePolicy | undefined
+    endpoint_capabilities?: Partial<EndpointCapabilities> | undefined
   },
   now: number,
 ): Member {
+  const deliveryMode = input.delivery_mode ?? "push"
   return {
     session_id: input.session_id,
     role: input.role,
@@ -154,9 +197,13 @@ export function makeMember(
     stale_at: null,
     host: input.host ?? "generic",
     surface: input.surface ?? "cli",
-    delivery_mode: input.delivery_mode ?? "push",
+    delivery_mode: deliveryMode,
     host_session_id: input.host_session_id ?? null,
     stale_policy: input.stale_policy ?? { mode: "window", window_ms: DEFAULT_STALE_EVENT_MS },
+    endpoint_capabilities: {
+      ...effectiveEndpointCapabilities({ delivery_mode: deliveryMode }),
+      ...(input.endpoint_capabilities ?? {}),
+    },
   }
 }
 
@@ -331,6 +378,31 @@ function sweepSeenContent(channel: Channel, now: number): void {
 
 /** â”€â”€ Channel lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
+/** Optional int clamped into [min,max]; undefined/null/non-finite → fallback. */
+function clampOptionalInt(value: number | undefined | null, min: number, max: number, fallback: number): number {
+  if (value === undefined || value === null || !Number.isFinite(value)) return fallback
+  return Math.max(min, Math.min(max, Math.floor(value)))
+}
+
+/** Optional positive number clamped into [min,max]; undefined/null → null (unlimited). */
+function clampOptionalPositive(value: number | undefined | null, min: number, max: number): number | null {
+  if (value === undefined || value === null || !Number.isFinite(value)) return null
+  return Math.max(min, Math.min(max, Math.floor(value)))
+}
+
+/** Conversation budget guard shared by sends (runtime + lifetime caps). */
+function budgetRefusal(channel: Channel, now: number): string | null {
+  const budgets = channel.budgets
+  if (!budgets) return null
+  if (budgets.max_runtime_ms !== null && now - channel.created_at > budgets.max_runtime_ms) {
+    return `Conversation "${channel.name}" has exhausted its runtime budget (${Math.round(budgets.max_runtime_ms / 60_000)} min). Pause, extend, or start a new conversation.`
+  }
+  if (budgets.max_delivered_messages !== null && channel.delivered_total >= budgets.max_delivered_messages) {
+    return `Conversation "${channel.name}" has exhausted its message budget (${budgets.max_delivered_messages} delivered). Pause, raise the budget, or start a new conversation.`
+  }
+  return null
+}
+
 export function createChannel(state: State, input: CreateInput): ToolResult {
   const name = normalizeChannelName(input.channel)
   if (!name) return fail("Channel name is required.")
@@ -361,6 +433,12 @@ export function createChannel(state: State, input: CreateInput): ToolResult {
       ? Math.max(2, Math.min(DEFAULT_MAX_MEMBERS, Math.floor(input.max_members)))
       : DEFAULT_MAX_MEMBERS
 
+  // Conversation safeguards (clamped to sane ranges; null = unlimited).
+  const rateLimit = clampOptionalInt(input.rate_limit, 1, 1000, DEFAULT_RATE_LIMIT)
+  const maxHops = clampOptionalInt(input.max_hops, 1, 50, DEFAULT_MAX_HOPS)
+  const maxRuntime = clampOptionalPositive(input.budgets?.max_runtime_ms, 60_000, 30 * 24 * 60 * 60_000)
+  const maxDelivered = clampOptionalPositive(input.budgets?.max_delivered_messages, 1, 1_000_000)
+
   const channel: Channel = {
     id: newChannelId(),
     name,
@@ -389,11 +467,16 @@ export function createChannel(state: State, input: CreateInput): ToolResult {
     cooldown_until: {},
     seen_content: {},
     processed_correlations: [],
-    max_hops: DEFAULT_MAX_HOPS,
-    rate_limit: DEFAULT_RATE_LIMIT,
+    max_hops: maxHops,
+    rate_limit: rateLimit,
     delivery_cooldown_ms: DEFAULT_DELIVERY_COOLDOWN_MS,
     stale_event_ms: DEFAULT_STALE_EVENT_MS,
     timer: defaultTimer(),
+    budgets: { max_runtime_ms: maxRuntime, max_delivered_messages: maxDelivered },
+    delivered_total: 0,
+    lifecycle: "active",
+    description: null,
+    parent_channel_id: null,
   }
 
   state.channels[name] = channel
@@ -418,6 +501,8 @@ export function joinChannel(state: State, input: JoinInput): ToolResult {
   if (!channel) {
     return fail(`Channel "${input.channel}" does not exist. Create it first with /OpenComms Create.`)
   }
+  const lifecycle = lifecycleRefusal(channel, "join")
+  if (lifecycle) return fail(lifecycle)
 
   if (channel.project_id !== input.project_id) {
     return fail(
@@ -483,6 +568,7 @@ export function joinChannel(state: State, input: JoinInput): ToolResult {
     channel_id: channel.id,
     role,
     session_id: input.session_id,
+    parent_channel_id: channel.parent_channel_id,
   })
 }
 
@@ -638,11 +724,13 @@ export function kickChannel(state: State, input: KickInput): ToolResult {
       message_type: "system",
       content: `${kickedRole} (${kickedSessionId}) was removed from the channel by ${caller.role}. Remaining members continue as before; rejoin is possible via Join.`,
       reply_to: null,
+      root_message_id: null,
       hop_count: 0,
       delivery_status: "pending",
       correlation_id: newCorrelationId(),
       delivered_at: null,
       attempts: 0,
+      delivery_method: null,
     }
     state.messages[notice.message_id] = notice
     const queue = state.queues[remaining.session_id] ?? []
@@ -677,9 +765,14 @@ export function sendMessage(state: State, input: SendInput, senderSessionId: str
   if (!sender) {
     return fail(`This session is not a member of channel "${input.channel}".`)
   }
+  const lifecycle = lifecycleRefusal(channel, "send")
+  if (lifecycle) return fail(lifecycle)
   if (channel.paused) {
     return fail(`Channel "${input.channel}" is paused. Resume it before sending.`)
   }
+  const now0 = Date.now()
+  const budget = budgetRefusal(channel, now0)
+  if (budget) return fail(budget)
   if (!input.content.trim()) return fail("Message content is required.")
   if (input.content.length > 100_000) return fail("Message content is too large (max 100,000 characters).")
 
@@ -735,14 +828,18 @@ export function sendMessage(state: State, input: SendInput, senderSessionId: str
   }
 
   // Hop counting: a reply inherits its parent correlation id and increments
-  // the hop count. Chains longer than max_hops are rejected.
+  // the hop count. Chains longer than max_hops are rejected. The ROOT of a
+  // chain is tracked for lineage (root_message_id) without duplicating the
+  // hop cap: root = parent's root, or the parent itself for depth-1 replies.
   let correlationId = newCorrelationId()
   let hopCount = 0
+  let rootMessageId: string | null = null
   if (input.reply_to) {
     const parent = state.messages[input.reply_to]
     if (parent) {
       correlationId = parent.correlation_id
       hopCount = parent.hop_count + 1
+      rootMessageId = parent.root_message_id ?? parent.message_id
     }
   }
   if (hopCount > channel.max_hops) {
@@ -772,17 +869,30 @@ export function sendMessage(state: State, input: SendInput, senderSessionId: str
       message_type: requestedType,
       content: input.content,
       reply_to: input.reply_to ?? null,
+      root_message_id: rootMessageId,
       hop_count: hopCount,
       delivery_status: "pending",
       correlation_id: correlationId,
       delivered_at: null,
       attempts: 0,
+      delivery_method: null,
     }
     state.messages[envelope.message_id] = envelope
     const queue = state.queues[recipient.session_id] ?? []
     queue.push(envelope.message_id)
     state.queues[recipient.session_id] = queue
     envelopes.push(envelope)
+  }
+
+  // Session description (work order: set ONCE by the first responding
+  // agent; one short sentence; later values are ignored).
+  let descriptionRecorded = false
+  if (!channel.description && input.session_description && input.session_description.trim()) {
+    const candidate = input.session_description.replace(/\s+/g, " ").trim().slice(0, MAX_SESSION_DESCRIPTION)
+    if (candidate) {
+      channel.description = candidate
+      descriptionRecorded = true
+    }
   }
 
   // Chess-clock auto-switch: sending hands the clock to the primary
@@ -802,6 +912,7 @@ export function sendMessage(state: State, input: SendInput, senderSessionId: str
     message_ids: envelopes.map((e) => e.message_id),
     recipients: envelopes.map((e) => e.recipient_session_id),
     delivery_status: envelopes[0]!.delivery_status,
+    session_description: descriptionRecorded ? channel.description : undefined,
   })
 }
 
@@ -845,35 +956,56 @@ export function drainForDelivery(state: State, recipientSessionId: string): Deli
  * unshift in reverse keeps first-in-list first-in-queue). Accepts envelopes
  * in either "delivered" or "in_flight" state (crash-window recovery uses the
  * same path as a thrown prompt).
+ *
+ * Retry cap (work order: retries must not create amplification loops): an
+ * envelope whose attempts reached MAX_DELIVERY_ATTEMPTS dead-letters as
+ * "failed" instead of re-queuing — it stays in the message record (visible
+ * in history) but stops consuming delivery attempts.
  */
 export function requeueFailedDelivery(state: State, sessionId: string, deliveredIds: string[]): void {
+  const queue = state.queues[sessionId] ?? []
   for (const id of deliveredIds) {
     const msg = state.messages[id]
-    if (msg && (msg.delivery_status === "delivered" || msg.delivery_status === "in_flight")) {
-      msg.delivery_status = "pending"
+    if (!msg) continue
+    if (msg.delivery_status !== "delivered" && msg.delivery_status !== "in_flight") continue
+    if (msg.attempts >= MAX_DELIVERY_ATTEMPTS) {
+      msg.delivery_status = "failed"
       msg.delivered_at = null
+      continue
     }
+    msg.delivery_status = "pending"
+    msg.delivered_at = null
   }
-  const queue = state.queues[sessionId] ?? []
   for (let i = deliveredIds.length - 1; i >= 0; i--) {
     const id = deliveredIds[i]!
-    if (state.messages[id] && !queue.includes(id)) queue.unshift(id)
+    const msg = state.messages[id]
+    if (msg && msg.delivery_status === "pending" && !queue.includes(id)) queue.unshift(id)
   }
   state.queues[sessionId] = queue
 }
+
+/** Retries before an envelope dead-letters as "failed" (bounds amplification). */
+export const MAX_DELIVERY_ATTEMPTS = 5
 
 /**
  * Mark a batch of in_flight envelopes as actually accepted by the host
  * session. The plugin calls this AFTER client.session.prompt resolved —
  * "delivered" therefore means "the host accepted the prompt", closing the
  * gap where a crash between drain and prompt silently lost messages.
+ * `method` records the transport that actually handed the content over.
  */
-export function commitDelivery(state: State, sessionId: string, messageIds: string[]): void {
+export function commitDelivery(
+  state: State,
+  sessionId: string,
+  messageIds: string[],
+  method: "push" | "spawn_push" | "pull" = "push",
+): void {
   for (const id of messageIds) {
     const msg = state.messages[id]
     if (msg && msg.delivery_status === "in_flight" && msg.recipient_session_id === sessionId) {
       msg.delivery_status = "delivered"
       msg.delivered_at = Date.now()
+      msg.delivery_method = method
     }
   }
 }
@@ -984,6 +1116,9 @@ export function drainQueue(
 
     msg.delivery_status = "in_flight"
     msg.attempts += 1
+    // Budget accounting at handover: retries consume the lifetime budget,
+    // bounding amplification loops (attempt-capped requeues stop earlier).
+    channel.delivered_total += 1
     channel.cooldown_until[recipientSessionId] = now + channel.delivery_cooldown_ms
     const seen = state.delivered_to[msg.message_id] ?? []
     if (!seen.includes(recipientSessionId)) seen.push(recipientSessionId)
@@ -996,6 +1131,191 @@ export function drainQueue(
   return drained
 }
 
+// ── Session lifecycle: save / resume-as-new / delete ─────────────────────
+
+/**
+ * Build the archive payload for a session (PURE — the caller persists via
+ * ArchiveStore, then commits the purge). Saving is NOT deleting: everything
+ * OpenComms received is preserved; only live autonomous activity ends.
+ */
+export function buildSessionArchive(
+  state: State,
+  input: { channel: string; session_id: string | null; summary?: string | null },
+): ToolResult {
+  const channel = findChannel(state, input.channel)
+  if (!channel) return fail(`Channel "${input.channel}" does not exist.`)
+  if (channel.lifecycle !== "active") {
+    return fail(`Session "${channel.name}" is already ${channel.lifecycle}.`)
+  }
+  if (input.session_id) {
+    const member = memberOf(channel, input.session_id)
+    if (!member) return fail(`This session (${input.session_id}) is not a member of "${channel.name}".`)
+  }
+  const channelMessages = Object.values(state.messages).filter((m) => m.channel_id === channel.id)
+  return ok(`Session "${channel.name}" archive payload ready.`, {
+    archive_inputs: {
+      channel_id: channel.id,
+      name: channel.name,
+      parent_channel_id: channel.parent_channel_id,
+      description: channel.description,
+      summary: (input.summary ?? "").trim().slice(0, 2000) || null,
+      members: channel.members,
+      budgets: channel.budgets,
+      created_at: channel.created_at,
+      saved_by: input.session_id,
+      saved_by_role: input.session_id ? (memberOf(channel, input.session_id)?.role ?? null) : null,
+      messages: channelMessages,
+    },
+    message_count: channelMessages.length,
+  })
+}
+
+/**
+ * Live-state purge after the archive file is durably written: remove the
+ * channel, its envelopes, queues, and delivered_to entries. The archive
+ * owns everything now.
+ */
+export function commitSessionSave(state: State, channelId: string): void {
+  const doomedMessages = new Set(
+    Object.values(state.messages)
+      .filter((m) => m.channel_id === channelId)
+      .map((m) => m.message_id),
+  )
+  for (const id of doomedMessages) {
+    delete state.messages[id]
+    delete state.delivered_to[id]
+  }
+  for (const key of Object.keys(state.queues)) {
+    const queue = state.queues[key] ?? []
+    const filtered = queue.filter((id) => !doomedMessages.has(id))
+    if (filtered.length !== queue.length) state.queues[key] = filtered
+  }
+  for (const name of Object.keys(state.channels)) {
+    const ch = state.channels[name]
+    if (ch && ch.id === channelId) delete state.channels[name]
+  }
+}
+
+/**
+ * Resume a saved session as a NEW active session (archive stays put).
+ * The new channel starts with ZERO members — agents join with their real
+ * host sessions and receive the COMPACT archived context in the join
+ * result (never the full transcript). Name ladder: name, name-r2 ...
+ * name-rN (bounded). Caller must have verified archive access.
+ */
+export function resumeSession(
+  state: State,
+  input: {
+    archive: {
+      channel_id: string
+      name: string
+      description: string | null
+      summary: string
+      budgets: { max_runtime_ms: number | null; max_delivered_messages: number | null } | null
+    }
+    new_name?: string | null
+    max_members?: number
+    rate_limit?: number
+    max_hops?: number
+    project_id: string
+    worktree: string
+  },
+): ToolResult {
+  const baseName = normalizeChannelName(input.new_name?.trim() || input.archive.name)
+  if (!baseName || !CHANNEL_NAME_PATTERN.test(baseName)) {
+    return fail(`Invalid session name "${input.new_name ?? input.archive.name}".`)
+  }
+  // Name ladder: base, base-r2 ... base-rN (bounded resume flooding).
+  let name = baseName
+  for (let i = 2; i <= 1 + MAX_RESUME_LADDER; i++) {
+    if (!state.channels[name]) {
+      name = name
+      break
+    }
+    name = `${baseName}-r${i}`
+  }
+  if (state.channels[name]) {
+    return fail(
+      `Session name "${baseName}" is taken and the resume ladder is exhausted (${MAX_RESUME_LADDER}). Pick a new name.`,
+    )
+  }
+  const maxMembers =
+    input.max_members !== undefined
+      ? Math.max(2, Math.min(DEFAULT_MAX_MEMBERS, Math.floor(input.max_members)))
+      : DEFAULT_MAX_MEMBERS
+  const channel: Channel = {
+    id: newChannelId(),
+    name,
+    project_id: input.project_id,
+    worktree: input.worktree,
+    created_at: Date.now(),
+    paused: false,
+    paused_at: null,
+    lifecycle: "active",
+    description: input.archive.description,
+    parent_channel_id: input.archive.channel_id,
+    members: [],
+    max_members: maxMembers,
+    rate: { window_start: Date.now(), count: 0 },
+    cooldown_until: {},
+    seen_content: {},
+    processed_correlations: [],
+    max_hops: clampOptionalInt(input.max_hops, 1, 50, DEFAULT_MAX_HOPS),
+    rate_limit: clampOptionalInt(input.rate_limit, 1, 1000, DEFAULT_RATE_LIMIT),
+    delivery_cooldown_ms: DEFAULT_DELIVERY_COOLDOWN_MS,
+    stale_event_ms: DEFAULT_STALE_EVENT_MS,
+    timer: defaultTimer(),
+    budgets: {
+      max_runtime_ms: input.archive.budgets?.max_runtime_ms ?? null,
+      max_delivered_messages: input.archive.budgets?.max_delivered_messages ?? null,
+    },
+    delivered_total: 0,
+  }
+  state.channels[name] = channel
+  return ok(
+    `Resumed session "${input.archive.name}" as NEW active session "${name}". The archive remains untouched; agents join the new session.`,
+    {
+      channel_id: channel.id,
+      name,
+      parent_channel_id: channel.parent_channel_id,
+      members: [],
+      archive_name: input.archive.name,
+    },
+  )
+}
+
+/**
+ * Delete a session (DESTRUCTIVE): removes the live channel AND its archive
+ * (deleted sessions give no future context). Authorization: an ACTIVE
+ * session requires a member session_id; a SAVED session can be deleted by
+ * the operator via the CLI (session_id null) with confirm=true. Pure: the
+ * caller deletes the archive file (phase: "archive" in the result).
+ */
+export function deleteSession(
+  state: State,
+  input: { channel: string; session_id?: string | null; confirm: boolean },
+): ToolResult {
+  if (!input.confirm) {
+    return fail("Deletion is destructive and permanent (archive included). Pass confirm=true (CLI: --confirm).")
+  }
+  const channel = findChannel(state, input.channel)
+  if (channel) {
+    if (input.session_id) {
+      const member = memberOf(channel, input.session_id)
+      if (!member) return fail(`This session (${input.session_id}) is not a member of "${channel.name}".`)
+    } else if (channel.lifecycle === "active") {
+      return fail(
+        "Refusing to delete an ACTIVE session without a member session_id — operators may delete SAVED sessions via the CLI.",
+      )
+    }
+    return ok(`Session "${channel.name}" marked for deletion (live state).`, { channel_id: channel.id, phase: "live" })
+  }
+  // Not live: the caller may pass an archive id directly.
+  return ok(`Archived session ${input.channel} marked for deletion (archive file).`, {
+    channel_id: input.channel,
+    phase: "archive",
+  })
+}
 /** â”€â”€ Read paths (membership-scoped) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 export function inbox(state: State, input: InboxInput): ToolResult {
@@ -1095,6 +1415,8 @@ export function status(state: State, input: StatusInput): ToolResult {
       created_at: channel.created_at,
       paused: channel.paused,
       max_members: channel.max_members,
+      budgets: channel.budgets,
+      delivered_total: channel.delivered_total,
       members: channel.members.map((m) => ({
         session_id: m.session_id,
         role: m.role,
@@ -1103,6 +1425,7 @@ export function status(state: State, input: StatusInput): ToolResult {
         host: m.host,
         surface: m.surface,
         delivery_mode: m.delivery_mode,
+        endpoint_capabilities: m.endpoint_capabilities,
       })),
       queue_lengths: queueLengths,
       last_message_at: lastMessage?.timestamp ?? null,

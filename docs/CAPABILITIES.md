@@ -98,7 +98,13 @@ Legend for "evidence": implementation path + test file where applicable.
    `host_session_id` (claude-code SessionStart hook). Limitations are
    explicit: never mid-turn; Codex TUI-created session resume UNVERIFIED;
    Claude Desktop and ChatGPT have no identity and no resume API (stay
-   PULL).
+   PULL). Windows npm `.cmd` shims are refused by Node (CVE-2024-27980):
+   the documented fix is a binary/command-template override
+   (`OPENCOMMS_CLAUDE_BIN` / `OPENCOMMS_CODEX_BIN`, quote-aware argv split,
+   no shell); batches exceeding the platform argv budget (~30k chars
+   Windows / ~120k POSIX) are refused BEFORE draining (never truncated;
+   queue untouched; one actionable error). argv-contract verified +
+   unit-tested; live verification against the vendor CLIs pending.
 
 ## Rules this matrix obeys
 

@@ -1,360 +1,281 @@
 ﻿# OpenComms
 
-> A host-neutral, project-local **TypeScript communication platform for coding agents** — link existing sessions from OpenCode, Claude Code, Claude Desktop, and Codex into named channels with open role vocabulary (the classic pair being Builder + Reviewer) — **without creating, owning, or replacing any sessions**.
+> A host-neutral, project-local communication layer for AI coding agents.
+> Link sessions you already have open - OpenCode, Claude Code, Claude Desktop,
+> Codex - into shared multi-agent channels, without creating, owning, or
+> replacing any session.
 
-OpenComms v2 is a shared Core + thin host adapters.
+```
+npm install && npm run build
+node install.mjs C:\path\to\your\project        # install the OpenCode plugin
+```
 
-## Supported hosts (CLIs & GUIs)
+**Version 1.0.0** | TypeScript | MIT | OpenCode >= 1.18.0 (verified against 1.18.25)
 
-| Host | Type | Setup | Status | How members receive messages |
-|------|------|-------|--------|------------------------------|
-| **OpenCode** | CLI (TUI) + headless `serve` + Desktop GUI | plugin (auto-installer) | **FULL** — reference adapter | **PUSH**: delivered automatically when the session is idle; full autonomous agent-to-agent loops |
-| **Claude Code** | CLI | hooks + MCP via `opencomms install claude-code` | **PUSH** (spawn-resume) | `claude --resume <id> --print "<msg>"` — the documented non-interactive resume continues the exact session; join with `spawn_push=true`. Also hook-boundary + `opencomms_pull` (MCP). Never mid-turn |
-| **Codex CLI** | CLI | `config.toml` MCP via `opencomms install codex` | **PUSH** (exec-compatible sessions) | `codex exec resume <id> "<msg>"` — documented non-interactive continuation; join with `spawn_push=true`. TUI-created-session resume is UNVERIFIED; otherwise `opencomms_pull` |
-| **Claude Desktop** | GUI | `.mcpb` extension bundle | PULL (platform limit) | the agent calls `opencomms_pull`; Desktop exposes no session identity and no way to push into a conversation — this is a platform limitation, not an OpenComms one |
-| **ChatGPT** (web/desktop) | GUI | remote-MCP (needs operator-hosted public endpoint) | BLOCKED by platform requirements | would be PULL via a public HTTPS MCP endpoint; ChatGPT requires operator-hosted OAuth — see docs/CHATGPT.md for the exact path |
+---
 
-Notes:
+## Why OpenComms
 
-- **Any mix of these hosts can share one channel** (e.g. an OpenCode Builder pushing work to a Claude Code Reviewer, or Claude Code ↔ Codex directly). Delivery mode is explicit per member (`push | spawn_push | pull | poll | managed_thread`); capabilities are honest — see [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the full evidence-backed matrix. Where a host cannot do something, OpenComms says UNSUPPORTED instead of faking parity.
-- **Autonomous multi-turn messaging** (send → deliver without anyone pressing Enter → reply → deliver back) works on **OpenCode** (verified CLI↔CLI and Desktop — [docs/OPENCODE.md](docs/OPENCODE.md)) and on **Claude Code / Codex CLI members that join with `spawn_push=true`** (the sender's process resumes the recipient's host session via the documented CLI API — `src/hosts/spawn-delivery.ts`). Spawn-push reuses the same loop protections (dedup, rate limit, hop cap, cooldown, FIFO requeue on failure) and passes peer content as untrusted-framed argv data — no terminal keystroke automation anywhere.
-- Shared CLI for setup on any host: `opencomms install|install-member|uninstall|doctor|status|channels|members|version`. Threat model: [docs/SECURITY.md](docs/SECURITY.md).
+Multi-agent coding workflows break down at coordination. OpenComms solves one
+problem well: **reliable, safe communication between agent sessions that already
+exist** - across tabs, terminals, and providers.
 
-## Table of Contents
+- **Link-only.** OpenComms never creates, replaces, or deletes host sessions.
+  Linked sessions keep their own history, model, and permissions.
+- **Autonomous, not runaway.** Messages deliver when a recipient is actually
+  available (idle wake, session resume, or pull), so agents can hold multi-turn
+  conversations without a human pressing Enter on each one. Loop protection
+  (dedup, rate limits, hop caps, cooldowns) keeps autonomy bounded.
+- **Provider-independent core.** A channel is a shared OpenComms space, not a
+  provider session. Native provider sessions are delivery endpoints only.
+  Any mix of hosts can share one channel.
+- **Honest about limits.** Where a host cannot do something, OpenComms reports
+  UNSUPPORTED instead of faking parity. See
+  [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the evidence-backed matrix.
 
-- [Supported hosts (CLIs & GUIs)](#supported-hosts-clis--guis)
-- [What it does](#what-it-does)
-- [Installation](#installation)
-- [Windows / OpenCode Desktop setup](#windows--opencode-desktop-setup)
-- [The two-tab pairing workflow](#the-two-tab-pairing-workflow)
-- [Multi-agent channels (3-8 members) and CLI-to-CLI autonomy](#multi-agent-channels-3-8-members-and-cli-to-cli-autonomy)
-- [Command examples](#command-examples)
-- [Personalized role-prompt examples](#personalized-role-prompt-examples)
-- [How messages are delivered](#how-messages-are-delivered)
-- [How independent prompting works](#how-independent-prompting-works)
-- [Queue, status, pause, resume, and disconnect](#queue-status-pause-resume-and-disconnect)
-- [Persistence and privacy](#persistence-and-privacy)
-- [Permission limitations](#permission-limitations)
-- [Troubleshooting](#troubleshooting)
-- [Supported OpenCode versions](#supported-opencode-versions)
-- [Development and live-test instructions](#development-and-live-test-instructions)
+## Supported hosts
 
-## What it does
+| Host | Setup | Status | How members receive messages |
+|------|-------|--------|------------------------------|
+| **OpenCode** | plugin (auto-installer) | **FULL** (reference adapter) | **PUSH** - delivered automatically when the session is idle; full autonomous agent-to-agent loops |
+| **Claude Code** | hooks + MCP: `opencomms install claude-code` | **PUSH** (spawn-resume) | `claude --resume <id> --print "<msg>"` (documented non-interactive resume); join with `spawn_push=true`. Also hook-boundary delivery + `opencomms_pull`. Never mid-turn |
+| **Codex CLI** | `config.toml` MCP: `opencomms install codex` | **PUSH** (exec-compatible sessions) | `codex exec resume <id> "<msg>"` (documented continuation); join with `spawn_push=true`. TUI-created-session resume is UNVERIFIED. Otherwise `opencomms_pull` |
+| **Claude Desktop** | `.mcpb` extension bundle | **PULL** (platform limit) | The agent calls `opencomms_pull`. Desktop exposes no session identity and no push path - a platform limitation, not an OpenComms one |
+| **ChatGPT** (web/desktop) | remote MCP (operator-hosted) | **BLOCKED** by platform requirements | Would be PULL via a public HTTPS MCP endpoint; ChatGPT requires operator-hosted OAuth - [docs/CHATGPT.md](docs/CHATGPT.md) |
 
-OpenComms connects **root host sessions that you have already opened** for the same project — OpenCode sessions in separate tabs (or CLI terminals), plus members from Claude Code, Claude Desktop, and Codex via the shared MCP tools. Channels hold **2-8 members** under any open role labels (the classic pair being Builder + Reviewer). It never silently creates replacement sessions. All linked sessions remain:
+Any mix of these hosts can share one channel. Delivery mode is explicit per
+member (`push | spawn_push | pull | poll | managed_thread`), with per-member
+**endpoint capabilities** (`push/pull/resume/queue_while_busy/interrupt`)
+derived from the mode and overridable. Autonomous multi-turn messaging is
+verified on OpenCode (CLI-to-CLI and Desktop,
+[docs/OPENCODE.md](docs/OPENCODE.md)); Claude Code / Codex spawn-push is
+argv-contract-verified and unit-tested but NOT yet live-verified against
+the vendor CLIs (guarded live test pending). Windows note: npm-distributed
+CLIs are `.cmd` shims that Node refuses to spawn without a shell — set
+`OPENCOMMS_CLAUDE_BIN` / `OPENCOMMS_CODEX_BIN` to a native executable or a
+command template (e.g. `OPENCOMMS_CODEX_BIN="node C:\path\to\codex.js"`);
+oversized batches are refused before spawning (30k-char Windows command
+line; never truncated).
 
-- Visible in OpenCode Desktop
-- Independently accessible in their original tabs
-- Independently promptable by you
-- Backed by their existing conversation histories
-- In control of their own model and agent selections
+## Session lifecycle: save, resume as new, delete, description
 
-OpenComms only coordinates communication between them.
+An OpenComms **session** (= channel = conversation) has a lifecycle:
+`active → saved (archived) → deleted`.
 
-## Installation
+- **Save** (NOT delete): stops autonomous activity and archives everything
+  OpenComms received — description, the agent-supplied structured summary,
+  final roster with role prompts, and the full message history — into
+  `.opencomms/archives/<id>.json`; live state is purged.
+- **Resume as new**: `opencomms session resume <name> [--as <new-name>]`
+  creates a NEW active session linked to the archive (`parent_channel_id`);
+  joiners receive the COMPACT archived context (purpose/summary/roster) —
+  **never the full transcript**; agents query it via `opencomms_archive`
+  (mode=summary|messages) when they need depth. Session evolution example:
+  design → implementation → security review → GUI dev.
+- **Delete**: destructive (live state AND archive); active sessions require
+  a member, saved sessions are operator-managed; `--confirm` required.
+- **Description**: set ONCE by the first responding agent — pass
+  `session_description` (≤140 chars) with any `opencomms_send`; later
+  values are ignored; failures never break the session.
 
-### From Git
+Operator CLI (provider-independent backend surface, GUI-ready):
 
 ```bash
-git clone https://github.com/CL-BAF/OpenComms.git OpenComms
-cd OpenComms
-npm install
-npm run build
+opencomms session list|get|save|delete|resume
+opencomms join-command <session> [--host opencode|claude-code|codex]
+opencomms install-member --host claude-code --name architect   # human member ids
 ```
 
-This produces `dist/` with the compiled plugin. The entry point is `dist/plugin.js` (`export default OpenCommsPlugin`).
+## Quick start (OpenCode, two tabs)
 
-### Project-local installation
+1. **Install the plugin** (from the repo root):
 
-The bundled installer builds the plugin, copies it into your project's `.opencode/plugins/` directory, and patches your `opencode.json` to register it â€” all in one command:
+   ```bash
+   node install.mjs C:\path\to\your\project
+   ```
 
-```bash
-# from the OpenComms repo root
-node install.mjs C:\path\to\your\project
-```
+   The installer builds `dist/` if needed, copies the plugin into the
+   project's `.opencode/plugins/`, and registers it in `opencode.json`
+   (idempotent; existing config preserved).
 
-Or via npm script:
+2. **Create a channel** in the first OpenCode tab:
 
-```bash
-npm run install:plugin -- C:\path\to\your\project
-```
+   ```text
+   /OpenComms Create Channel=my-feature As=Builder [Implement requests, verify your work, and send completed work to Reviewer with a summary, changed files, verification results, and uncertainties.]
+   ```
 
-The installer:
-- Runs `npm run build` automatically if `dist/` is missing
-- Copies `dist/*` into `<target>/.opencode/plugins/`
-- Adds `".opencode/plugins/plugin.js"` to the `plugin` array in `<target>/opencode.json` (or `opencode.jsonc`)
-- Preserves all existing config and never duplicates the entry on re-runs (idempotent)
+3. **Join from the second tab** (same project, another root session):
 
-If no target directory is given, it installs into the current working directory.
+   ```text
+   /OpenComms Join Channel=my-feature As=Reviewer [Independently inspect Builder's work. Send prioritized findings with locations, impact, expected fixes, and verification steps. Return PASS only when no material defects remain.]
+   ```
 
-If you prefer to wire it manually instead, copy the built plugin into your project and reference it in `opencode.json`:
+Both tabs remain ordinary OpenCode sessions. When Builder sends a review
+request, Reviewer's session receives and processes it automatically when idle -
+no manual wake-up - and Reviewer's reply reaches Builder the same way.
+
+OpenComms rejects: joining the same session twice, one session holding two
+roles, replacing a member without confirmation, linking child sessions (root
+sessions only), and linking sessions from incompatible projects or worktrees.
+
+## Multi-agent channels
+
+Channels are not limited to two members. Up to `max_members` (default 8) agents
+with **any open-vocabulary role labels** share one channel and one history:
+Coordinator / Backend / Frontend / Security / Test / Reviewer, or any shape you
+need.
+
+- **Targeting:** `opencomms_send` with `to=<session_id|role>` reaches exactly
+  one member; `broadcast=true` fans out to every other member. On a 3+ member
+  channel an omitted target is an **error**, never a guess.
+- **Cross-host members:** Claude Code / Claude Desktop / Codex agents join the
+  same channels through the OpenComms MCP tools with per-member pinned
+  identities (`.opencomms/pins/<member_id>.json`) - see
+  [docs/CLAUDE_CODE.md](docs/CLAUDE_CODE.md) and [docs/CODEX.md](docs/CODEX.md).
+- **CLI-to-CLI autonomy:** every OpenCode TUI/`serve` process runs its own
+  server, so delivery is **owner-side**: each instance prompts only the sessions
+  it hosts, and a file-watch wake routes mail queued by another process to the
+  recipient's own instance. Topology matrix and lab evidence:
+  [docs/OPENCODE.md](docs/OPENCODE.md).
+
+## Commands
+
+Slash command (user-facing, deterministic parsing - the model never interprets
+channel names or roles loosely):
 
 ```text
-<your-project>/
-â””â”€â”€ .opencode/
-    â””â”€â”€ plugins/
-        â””â”€â”€ opencomms.js   # copy of dist/plugin.js (+ dist/*.js)
-```
-
-```jsonc
-{
-  "plugin": ["../path/to/OpenComms/dist/plugin.js"]
-}
-```
-
-## Windows / OpenCode Desktop setup
-
-OpenComms is developed and tested on Windows. It uses Windows-safe atomic file writes (temp file + rename with a retry fallback for antivirus/OneDrive handle races). No extra configuration is required beyond installing the plugin and ensuring OpenCode Desktop can resolve your project directory.
-
-State is stored at:
-
-```text
-<project>\.opencomms\state.json
-```
-
-This directory is created on first use and should be added to `.gitignore`.
-
-## The two-tab pairing workflow
-
-### First tab â€” create the channel
-
-Open a normal OpenCode session in your project and run:
-
-```text
-/OpenComms Create Channel=my-feature As=Builder [Implement the user's requests, verify your work, and send completed work to Reviewer with a summary, changed files, verification results, and uncertainties.]
-```
-
-The plugin obtains the current tab's real session ID from the tool execution context and registers **that exact existing session** as `Builder` on channel `my-feature`. No new session is created.
-
-### Second tab â€” join the channel
-
-Open another normal root session in the **same project** and run:
-
-```text
-/OpenComms Join Channel=my-feature As=Reviewer [Independently inspect Builder's work. Send prioritized findings with locations, impact, expected fixes, and verification steps. Return PASS only when no material defects remain.]
-```
-
-The plugin registers the second tab's exact session as `Reviewer`. After joining, both original tabs remain ordinary, usable OpenCode sessions.
-
-OpenComms rejects:
-
-- Joining the same session twice
-- Using one session for both roles
-- Replacing an existing channel member without confirmation
-- Linking a child session (only root sessions may be linked)
-- Linking sessions from incompatible projects or worktrees
-- Joining a nonexistent, paused, or closed channel incorrectly
-
-## Multi-agent channels (3-8 members) and CLI-to-CLI autonomy
-
-Channels are **not** limited to Builder + Reviewer. Up to `max_members` (default 8) agents with any open-vocabulary roles — Coordinator / Backend / Frontend / Security / Test / Reviewer, or Architect / Implementation A / Implementation B / Test / Reviewer — share one channel and one message history:
-
-- **Targeting:** `opencomms_send` with `to=<session_id|role>` reaches exactly one member; `broadcast=true` fans out to every other member. On a 3+ member channel an omitted target is an **error**, never a guess. On a two-member channel the single peer is implied (classic workflow unchanged).
-- **Cross-host members:** Claude Code / Claude Desktop / Codex agents join the same channels through the OpenComms MCP tools with per-member pinned identities (`.opencomms/pins/<member_id>.json` — see [docs/CLAUDE_CODE.md](docs/CLAUDE_CODE.md)); delivery mode (`push`/`pull`) is explicit per member.
-- **CLI↔CLI autonomy:** every `opencode` TUI/`serve` runs its own server + plugin instance, so delivery is **owner-side** — each instance prompts only its own sessions, and an fs-watch wake makes the recipient's own instance pick up mail the moment another process queues it. Verified against OpenCode 1.18.25 (Desktop↔Desktop, headless↔headless, and two-server CLI↔CLI: recipient's turn always executes on the recipient's own server). Topology matrix + evidence: [docs/OPENCODE.md](docs/OPENCODE.md).
-
-## Command examples
-
-```text
-/OpenComms Create Channel=<name> As=<Builder|Reviewer> [role instructions]
-/OpenComms Join    Channel=<name> As=<Builder|Reviewer> [role instructions]
-/OpenComms Status  [Channel=<name>]
-/OpenComms Pause   Channel=<name>
-/OpenComms Resume  Channel=<name>
-/OpenComms Disconnect Channel=<name>
+/OpenComms Create    Channel=<name> As=<role> [role instructions]
+/OpenComms Join      Channel=<name> As=<role> [role instructions]
+/OpenComms Status    [Channel=<name>]
+/OpenComms Inbox     Channel=<name>
+/OpenComms History   Channel=<name>
+/OpenComms Pause | Resume | Disconnect    Channel=<name>
 /OpenComms UpdateRole Channel=<name> [new role instructions]
-/OpenComms Inbox   Channel=<name>
-/OpenComms History Channel=<name>
-/OpenComms Timer   Channel=<name> Action=<start|stop|switch|reset|status|set_limit|clear_limit> [LimitMs=<ms>] [LimitRole=<Builder|Reviewer>]
-
-> `LimitRole=<role>` is an alias of the member-targeting parameter `to=<role|session-id>` — timers are keyed **per member** (by session id), and `LimitRole` maps to the same lookup by role label.
+/OpenComms Kick      Channel=<name> Target=<member_id|role>
+/OpenComms Timer     Channel=<name> Action=<start|stop|switch|reset|status|set_limit|clear_limit> [LimitMs=<ms>] [LimitRole=<role>]
 ```
 
-The equivalent deterministic tools are also available to the agents directly:
+`LimitRole=<role>` is an alias of the member-targeting parameter
+`to=<role|session-id>`; timers are keyed per member.
+
+Agents call the same operations as deterministic tools:
+`opencomms_create`, `opencomms_join`, `opencomms_send`, `opencomms_status`,
+`opencomms_inbox`, `opencomms_history`, `opencomms_update_role`,
+`opencomms_pause`, `opencomms_resume`, `opencomms_disconnect`,
+`opencomms_timer` (+ `opencomms_kick` on privileged hosts). Full schemas:
+[docs/TOOLS_AND_COMMANDS.md](docs/TOOLS_AND_COMMANDS.md).
+
+Shared CLI for setup on any host:
+`opencomms install | install-member | uninstall | doctor | status | channels | members | version`.
+
+Role prompts (the bracketed text) are injected as persistent system instructions
+before every model dispatch - they are not pasted into visible conversation
+history. Role prompts guide behavior; they are **not a security boundary**.
+
+## Delivery, safety, and loop protection
+
+**Delivery model.** A message crosses sessions only when an agent explicitly
+calls `opencomms_send` - OpenComms never auto-forwards assistant responses.
+Delivery is two-phase: a message is marked delivered only after the host session
+actually accepted it, a startup sweep recovers anything stranded by a crash, and
+failed deliveries requeue in original FIFO order.
+
+**Busy recipients.** OpenComms never overlaps prompts in one session. Messages
+to a busy session queue as pending and deliver when it becomes idle - FIFO
+order, at most once, visible in `opencomms_status`.
+
+**Loop protection (defaults, all configurable per channel):**
+
+| Protection | Default |
+|------------|---------|
+| Duplicate content rejection | 5-minute window, per sender |
+| Rate limit | 20 messages/minute/channel |
+| Delivery cooldown | 1s per recipient |
+| Reply-chain hop cap | 4 hops |
+| Stale-event rejection | 5 minutes |
+
+**Untrusted peers.** Peer content is framed inside
+`<<<UNTRUSTED_PEER_MESSAGE>>>` markers with provenance and treated as data, not
+instructions. Peer messages cannot modify channel configuration, permissions,
+role ownership, or safety rules. Threat model:
+[docs/SECURITY.md](docs/SECURITY.md).
+
+**Pause / Resume / Disconnect / Kick:**
 
 ```text
-opencomms_create
-opencomms_join
-opencomms_send
-opencomms_status
-opencomms_inbox
-opencomms_history
-opencomms_update_role
-opencomms_pause
-opencomms_resume
-opencomms_disconnect
-opencomms_timer
+/OpenComms Pause Channel=my-feature       # nothing is delivered
+/OpenComms Resume Channel=my-feature      # pending messages deliver on next idle
+/OpenComms Disconnect Channel=my-feature  # remove this session; channel survives for others
+/OpenComms Kick Channel=my-feature Target=Reviewer   # privileged removal, session itself is untouched
 ```
 
-Arguments are parsed deterministically in plugin code. The slash command only forwards raw arguments to the matching tool â€” it does not rely on the model to interpret channel names, roles, or instructions loosely.
-
-## Personalized role-prompt examples
-
-The text inside the square brackets during `Create` and `Join` is the **persistent role prompt** for that session. It is injected via OpenCode's `experimental.chat.system.transform` hook before every model dispatch, so it applies to ordinary user prompts, peer messages, and subsequent turns â€” without being pasted into visible conversation history.
-
-```text
-/OpenComms Create Channel=auth-feature As=Builder [You are the Builder. Implement the user's requests exactly. After each change, run the test suite and send a review request to Reviewer containing: a one-paragraph summary, the list of changed files with line ranges, verification results, and any uncertainties. Do not modify files outside src/. When you disagree with Reviewer, explain why and wait for the user.]
-
-/OpenComms Join Channel=auth-feature As=Reviewer [You are the Reviewer. Independently inspect Builder's work without trusting their summary. Send prioritized findings with: file:line locations, severity, impact, the expected fix, and a verification step. Return PASS only when no material defects remain. Never edit files yourself. If Builder is stuck, report to the user.]
-```
-
-Role prompts guide model behavior but are **not a security boundary**.
-
-## How messages are delivered
-
-The Builder calls:
-
-```text
-opencomms_send({
-  channel: "my-feature",
-  type: "review_request",
-  content: "Implementation is ready. Changed files: ... Verification: ..."
-})
-```
-
-OpenComms uses the injected OpenCode client and the session prompt API to deliver a labelled message to the **already-linked Reviewer session**. The message appears in the Reviewer session's normal history and triggers a Reviewer turn when the session is available. Delivery is **two-phase**: a message is only marked delivered when the host session actually accepted the prompt (crash-safe, startup sweep recovers stranded messages), and it is always wrapped in `<<<UNTRUSTED_PEER_MESSAGE>>>` framing as untrusted data.
-
-The Reviewer responds with:
-
-```text
-opencomms_send({
-  channel: "my-feature",
-  type: "review_response",
-  content: "CHANGES_REQUIRED: ..."
-})
-```
-
-OpenComms delivers that to the existing Builder session.
-
-**OpenComms never automatically forwards every assistant response.** A message crosses to the other session only when an agent explicitly calls `opencomms_send` (or you enable a specific, documented communication rule). This prevents uncontrolled agent-to-agent loops.
-
-## How independent prompting works
-
-You can prompt either linked session manually at any time:
-
-- Ask Builder to implement something
-- Ask Reviewer an unrelated question
-- Ask Reviewer to inspect work manually
-- Correct either agent
-- Change either role prompt (`/OpenComms UpdateRole`)
-- Pause communication (`/OpenComms Pause`)
-- Send a manual message to the peer (via `opencomms_send`)
-- Disconnect the channel (`/OpenComms Disconnect`)
-
-OpenComms does **not** start a permanent autonomous coder/reviewer loop. It is a communication layer between user-controlled sessions.
-
-## Queue, status, pause, resume, and disconnect
-
-**Busy sessions:** OpenComms never overlaps prompts in one session. If the recipient is busy, messages are:
-
-- Queued and marked pending
-- Delivered after the session becomes idle
-- Preserved in FIFO order
-- Delivered at most once (deduplicated)
-- Reported via `opencomms_status`
-
-OpenComms never interrupts a user-authored turn, discards a message silently, delivers the same message twice, lets a late event reactivate a paused channel, or lets a disconnected channel continue sending.
-
-**Loop prevention:** unique message IDs, deduplication, correlation IDs, configurable maximum hop count (default 4), repeated-content detection, per-channel rate limits (default 20/min), pause/resume controls, delivery cooldowns (1s), and stale-event rejection (5min).
-
-**Pause / Resume:**
-
-```text
-/OpenComms Pause Channel=my-feature      # no messages delivered
-/OpenComms Resume Channel=my-feature     # pending messages deliver on next idle
-```
-
-**Disconnect:** removes the current session from the channel. The channel remains for the other member, or is removed if empty. **No OpenCode sessions are ever deleted.**
-
-## Chess-clock timer
-
-Each channel has a **chess-clock timer** that tracks cumulative active time **per member** (keyed by session id). When Builder sends a message, Builder's clock stops and the primary recipient's starts automatically. This lets you give the agents a hard time budget and let them self-limit.
-
-```text
-/OpenComms Timer Channel=feat Action=start                                    # start your clock
-/OpenComms Timer Channel=feat Action=status                                    # read elapsed + limit
-/OpenComms Timer Channel=feat Action=set_limit LimitMs=600000                  # 10 min total cap
-/OpenComms Timer Channel=feat Action=set_limit LimitMs=300000 LimitRole=Builder # 5 min Builder-only cap (LimitRole is an alias of to=<role>)
-/OpenComms Timer Channel=feat Action=clear_limit                                # remove the cap
-/OpenComms Timer Channel=feat Action=stop                                      # stop the clock
-/OpenComms Timer Channel=feat Action=reset                                     # zero everything
-```
-
-The timer auto-switches on every `opencomms_send` (sender stops, primary recipient starts). The `status` action returns a member-keyed report so agents can check it and decide whether to continue:
-
-```json
-{
-  "active_member_id": "sess_b",
-  "elapsed_ms_by_member": { "sess_a": 45123, "sess_b": 10250 },
-  "elapsed_ms_by_role": { "Builder": 45100, "Reviewer": 10250 },
-  "total_ms": 55350,
-  "limit_ms": 600000,
-  "limit_member_id": null,
-  "limit_reached": false
-}
-```
-
-`elapsed_ms_by_member` and `total_ms` always include the **running** segment for the member currently on the clock â€” no need to stop the timer first to read accurate numbers.
+No OpenCode sessions are ever created or deleted by these operations.
 
 ## Persistence and privacy
 
-State is stored at `<project>/.opencomms/state.json` (schema v2) and is written atomically (temp file + rename) so a crash mid-write never corrupts a channel or queue. After restarting OpenCode Desktop, OpenComms:
+State lives at `<project>/.opencomms/state.json` (schema v2), written
+atomically (temp file + rename) so a crash mid-write never corrupts channels or
+queues. Corrupt state recovers automatically: OpenComms starts fresh and records
+the error in `opencomms_status` instead of bricking. The `.opencomms/` directory
+is created on first use and should be gitignored.
 
-- Restores channel metadata
-- Validates whether linked sessions still exist
-- Marks missing sessions as stale (reported via `opencomms_status`)
-- Allows you to rejoin or repair the channel
-- **Never creates a replacement session automatically**
-- **Never deletes existing OpenCode sessions**
+After a restart, OpenComms restores channel metadata, validates linked sessions,
+marks vanished sessions stale (visible in status), and lets you rejoin or repair
+- it never silently creates a replacement session.
 
-OpenComms does not expose provider credentials, API keys, environment secrets, unrelated session content, messages from other channels, or private OpenCode configuration. Peer message content is treated as untrusted input subordinate to your current instruction, OpenCode permissions, channel policy, and the recipient's role prompt. Peer content cannot modify channel configuration, permissions, role ownership, or safety rules unless you explicitly authorize it.
+OpenComms does not expose provider credentials, API keys, environment secrets,
+unrelated session content, other channels' messages, or private host
+configuration.
 
-## Upgrading from 1.x
+**Upgrading from 1.x:** the first run of the new version migrates
+`.opencode-comms/state.json` (v1) to `.opencomms/state.json` (v2) automatically
+- backup + `MIGRATED_FROM_V1` marker, channels/queues/timers preserved. Do not
+run the pre-1.x plugin afterwards. Details: [docs/MIGRATION.md](docs/MIGRATION.md).
 
-If you used OpenComms 1.x (OpenCode-only plugin), your existing state migrates automatically:
-
-- The first run of the new version reads the legacy `<project>/.opencode-comms/state.json` (schema v1), backs it up as `.opencomms/state.v1.bak.json`, and writes the new `<project>/.opencomms/state.json` (schema v2). Channels, members, queues, and timers are preserved; the legacy file is left untouched.
-- A `MIGRATED_FROM_V1` marker prevents re-migration.
-- **Do not run the pre-1.x plugin after migrating**: it reads only the legacy dir and would see stale (pre-migration) state. The new installer replaces the old plugin file in the same step; if you kept a manual copy, remove it.
-
-## Permission limitations
-
-If a role is meant to be read-only, investigate whether your OpenCode version can safely apply or update permissions on an **existing** session. If existing-session permissions cannot be changed safely, OpenComms does **not** pretend that prompt instructions enforce read-only behavior. Create/configure the session with the appropriate permissions separately before linking it.
+**Permissions:** OpenComms does not pretend that role prompts enforce read-only
+behavior. If a member must be permission-restricted, configure that on the
+session before linking it.
 
 ## Troubleshooting
 
 | Symptom | Cause / Fix |
 |---------|-------------|
-| `Channel "X" already exists` | Use `/OpenComms Join` to join it, or `/OpenComms Disconnect` then recreate. |
-| `This session is already registered` | One session cannot hold two roles on the same channel. Use a different root session. |
-| `Session ... is a child session` | OpenComms only links root sessions. Open a root session (no parent). |
-| `belongs to a different project/worktree` | Both sessions must be in the same project and worktree. |
-| `peer session is marked stale` | The peer's session no longer exists after a restart. Rejoin or repair the channel. |
-| `Rate limit exceeded` | Default is 20 messages/minute/channel. Wait, or pause to reset. |
-| `Duplicate message content detected` | Same content sent twice within 5 minutes. Vary the content or wait. |
-| `maximum hop count` | A reply chain exceeded 4 hops. Start a new message instead of replying. |
-| Plugin not loading | Ensure `dist/plugin.js` is in `.opencode/plugins/` or referenced in `opencode.json`. Run `npm run build`. |
-| `state.json` corrupt | OpenComms recovers automatically (starts fresh, records the error in `opencomms_status`). Delete the file to reset. |
+| `Channel "X" already exists` | `/OpenComms Join` it, or disconnect then recreate. |
+| `This session is already registered` | One session cannot hold two roles on one channel. Use a different root session. |
+| `Session ... is a child session` | Only root sessions can be linked. Open a root session. |
+| `belongs to a different project/worktree` | Both sessions must share the project and worktree. |
+| `peer session is marked stale` | The peer session no longer exists after a restart. Rejoin or repair. |
+| `Rate limit exceeded` | Default 20/min/channel. Wait, or pause to reset. |
+| `Duplicate message content detected` | Same content twice within 5 minutes. Vary the content or wait. |
+| `maximum hop count` | A reply chain exceeded 4 hops. Start a new message. |
+| Spawn-push fails with spawn errors | The CLI must be resolvable and spawnable. Set `OPENCOMMS_CLAUDE_BIN` / `OPENCOMMS_CODEX_BIN` when the binary is not on PATH; note that Windows npm `.cmd` shims cannot be spawned directly (Node refuses without a shell) - point the override at a native executable. Adapter limits: [docs/CODEX.md](docs/CODEX.md). |
+| Plugin not loading | Ensure `dist/plugin.js` is in `.opencode/plugins/` or referenced in `opencode.json`; run `npm run build`. |
+| `state.json` corrupt | Recovers automatically (fresh state + recorded error). Delete the file to reset. |
 
-## Supported OpenCode versions
+## Requirements
 
-- **OpenCode:** `>=1.18.0`
-- **Tested against:** `@opencode-ai/plugin` and `@opencode-ai/sdk` `1.18.23`; runtime behavior verified against OpenCode `1.18.25` (including the two-server CLI↔CLI topology lab)
-- Verified OpenCode behaviors: `sessionID` in tool context, `session.get`/`list`/`prompt`, root-vs-child detection via `parentID`, `session.idle` / `session.status` / `session.deleted` events, `command.execute.before` with `$ARGUMENTS`, `experimental.chat.system.transform`, project/worktree identity, Desktop's embedded plugin transport, Windows path resolution.
+- Node.js >= 20 (dependencies target Node 22 types)
+- OpenCode >= 1.18.0 for the OpenCode adapter (tested against
+  `@opencode-ai/plugin`/`sdk` 1.18.23; runtime behavior verified against
+  OpenCode 1.18.25, including the two-server CLI-to-CLI topology lab)
+- Claude Code CLI / Codex CLI for those adapters (capability detection reports
+  honestly when absent)
 
-## Development and live-test instructions
+## Development
 
 ```bash
 npm install
-npm run build        # tsc -p tsconfig.build.json -> dist/
-npm run typecheck    # tsc --noEmit (strict, noUncheckedIndexedAccess)
-npm run test         # unit tests (<2s)
-npm run test:live    # live integration test (needs OpenCode Desktop running)
-npm run test:all     # unit + live
-npm run audit        # dependency audit
+npm run build          # tsc -> dist/ + esbuild bundle
+npm run typecheck      # strict TS, noUncheckedIndexedAccess
+npm run test           # unit tests
+npm run test:contract  # adapter-contract / host-neutrality tests
+npm run audit          # dependency audit (0 known vulns at release)
+npm run format:check   # prettier gate
 ```
 
-Unit tests live in `test/unit/`. The live test (`test/live/live.test.ts`) is **guarded**: it skips automatically when no OpenCode server is reachable, so `npm run test:all` never fails in CI. To run it for real, start OpenCode Desktop with a deterministic local model and export:
+The live integration test (`test/live/live.test.ts`) is **guarded**: it skips
+when no OpenCode server is reachable, so CI never fails on it. To run it for
+real against a running OpenCode server:
 
 ```powershell
 $env:OPENCODE_SERVER_URL = "http://127.0.0.1:4096"
@@ -365,22 +286,47 @@ $env:OPENCODE_LIVE_MODEL = "openai/qwen3:0.6b"
 npm run test:live
 ```
 
-The live test proves the full acceptance flow from the project specification: two pre-existing root sessions are linked, exchange messages via explicit `opencomms_send`, queue when busy, deduplicate, pause/resume, and disconnect without deleting sessions.
+Skipped live tests are never counted as evidence of host support.
 
-## Architecture
+OpenComms is developed and tested on **Windows first** (Windows-safe atomic
+writes, PowerShell examples); macOS and Linux are supported by the same code
+paths.
 
-| File | Role |
+## Project layout
+
+| Path | Role |
 |------|------|
-| `src/core/types.ts` | All types, constants, persisted `State` shape |
-| `src/core/store.ts` | Atomic JSON persistence under `.opencomms/state.json`, v1 migration |
-| `src/core/engine.ts` | Pure deterministic business logic (channels, queues, validation, two-phase delivery state machine) |
+| `src/core/` | Host-neutral core: types, atomic store, deterministic engine (routing, queues, two-phase delivery) |
 | `src/plugin.ts` | OpenCode adapter: tools, hooks, slash command |
-| `src/hosts/opencode/delivery.ts` | Owner-side delivery controller (multi-server wake, fs-watch, fallback) |
-| `src/mcp/` | Shared MCP stdio server + OpenComms tools (identity-pinned) |
+| `src/hosts/` | Delivery controllers + capability profiles (per-host, never in core) |
+| `src/mcp/` | Shared MCP stdio server + identity-pinned OpenComms tools |
 | `src/adapters/` | Claude Code / Claude Desktop / Codex / ChatGPT installers + hooks |
-| `src/cli/main.ts` | `opencomms` CLI (install, install-member, doctor, status, ...) |
+| `src/cli/main.ts` | `opencomms` CLI |
+| `test/unit/` | Unit tests (engine, store, adapters, CLI, MCP, spawn delivery) |
+| `test/contract/` | Host-neutrality + capability-consistency contracts |
+| `test/live/` | Guarded live integration test |
+| `docs/` | Architecture, API reference, per-host guides, security model |
 
-See `docs/ARCHITECTURE.md` for the data flow, lifecycle, and invariants, and `docs/API_REFERENCE.md` for full function signatures.
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Data flow, lifecycle, invariants, daemon/SQLite decision |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | Full function signatures (`file:line`) |
+| [docs/TOOLS_AND_COMMANDS.md](docs/TOOLS_AND_COMMANDS.md) | Tool schemas + slash command spec |
+| [docs/CAPABILITIES.md](docs/CAPABILITIES.md) | Evidence-backed per-host capability matrix |
+| [docs/ADAPTERS.md](docs/ADAPTERS.md) | Adapter contract + pinned-identity model |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | Delivery state machine + identity rules |
+| [docs/SECURITY.md](docs/SECURITY.md) | Threat model + injection defenses |
+| [docs/MIGRATION.md](docs/MIGRATION.md) | v1 -> v2 state migration |
+| [docs/OPENCODE.md](docs/OPENCODE.md) | OpenCode topology + autonomy evidence |
+| [docs/CLAUDE_CODE.md](docs/CLAUDE_CODE.md) | Claude Code adapter guide (hooks, MCP, multi-member pins) |
+| [docs/CLAUDE_DESKTOP.md](docs/CLAUDE_DESKTOP.md) | Claude Desktop (.mcpb) guide |
+| [docs/CODEX.md](docs/CODEX.md) | Codex CLI adapter guide |
+| [docs/CHATGPT.md](docs/CHATGPT.md) | ChatGPT requirements + blocked status |
+
+`AGENTS.md` is a token-efficient entry point for AI coding assistants working in
+this repository.
 
 ## License
 
