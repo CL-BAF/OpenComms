@@ -31,6 +31,7 @@ const projectDir = join(root, "Project")
 const projectState = join(projectDir, ".opencomms", "state.json")
 const preservedState = '{"schema_version":2,"channels":{},"messages":{},"queues":{},"delivered_to":{},"errors":[]}\n'
 const port = String(49300 + (process.pid % 500))
+let smokeExecutable = null
 
 function check(condition, message) {
   if (!condition) throw new Error(message)
@@ -38,10 +39,11 @@ function check(condition, message) {
 
 function shortcutInfo(shortcut) {
   const script =
-    "$p=$args[0]; $s=(New-Object -ComObject WScript.Shell).CreateShortcut($p); [pscustomobject]@{TargetPath=$s.TargetPath; Arguments=$s.Arguments; WorkingDirectory=$s.WorkingDirectory} | ConvertTo-Json -Compress"
+    "$p=$env:OPENCOMMS_SMOKE_SHORTCUT; $s=(New-Object -ComObject WScript.Shell).CreateShortcut($p); [pscustomobject]@{TargetPath=$s.TargetPath; Arguments=$s.Arguments; WorkingDirectory=$s.WorkingDirectory} | ConvertTo-Json -Compress"
   return JSON.parse(
-    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script, shortcut], {
+    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
       encoding: "utf8",
+      env: { ...process.env, OPENCOMMS_SMOKE_SHORTCUT: shortcut },
     }),
   )
 }
@@ -77,10 +79,14 @@ async function waitForGui(url, timeoutMs = 30_000) {
 }
 
 function stopSmokeGui() {
+  if (!smokeExecutable) return
   const script =
-    "$port=$args[0]; Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'opencomms.exe' -and $_.CommandLine -like ('*--port ' + $port + '*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    "$path=$env:OPENCOMMS_SMOKE_EXE; Get-Process -Name opencomms -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $path } | Stop-Process -Force -ErrorAction SilentlyContinue"
   try {
-    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script, port], { stdio: "ignore" })
+    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      stdio: "ignore",
+      env: { ...process.env, OPENCOMMS_SMOKE_EXE: smokeExecutable },
+    })
   } catch {
     // The smoke process may already have exited.
   }
@@ -96,6 +102,7 @@ try {
   })
 
   const installedExe = join(installDir, "opencomms.exe")
+  smokeExecutable = installedExe
   const launcher = join(installDir, "OpenComms.vbs")
   const icon = join(installDir, "icon.ico")
   check(existsSync(installedExe), "Installed opencomms.exe is missing.")
