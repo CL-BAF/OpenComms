@@ -50,11 +50,11 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"])
 function browseForDirectory(): Promise<string | null> {
   if (process.platform !== "win32") return Promise.resolve(null)
   const script =
-    "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if ($d.ShowDialog() -eq 'OK') { [Console]::Write($d.SelectedPath) }"
+    "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $d=New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description='Choose an OpenComms project folder'; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Write($d.SelectedPath) }"
   return new Promise((resolveBrowse) => {
     execFile(
       "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+      ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
       { windowsHide: true, timeout: 120_000 },
       (error, stdout) => resolveBrowse(error ? null : stdout.trim() || null),
     )

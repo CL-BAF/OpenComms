@@ -97,6 +97,10 @@ and binds the backend to loopback only (no network exposure, no auth needed at
 loopback trust — the same boundary as state.json). If no project is supplied,
 the console offers the last valid/recent project or a native folder picker:
 
+> **Windows note:** the project picker's **Browse** button is still being
+> worked on. For now, paste or type the full project folder path and choose
+> **Open project**.
+
 ```bash
 opencomms gui                         # opens the console
 opencomms gui --project C:\work\repo   # select a project explicitly
