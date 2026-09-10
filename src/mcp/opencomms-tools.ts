@@ -163,7 +163,7 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
   const createTool = (): McpToolDef => ({
     name: "opencomms_create",
     description:
-      "Create an OpenComms channel and register this pinned member under a role label (any short unique label, e.g. Builder). Persistent role instructions live in the channel state. Set spawn_push=true if this member's host CLI supports non-interactive resume (claude --resume / codex exec resume) so peers can push messages to you.",
+      "Create a NEW OpenComms channel and register this pinned member under a role label (any short unique label, e.g. Lead, Backend, Frontend, Reviewer). Use this ONLY when the user explicitly asks to create a new channel. Never call it as a fallback after a failed join; report the join error instead. Persistent role instructions live in the channel state. Set spawn_push=true if this member's host CLI supports non-interactive resume (claude --resume / codex exec resume) so peers can push messages to you.",
     inputSchema: {
       type: "object",
       properties: {
@@ -200,7 +200,7 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
   const joinTool = (): McpToolDef => ({
     name: "opencomms_join",
     description:
-      "Join an existing OpenComms channel as this pinned member under a free role label. Rejects duplicates, full channels, and incompatible projects. Set spawn_push=true if this member's host CLI supports non-interactive resume so peers can push messages to you.",
+      "Join an existing OpenComms channel as this pinned member under a free role label (e.g. Lead, Backend, Frontend, Reviewer). If joining fails for any reason, STOP and report the exact error. Do not create another channel, change roles, replace, disconnect, or take over a member unless the user separately and explicitly instructs you to do so. Rejects duplicates, full channels, and incompatible projects. Set spawn_push=true if this member's host CLI supports non-interactive resume so peers can push messages to you.",
     inputSchema: {
       type: "object",
       properties: {

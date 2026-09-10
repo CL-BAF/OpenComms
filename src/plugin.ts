@@ -191,7 +191,7 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
   const tools = {
     opencomms_create: tool({
       description:
-        "Create an OpenComms channel and register the CURRENT session under a role label (e.g. Builder, Reviewer â€” any short unique label). The current session's real session id is taken from the tool execution context â€” no new session is created. Role instructions in `role_prompt` become the persistent per-session system instructions.",
+        "Create a NEW OpenComms channel and register the CURRENT session under a role label (e.g. Lead, Backend, Frontend, Reviewer â€” any short unique label). Use this ONLY when the user explicitly asks to create a new channel. Never call it as a fallback after a failed join; report the join error instead. The current session's real session id is taken from the tool execution context â€” no new session is created. Role instructions in `role_prompt` become the persistent per-session system instructions.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive slug)."),
         role: tool.schema.string().describe(`Role label. ${ROLE_RULES}`),
@@ -246,7 +246,7 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
 
     opencomms_join: tool({
       description:
-        "Join an existing OpenComms channel with the CURRENT session under a role label (e.g. Builder, Reviewer â€” any short unique label not already taken on that channel). The current session's real session id is taken from the tool execution context â€” no new session is created. Rejects joining the same session twice, using one session for two roles, replacing an existing member, full channels, child sessions, and sessions from incompatible projects or worktrees.",
+        "Join an existing OpenComms channel with the CURRENT session under a free role label (e.g. Lead, Backend, Frontend, Reviewer â€” any short unique label). The current session's real session id is taken from the tool execution context â€” no new session is created. If joining fails for any reason, STOP and report the exact error. Do not create another channel, change roles, replace, disconnect, or take over a member unless the user separately and explicitly instructs you to do so. Rejects joining the same session twice, using one session for two roles, replacing an existing member, full channels, child sessions, and sessions from incompatible projects or worktrees.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
         role: tool.schema.string().describe(`Role label (unique within the channel). ${ROLE_RULES}`),

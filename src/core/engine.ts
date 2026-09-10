@@ -581,7 +581,9 @@ export function joinChannel(state: State, input: JoinInput): ToolResult {
   const name = normalizeChannelName(input.channel)
   const channel = findChannel(state, name)
   if (!channel) {
-    return fail(`Channel "${input.channel}" does not exist. Create it first with /OpenComms Create.`)
+    return fail(
+      `Channel "${input.channel}" does not exist in this project's OpenComms state. STOP: do not create a channel, replace a member, or disconnect anyone automatically. Report this error so the operator can verify the project/worktree or explicitly ask you to create a new channel.`,
+    )
   }
   const lifecycle = lifecycleRefusal(channel, "join")
   if (lifecycle) return fail(lifecycle)

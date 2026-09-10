@@ -134,6 +134,22 @@ test("createChannel rejects duplicate channel names", () => {
   assert.match(result.message, /already exists/)
 })
 
+test("joinChannel missing channel tells agents to stop instead of creating a fallback", () => {
+  const result = joinChannel(freshState(), {
+    channel: "missing-channel",
+    role: "Frontend",
+    role_prompt: "p",
+    session_id: SESSION_A,
+    project_id: PROJECT,
+    worktree: WORKTREE,
+  })
+
+  assert.equal(result.ok, false)
+  assert.match(result.message, /STOP/)
+  assert.match(result.message, /do not create a channel/i)
+  assert.match(result.message, /project\/worktree/i)
+})
+
 test("createChannel enforces the slug pattern and max_members bounds", () => {
   const state = freshState()
   const badName = createChannel(state, {
