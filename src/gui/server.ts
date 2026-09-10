@@ -14,6 +14,8 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
+import { watchFile, unwatchFile, type StatWatcher } from "node:fs"
+import { join } from "node:path"
 import {
   normalizeChannelName,
   createSessionAsOperator,
@@ -80,26 +82,65 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       }
     }
   }
-  // Live-state change detection: state.json mtime poll â†’ SSE "refresh".
-  let lastMtime = 0
-  const timer = setInterval(() => {
-    try {
-      const st = store.load()
-      void st
-      const mtime = Date.now()
-      if (mtime - lastMtime > 1500) {
-        lastMtime = mtime
-        broadcast("refresh", { at: Date.now() })
-      }
-    } catch {
-      /* diagnostics only */
-    }
-  }, 2000)
-  timer.unref?.()
+  // Live-state change detection (P3-1): real mtime watch on state.json —
+  // change-driven events, not wall-clock ticks. persistent:false never
+  // holds the host event loop open (same pattern as the delivery wake).
+  let statWatcher: StatWatcher | null = null
+  let refreshTimer: NodeJS.Timeout | null = null
+  const onStatChange = (): void => {
+    if (refreshTimer) return
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null
+      broadcast("refresh", { at: Date.now() })
+    }, 200)
+    refreshTimer.unref?.()
+  }
+  const ensureStatWatcher = (): void => {
+    if (statWatcher) return
+    statWatcher = watchFile(store.file, { interval: 750, persistent: false }, (curr, prev) => {
+      if (curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size) onStatChange()
+    })
+  }
+  ensureStatWatcher()
 
   const json = (res: ServerResponse, code: number, payload: unknown): void => {
     res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" })
     res.end(JSON.stringify(payload))
+  }
+
+  /**
+   * BROWSER-SURFACE GUARD (Reviewer P1): loopback binding protects against
+   * NETWORK exposure but NOT against the user's browser. DNS rebinding
+   * makes a remote page same-origin with our port; CORS-simple POSTs (no
+   * preflight) can mutate state from any site. Defense:
+   *   1. Host header must be loopback (with optional :port) — kills
+   *      rebinding (the browser sends the rebound name as Host).
+   *   2. Non-GET requests must carry Origin/Referer that is ABSENT (curl,
+   *      same-process clients) or matches this loopback origin, or
+   *      Sec-Fetch-Site: same-origin/none — kills simple-request CSRF.
+   */
+  const MUTATING = new Set(["POST", "PUT", "DELETE", "PATCH"])
+  const guard = (req: IncomingMessage): string | null => {
+    const host = (req.headers["host"] ?? "").toLowerCase().trim()
+    const hostName = host.split(":")[0] ?? ""
+    if (!(hostName === "127.0.0.1" || hostName === "localhost" || hostName === "[::1]")) {
+      return `Rejected Host "${host}" (opencomms gui accepts loopback only)`
+    }
+    if (MUTATING.has((req.method ?? "GET").toUpperCase())) {
+      const origin = req.headers["origin"]
+      const referer = req.headers["referer"]
+      const fetchSite = req.headers["sec-fetch-site"]
+      const expected = `http://${host}`
+      const sameOrigin =
+        (typeof origin === "string" && origin.toLowerCase() === `http://${host}`) ||
+        (typeof referer === "string" && referer.toLowerCase().startsWith(`http://${host}/`))
+      const fetchOk = fetchSite === "same-origin" || fetchSite === "none"
+      const hasBrowserSignals = origin !== undefined || referer !== undefined || fetchSite !== undefined
+      if (hasBrowserSignals && !(sameOrigin || fetchOk)) {
+        return "Rejected cross-site request (write operations require a same-origin loopback client)"
+      }
+    }
+    return null
   }
 
   const readBody = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
@@ -151,6 +192,12 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   }
 
   const server: Server = createServer((req, res) => {
+    const rejected = guard(req)
+    if (rejected) {
+      recordError(`GUI request rejected: ${rejected}`)
+      json(res, 403, { ok: false, message: rejected })
+      return
+    }
     void handle(req, res).catch((error) => {
       recordError(`GUI request failed: ${(error as Error).message}`)
       if (!res.headersSent) json(res, 500, { ok: false, message: `Internal error: ${(error as Error).message}` })
@@ -403,7 +450,13 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
         port: (server.address() as { port: number }).port,
         close: () =>
           new Promise<void>((resolveClose) => {
-            clearInterval(timer)
+            // The refresh timer is unref'd; unwind the stat watcher too.
+            if (refreshTimer) clearTimeout(refreshTimer)
+            try {
+              unwatchFile(store.file)
+            } catch {
+              /* file may already be gone */
+            }
             for (const res of sseClients) res.end()
             sseClients.clear()
             server.close(() => resolveClose())

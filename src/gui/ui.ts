@@ -51,7 +51,7 @@ export const GUI_HTML = String.raw`<!doctype html>
   .state { font-size: 12px; border-radius: 10px; padding: 2px 10px; border: 1px solid var(--border); }
   .state.Working { color: var(--working); }
   .state.Idle { color: var(--idle); }
-  .state.Offline { color: var(--offline, #a86b6b); color: var(--idle, #a86b6b); color: #a86b6b; }
+  .state.Offline { color: #a86b6b; }
   .muted { color: var(--secondary); }
   input[type=text] { background: var(--nested); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 7px 10px; font-size: 14px; width: 240px; }
   select { background: var(--nested); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }

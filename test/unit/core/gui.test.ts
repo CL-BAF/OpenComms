@@ -11,18 +11,31 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startGuiServer, memberState } from "../../../src/gui/server.js"
-import { createChannel, joinChannel, sendMessage } from "../../../src/core/engine.js"
+import {
+  createChannel,
+  joinChannel,
+  sendMessage,
+  drainQueue,
+  createSessionAsOperator,
+} from "../../../src/core/engine.js"
 import { emptyState } from "../../../src/core/store.js"
 import { joinCommandFor } from "../../../src/cli/join-command.js"
 
 const PROJECT = "proj_gui"
 const WORKTREE = "C:\\repo"
 
+const withServerDirs = new Map<string, string>()
+function dirOf(base: string): string {
+  return withServerDirs.get(base) ?? base
+}
+
 async function withServer(name: string, fn: (base: string, dir: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "oc-gui-"))
   const handle = await startGuiServer({ projectDir: dir, port: 0, hostname: "127.0.0.1" })
+  const base = `http://127.0.0.1:${handle.port}`
+  withServerDirs.set(base, dir)
   try {
-    await fn(`http://127.0.0.1:${handle.port}`, dir)
+    await fn(base, dir)
   } finally {
     await handle.close()
     try {
@@ -235,4 +248,201 @@ test("join-command helper: real commands per host, fail-closed unknown host", ()
   assert.ok(!("error" in cc) && cc.command.includes("spawn_push=true"))
   const bad = joinCommandFor("lab", "telepathy")
   assert.ok("error" in bad)
+})
+
+// ── Reviewer P0: operator-created sessions must accept REAL host identities ──
+
+test("P0 repro: GUI-created empty session joined by an MCP-style caller (sentinel id) succeeds", async () => {
+  await withServer("gui-join", async (base) => {
+    const created = (await (
+      await fetch(`${base}/api/sessions`, { method: "POST", body: JSON.stringify({ name: "joins" }) })
+    ).json()) as { ok: boolean }
+    assert.equal(created.ok, true)
+    // MCP-style caller: project_id "local-project" (sentinel) — previously
+    // failed against the GUI's "gui-local-project" sentinel scheme.
+    const joined = joinChannel(emptyState(), {
+      channel: "x",
+      role: "x",
+      role_prompt: "x",
+      session_id: "x",
+      project_id: PROJECT,
+      worktree: WORKTREE,
+    })
+    void joined
+    // Join via public fetch is a browser op; drive the engine on the same
+    // file the GUI server owns:
+    const { StateStore } = await import("../../../src/core/store.js")
+    const store = new StateStore(dirOf(base))
+    const result = await store.withLock(() => {
+      const state = store.load()
+      const r = joinChannel(state, {
+        channel: "joins",
+        role: "Reviewer",
+        role_prompt: "Review.",
+        session_id: "mcp-member-1",
+        project_id: "local-project",
+        worktree: dirOf(base),
+      })
+      if (r.ok) store.save(state)
+      return r
+    })
+    assert.equal(result.ok, true, `MCP sentinel join failed: ${result.message}`)
+    void created
+  })
+})
+
+test("P0: empty operator session ADOPTS the first joiner's real host identity; later joiners compare strictly", () => {
+  const state = emptyState()
+  createSessionAsOperator(state, { channel: "adopt", project_id: "gui-local-project", worktree: "C:\\gui" })
+  // First joiner: an OpenCode-plugin-style caller with a REAL SDK project hash.
+  const first = joinChannel(state, {
+    channel: "adopt",
+    role: "Builder",
+    role_prompt: "p",
+    session_id: "u_front",
+    project_id: "real-sdk-hash-abc",
+    worktree: "C:\\real\\worktree",
+  })
+  assert.equal(first.ok, true, `first joiner must adopt: ${first.message}`)
+  const ch = state.channels["adopt"]!
+  assert.equal(ch.project_id, "real-sdk-hash-abc", "channel adopted the real id")
+  assert.equal(ch.worktree, "C:\\real\\worktree")
+  // Later joiner: same project + worktree → ok.
+  const second = joinChannel(state, {
+    channel: "adopt",
+    role: "Reviewer",
+    role_prompt: "p",
+    session_id: "u_rev",
+    project_id: "real-sdk-hash-abc",
+    worktree: "C:\\real\\worktree",
+  })
+  assert.equal(second.ok, true)
+  // Later joiner: DIFFERENT project (both real) → refused (fail-closed).
+  const intruder = joinChannel(state, {
+    channel: "adopt",
+    role: "Tester",
+    role_prompt: "p",
+    session_id: "u_out",
+    project_id: "other-project-hash",
+    worktree: "C:\\real\\worktree",
+  })
+  assert.equal(intruder.ok, false)
+  assert.match(intruder.message, /different project/)
+  // Sentinel joiner into a populated channel: allowed only at the same worktree.
+  const sentinelOk = joinChannel(state, {
+    channel: "adopt",
+    role: "Desktop",
+    role_prompt: "p",
+    session_id: "u_dt",
+    project_id: "local-project",
+    worktree: "C:\\real\\worktree",
+  })
+  assert.equal(sentinelOk.ok, true, "sentinel joiner with matching worktree joins")
+  const sentinelWrong = joinChannel(state, {
+    channel: "adopt",
+    role: "Desktop2",
+    role_prompt: "p",
+    session_id: "u_desk",
+    project_id: "local-project",
+    worktree: "C:\\other\\worktree",
+  })
+  assert.equal(sentinelWrong.ok, false, "sentinel joiner with a different worktree is refused")
+})
+
+test("P0: mixed-host round-trip from the join-command output (opencode ↔ MCP)", () => {
+  const state = emptyState()
+  // OpenCode member creates the channel (real SDK hash).
+  createChannel(state, {
+    channel: "mix",
+    role: "Builder",
+    role_prompt: "p",
+    session_id: "oc_builder",
+    project_id: "sdk-hash-123",
+    worktree: "C:\\proj",
+  })
+  // MCP member joins with the "local-project" sentinel, same directory.
+  const mcpJoin = joinChannel(state, {
+    channel: "mix",
+    role: "Reviewer",
+    role_prompt: "p",
+    session_id: "cc_reviewer",
+    project_id: "local-project",
+    worktree: "C:\\proj",
+  })
+  assert.equal(mcpJoin.ok, true, `mixed-host join broken: ${mcpJoin.message}`)
+  // Message routing across the mixed-host pair.
+  const sent = sendMessage(state, { channel: "mix", content: "hello cross-host", to: "Reviewer" }, "oc_builder")
+  assert.equal(sent.ok, true)
+  assert.deepEqual((sent.data as { recipients: string[] }).recipients, ["cc_reviewer"])
+  const pulled = drainQueue(state, "cc_reviewer")
+  assert.equal(pulled.length, 1)
+})
+
+// ── Reviewer P1: browser-surface hardening (Host + Origin) ──
+
+test("P1: spoofed (rebound/non-loopback) Host header is rejected with 403", async () => {
+  await withServer("gui-h1", async (base) => {
+    const url = new URL(base)
+    // undici's fetch forbids overriding Host — use http.request directly.
+    const { request } = await import("node:http")
+    const evil = await new Promise<{ status: number }>((resolve) => {
+      const req = request(
+        { hostname: "127.0.0.1", port: url.port, path: "/api/sessions", headers: { Host: "evil.example.com" } },
+        (res) => {
+          res.resume()
+          resolve({ status: res.statusCode ?? 0 })
+        },
+      )
+      req.end()
+    })
+    assert.equal(evil.status, 403, "rebound Host must be 403")
+    const good = await new Promise<{ status: number }>((resolve) => {
+      const req = request(
+        { hostname: "127.0.0.1", port: url.port, path: "/api/sessions", headers: { Host: `127.0.0.1:${url.port}` } },
+        (res) => {
+          res.resume()
+          resolve({ status: res.statusCode ?? 0 })
+        },
+      )
+      req.end()
+    })
+    assert.equal(good.status, 200, "loopback Host still works")
+  })
+})
+
+function okRequest(x: unknown): { status: number } {
+  return x as { status: number }
+}
+
+function okStatus(x: { status: number }): number {
+  return x.status
+}
+
+test("P1: cross-site write (simulated simple-request CSRF) is rejected with 403", async () => {
+  await withServer("gui-h2", async (base) => {
+    // Evil page DELETE with an evil Origin (browser simple-request signature).
+    const res = await fetch(`${base}/api/sessions/whatever`, {
+      method: "DELETE",
+      headers: { Host: "127.0.0.1", Origin: "https://evil.site" },
+    })
+    assert.equal(res.status, 403)
+    // Evil Origin on a POST create.
+    const post = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://evil.site" },
+      body: JSON.stringify({ name: "evil" }),
+    })
+    assert.equal(post.status, 403)
+    // same-origin signal passes.
+    const ok = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Sec-Fetch-Site": "same-origin",
+        Origin: `http://127.0.0.1:${new URL(base).port}`,
+      },
+      body: JSON.stringify({ name: "good" }),
+    })
+    assert.equal(ok.status, 200)
+  })
 })

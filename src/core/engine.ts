@@ -473,6 +473,18 @@ export function createSessionAsOperator(
   })
 }
 
+/**
+ * Sentinel project ids — labels meaning "some local project" (the GUI/CLI/
+ * MCP operator surfaces each minted their own; see joinChannel: a sentinel
+ * on either side cannot mismatch a real project identity, while the
+ * worktree path stays the strict isolation anchor).
+ */
+const SENTINEL_PROJECT_IDS = new Set(["local-project", "gui-local-project", "cli-local-project"])
+
+export function isSentinelProjectId(projectId: string): boolean {
+  return SENTINEL_PROJECT_IDS.has(projectId)
+}
+
 export function createChannel(state: State, input: CreateInput): ToolResult {
   const name = normalizeChannelName(input.channel)
   if (!name) return fail("Channel name is required.")
@@ -574,7 +586,25 @@ export function joinChannel(state: State, input: JoinInput): ToolResult {
   const lifecycle = lifecycleRefusal(channel, "join")
   if (lifecycle) return fail(lifecycle)
 
-  if (channel.project_id !== input.project_id) {
+  // Operator-created (or freshly resumed) sessions start EMPTY with a
+  // sentinel project id chosen by whichever surface made them (GUI/CLI/
+  // MCP each use a different one). The FIRST joining member ADOPTS the
+  // session: the channel inherits the joiner's project_id + worktree.
+  // SENTINEL ids ("*local-project") are labels meaning "some local project"
+  // — a sentinel on EITHER side cannot mismatch a real identity. The
+  // WORKTREE path stays STRICT for populated channels: that is the real
+  // cross-project anchor (sentinel joiners still resolve the same directory),
+  // so isolation is preserved and only the label scheme relaxed.
+  const sentinelJoin = isSentinelProjectId(input.project_id)
+  if (channel.members.length === 0) {
+    // Empty session: the first joiner's REAL identity becomes the channel's
+    // identity (sentinel joiners leave the sentinel in place until a real
+    // identity lands). Worktree always adopts.
+    if (!sentinelJoin) channel.project_id = input.project_id
+    channel.worktree = input.worktree
+  }
+
+  if (channel.project_id !== input.project_id && !isSentinelProjectId(channel.project_id) && !sentinelJoin) {
     return fail(
       `Channel "${input.channel}" belongs to a different project (${channel.project_id}). Sessions from incompatible projects cannot be linked.`,
     )
