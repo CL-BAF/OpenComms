@@ -32,6 +32,10 @@ exist** - across tabs, terminals, and providers.
 - **Honest about limits.** Where a host cannot do something, OpenComms reports
   UNSUPPORTED instead of faking parity. See
   [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the evidence-backed matrix.
+- **Operator console + portable CLI.** A loopback-only local GUI
+  (`opencomms gui`) creates sessions, shows honest agent states, and hands out
+  real join commands; a standalone executable builds without Node
+  (`npm run build:exe`).
 
 ## Supported hosts
 
@@ -206,11 +210,19 @@ history. Role prompts guide behavior; they are **not a security boundary**.
 calls `opencomms_send` - OpenComms never auto-forwards assistant responses.
 Delivery is two-phase: a message is marked delivered only after the host session
 actually accepted it, a startup sweep recovers anything stranded by a crash, and
-failed deliveries requeue in original FIFO order.
+failed deliveries requeue in original FIFO order. After 5 delivery attempts an
+envelope dead-letters as `failed` (visible in status) instead of retrying
+forever, so a broken endpoint cannot create an amplification loop.
 
 **Busy recipients.** OpenComms never overlaps prompts in one session. Messages
 to a busy session queue as pending and deliver when it becomes idle - FIFO
 order, at most once, visible in `opencomms_status`.
+
+**Conversation budgets.** Each session can optionally cap autonomous operation
+with `budgets.max_runtime_ms` (conversation age) and
+`budgets.max_delivered_messages` (lifetime handover count, retries included).
+Both are off by default and configurable at creation (`rate_limit` and
+`max_hops` too); exhausted budgets refuse sends with an actionable message.
 
 **Loop protection (defaults, all configurable per channel):**
 
@@ -271,7 +283,7 @@ session before linking it.
 | `Channel "X" already exists` | `/OpenComms Join` it, or disconnect then recreate. |
 | `This session is already registered` | One session cannot hold two roles on one channel. Use a different root session. |
 | `Session ... is a child session` | Only root sessions can be linked. Open a root session. |
-| `belongs to a different project/worktree` | Both sessions must share the project and worktree. |
+| `belongs to a different project/worktree` | Populated sessions must match the project/worktree of every joiner. Operator-created (GUI/CLI) empty sessions instead **adopt the first joiner's** real project identity; sentinel-id members (MCP default) are accepted only from the same worktree. |
 | `peer session is marked stale` | The peer session no longer exists after a restart. Rejoin or repair. |
 | `Rate limit exceeded` | Default 20/min/channel. Wait, or pause to reset. |
 | `Duplicate message content detected` | Same content twice within 5 minutes. Vary the content or wait. |
@@ -324,13 +336,14 @@ paths.
 
 | Path | Role |
 |------|------|
-| `src/core/` | Host-neutral core: types, atomic store, deterministic engine (routing, queues, two-phase delivery) |
+| `src/core/` | Host-neutral core: types, atomic store, deterministic engine (routing, queues, two-phase delivery, lifecycle, archives) |
 | `src/plugin.ts` | OpenCode adapter: tools, hooks, slash command |
 | `src/hosts/` | Delivery controllers + capability profiles (per-host, never in core) |
 | `src/mcp/` | Shared MCP stdio server + identity-pinned OpenComms tools |
 | `src/adapters/` | Claude Code / Claude Desktop / Codex / ChatGPT installers + hooks |
-| `src/cli/main.ts` | `opencomms` CLI |
-| `test/unit/` | Unit tests (engine, store, adapters, CLI, MCP, spawn delivery) |
+| `src/gui/` | Loopback-only local console (HTTP server + embedded dark frontend) |
+| `src/cli/` | `opencomms` CLI (install, sessions, join-command, gui) |
+| `test/unit/` | Unit tests (engine, store, adapters, CLI, MCP, spawn delivery, GUI, session lifecycle) |
 | `test/contract/` | Host-neutrality + capability-consistency contracts |
 | `test/live/` | Guarded live integration test |
 | `docs/` | Architecture, API reference, per-host guides, security model |
