@@ -10,7 +10,7 @@ npm install && npm run build
 node install.mjs C:\path\to\your\project        # install the OpenCode plugin
 ```
 
-**Version 1.0.0** | TypeScript | MIT | OpenCode >= 1.18.0 (verified against 1.18.25)
+**Version 1.1.0** | TypeScript | MIT | OpenCode >= 1.18.0 (verified against 1.18.25)
 
 ---
 
@@ -108,15 +108,28 @@ never terminates provider processes), **Save Session** (with a structured
 summary prompt), **Resume as new**, and **Delete** (confirm). Live updates
 stream over SSE.
 
-## Standalone executable (no Node required)
+## Standalone executable + install wizard (no Node required)
 
 ```bash
 npm run build:exe        # -> dist-opencomms/opencomms(.exe)
 ```
 
 Produces a single-file executable of the full CLI (Node Single Executable
-App) — `version`, `session`, `gui` and every other command work without a
+App) - `version`, `session`, `gui` and every other command work without a
 Node.js installation. Rebuild per platform on the machine you target.
+
+**Windows-first installer (per spec):** double-clicking `opencomms.exe` (or
+running `opencomms install-wizard`) opens a **setup wizard** - dark-themed,
+matching the console - that installs the exe to
+`%LOCALAPPDATA%\Programs\OpenComms`, optionally adds it to the user PATH, and
+creates Start Menu + desktop shortcuts **with the OpenComms icon**. Nothing
+is installed outside your user profile; an uninstall shortcut and
+`opencomms uninstall-self` (removes the PATH entry, shortcuts, and the
+install folder) are included. Escape hatch: `OPENCOMMS_NO_WIZARD=1`.
+
+For macOS/Linux: build on the target OS (`npm run build:exe`), then
+`sh scripts/install.sh dist-opencomms/opencomms` copies the binary into
+`~/.local/bin` and wires the PATH.
 
 ## Quick start (OpenCode, two tabs)
 

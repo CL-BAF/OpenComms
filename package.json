@@ -1,6 +1,6 @@
 {
   "name": "opencomms",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "OpenComms - a host-neutral, project-local TypeScript platform for multi-agent coding workflows: it links existing coding-agent sessions (OpenCode, Claude Code, Claude Desktop, Codex) into shared multi-agent channels (2-32 members, open role vocabulary) with autonomous push/pull delivery, per-member endpoint capabilities, session lifecycle (save/resume-as-new/delete), configurable loop-protection budgets, a loopback-only local GUI console, and a standalone CLI executable. Provider-native sessions are delivery endpoints only; host sessions are never created, owned, or replaced.",
   "type": "module",
   "license": "MIT",

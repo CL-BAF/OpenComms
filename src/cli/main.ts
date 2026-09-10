@@ -16,7 +16,8 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { join, resolve, dirname } from "node:path"
-import { execFileSync } from "node:child_process"
+import { tmpdir } from "node:os"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import { installClaudeCode, registerProjectMember } from "../adapters/claude-code/install.js"
 import { installCodex, detectCodex } from "../adapters/codex/install.js"
@@ -30,6 +31,8 @@ import { startGuiServer } from "../gui/server.js"
 import { SCHEMA_VERSION } from "../core/types.js"
 import { listMemberPins, loadProjectPin } from "../mcp/identity.js"
 import { joinCommandFor } from "./join-command.js"
+import { WIZARD_PS1 } from "./wizard.js"
+import { iconIcoBytes } from "./icon-base64.js"
 
 /** Package version, derived from package.json so the CLI can never drift. */
 export const VERSION: string = (() => {
@@ -536,6 +539,103 @@ function startGui(projectDir: string, portFlag: string | undefined): CliResult {
   return ok("Starting OpenComms console...")
 }
 
+/**
+ * True when this process runs as the packaged standalone exe (Node SEA):
+ * the double-click case has NO argv[1], the explicit-command case has
+ * argv[1] === execPath. Under plain `node`, argv[1] is a script path.
+ */
+function runningAsPackagedExe(): boolean {
+  return process.argv[1] === undefined || process.argv[1] === process.execPath
+}
+
+/**
+ * Double-click behavior (spec: the exe must DO something visible): with no
+ * arguments on a Windows console, launch the install wizard instead of
+ * flashing help text. Escapes: OPENCOMMS_NO_WIZARD=1, or any argument.
+ */
+function shouldLaunchWizard(argv: string[]): boolean {
+  return (
+    process.platform === "win32" &&
+    argv.length === 0 &&
+    process.stdin.isTTY === true &&
+    runningAsPackagedExe() &&
+    process.env["OPENCOMMS_NO_WIZARD"] !== "1"
+  )
+}
+
+/**
+ * Launch the PowerShell/WinForms install wizard as a DETACHED process (the
+ * exe exits right away; the wizard window is independent). The script is
+ * passed via -EncodedCommand so no temp .ps1 file and no execution-policy
+ * change is needed; the exe + icon paths travel via env defaults.
+ */
+function launchWizard(): CliResult {
+  if (process.platform !== "win32") {
+    return fail(
+      "The installer wizard is Windows-only (Windows first, per spec). On macOS/Linux build on the target OS (npm run build:exe) and run scripts/install.sh.",
+    )
+  }
+  if (!runningAsPackagedExe()) {
+    return fail(
+      "The wizard installs the packaged exe. Build it first (npm run build:exe), then run opencomms.exe install-wizard.",
+    )
+  }
+  const iconPath = join(tmpdir(), "opencomms-wizard-icon.ico")
+  try {
+    writeFileSync(iconPath, iconIcoBytes())
+  } catch (error) {
+    return fail(`Could not extract the icon: ${(error as Error).message}`)
+  }
+  const encoded = Buffer.from(WIZARD_PS1, "utf16le").toString("base64")
+  const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
+    detached: true,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      OPENCOMMS_WIZARD_EXE: process.execPath,
+      OPENCOMMS_WIZARD_ICON: iconPath,
+    },
+  })
+  child.unref()
+  return ok("Installer wizard launched (a setup window will open shortly).")
+}
+
+/**
+ * `opencomms uninstall-self` — remove the installed integration: user PATH
+ * entry, Start Menu shortcuts, desktop shortcut, then delete the install
+ * directory once this process has exited (detached delayed cleanup).
+ */
+function runUninstallSelf(): CliResult {
+  if (process.platform !== "win32") {
+    return fail("uninstall-self is Windows-only. On macOS/Linux remove the binary from ~/.local/bin manually.")
+  }
+  if (!runningAsPackagedExe()) {
+    return fail("uninstall-self removes the PACKAGED exe install. Build it first: npm run build:exe.")
+  }
+  const installDir = dirname(process.execPath)
+  const encoded = Buffer.from(WIZARD_PS1, "utf16le").toString("base64")
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
+    timeout: 120_000,
+    encoding: "utf8",
+    env: { ...process.env, OPENCOMMS_WIZARD_DIR: installDir },
+  })
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim()
+  if (result.status !== 0) {
+    return fail(`Uninstall failed (status ${result.status}):\n${output}`)
+  }
+  // Schedule removal of the install dir once this process has exited.
+  try {
+    const cleaner = spawn("cmd.exe", ["/c", `ping -n 3 127.0.0.1 > nul & rmdir /s /q "${installDir}"`], {
+      detached: true,
+      stdio: "ignore",
+    })
+    cleaner.unref()
+  } catch {
+    /* the user can delete the folder manually */
+  }
+  return ok(`${output}\nInstall folder removal scheduled: ${installDir}`)
+}
+
 /** Session commands hit the async state lock and are awaited by main()/tests directly. */
 export function runCli(argv: string[]): CliResult {
   // Find the subcommand's positional arguments and --project wherever they
@@ -570,6 +670,10 @@ export function runCli(argv: string[]): CliResult {
       return runInstall(positional, projectDir)
     case "gui":
       return startGui(projectDir, flagValue(tokens, "--port"))
+    case "install-wizard":
+      return launchWizard()
+    case "uninstall-self":
+      return runUninstallSelf()
     case "session":
       return fail('Session commands are async: await runSession(["save", "<name>"]) (CLI main handles this).')
     case "join-command":
@@ -597,6 +701,8 @@ export function runCli(argv: string[]): CliResult {
           "  opencomms install-member [--host <id>] [--id <memberId> | --name <name>] [--project <dir>]",
           "  opencomms session <list|get|save|delete|resume> [name] [--summary ...] [--as name] [--confirm]",
           "  opencomms gui [--port <port>]        # local console (loopback-only)",
+          "  opencomms install-wizard             # Windows setup wizard (also launched by double-clicking the exe)",
+          "  opencomms uninstall-self             # remove PATH entry, shortcuts, and the install folder",
           "  opencomms join-command <session> [--host <opencode|claude-code|codex|claude-desktop|chatgpt>]",
           "  opencomms uninstall <host> [--project <dir>]",
           "  opencomms version",
@@ -620,6 +726,10 @@ if (isCliEntry) {
     process.exitCode = result.code
   }
   const argv = process.argv.slice(2)
+  if (shouldLaunchWizard(argv)) {
+    emit(launchWizard())
+    process.exit(process.exitCode ?? 0)
+  }
   if (argv[0] === "gui") {
     // The GUI server blocks; never take the sync exit path.
     const guiResult = runCli(argv)
