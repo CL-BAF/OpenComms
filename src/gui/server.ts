@@ -122,7 +122,9 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   const MUTATING = new Set(["POST", "PUT", "DELETE", "PATCH"])
   const guard = (req: IncomingMessage): string | null => {
     const host = (req.headers["host"] ?? "").toLowerCase().trim()
-    const hostName = host.split(":")[0] ?? ""
+    // IPv6-safe: "[::1]:3000" → "[::1]" (cut after ']'); plain "h:p" → "h".
+    const bracketEnd = host.indexOf("]")
+    const hostName = bracketEnd >= 0 ? host.slice(0, bracketEnd + 1) : (host.split(":")[0] ?? "")
     if (!(hostName === "127.0.0.1" || hostName === "localhost" || hostName === "[::1]")) {
       return `Rejected Host "${host}" (opencomms gui accepts loopback only)`
     }
@@ -130,7 +132,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       const origin = req.headers["origin"]
       const referer = req.headers["referer"]
       const fetchSite = req.headers["sec-fetch-site"]
-      const expected = `http://${host}`
       const sameOrigin =
         (typeof origin === "string" && origin.toLowerCase() === `http://${host}`) ||
         (typeof referer === "string" && referer.toLowerCase().startsWith(`http://${host}/`))

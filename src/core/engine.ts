@@ -646,8 +646,6 @@ export function joinChannel(state: State, input: JoinInput): ToolResult {
 
   if (!input.role_prompt.trim()) return fail("A role prompt is required.")
 
-  if (!input.role_prompt.trim()) return fail("A role prompt is required.")
-
   channel.members.push(
     makeMember(
       {
