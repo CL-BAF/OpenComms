@@ -23,6 +23,7 @@
     "install:plugin": "node install.mjs",
     "build": "tsc -p tsconfig.build.json && npm run build:bundle",
     "build:bundle": "esbuild src/plugin.ts --bundle --format=esm --platform=node --outfile=dist/plugin.bundled.js --external:@opencode-ai/plugin --external:@opencode-ai/sdk --log-level=warning",
+    "build:exe": "node scripts/build-exe.mjs",
     "build:test": "tsc -p tsconfig.test.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
@@ -41,6 +42,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6",
     "prettier": "^3.9.6",
     "typescript": "^5.7.0"
   }

@@ -86,6 +86,34 @@ opencomms join-command <session> [--host opencode|claude-code|codex]
 opencomms install-member --host claude-code --name architect   # human member ids
 ```
 
+## Local GUI console
+
+`opencomms gui` starts a **loopback-only** web console (no network exposure,
+no auth needed at loopback trust — the same boundary as state.json):
+
+```bash
+opencomms gui            # http://127.0.0.1:4919
+opencomms gui --port 5000
+```
+
+Features: session cards (active + archived) with agent counts and
+descriptions, click-through detail with the **real copyable join command**
+per host, agent list with honest states (Working = mail queued / Idle /
+Offline = stale), per-agent **Remove** (severs the OpenComms link only —
+never terminates provider processes), **Save Session** (with a structured
+summary prompt), **Resume as new**, and **Delete** (confirm). Live updates
+stream over SSE.
+
+## Standalone executable (no Node required)
+
+```bash
+npm run build:exe        # -> dist-opencomms/opencomms(.exe)
+```
+
+Produces a single-file executable of the full CLI (Node Single Executable
+App) — `version`, `session`, `gui` and every other command work without a
+Node.js installation. Rebuild per platform on the machine you target.
+
 ## Quick start (OpenCode, two tabs)
 
 1. **Install the plugin** (from the repo root):

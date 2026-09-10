@@ -1,5 +1,5 @@
-/**
- * ChatGPT adapter — remote MCP connector scaffold.
+﻿/**
+ * ChatGPT adapter â€” remote MCP connector scaffold.
  *
  * Verified 2026-08-29 (developers.openai.com/plugins, platform.openai.com/docs/mcp,
  * learn.chatgpt.com/docs):
@@ -19,7 +19,7 @@
  * THIS ADAPTER SCOPE (v2): the state/protocol side of a streamable-HTTP MCP
  * endpoint + honest capability labeling + documentation of the supported
  * connection path. NOT included: a production OAuth provider (requires a
- * registered domain, TLS, and OpenAI review) — that is exactly the part we
+ * registered domain, TLS, and OpenAI review) â€” that is exactly the part we
  * refuse to fake. No local broker is ever exposed to the internet.
  */
 
@@ -63,7 +63,7 @@ export function scaffoldChatGptIntegration(projectDir: string): ChatGptScaffoldR
   writeFileSync(
     serverPath,
     [
-      "// EXPERIMENTAL — ChatGPT remote MCP connector scaffold (OpenComms v2).",
+      "// EXPERIMENTAL â€” ChatGPT remote MCP connector scaffold (OpenComms v2).",
       "//",
       "// This file exposes a streamable-HTTP MCP endpoint around the shared",
       "// OpenComms tools, using the official MCP SDK transport. It is NOT",
@@ -100,7 +100,7 @@ export function scaffoldChatGptIntegration(projectDir: string): ChatGptScaffoldR
   writeFileSync(
     readmePath,
     [
-      "# OpenComms for ChatGPT — EXPERIMENTAL scaffold",
+      "# OpenComms for ChatGPT â€” EXPERIMENTAL scaffold",
       "",
       "## What works today (documented, 2026-08-29)",
       "",
@@ -115,7 +115,7 @@ export function scaffoldChatGptIntegration(projectDir: string): ChatGptScaffoldR
       "- Push a message into a conversation (PULL only).",
       "- Expose conversation identity to the server.",
       "- Inject role instructions.",
-      "- Local MCP servers in the Chat app (only the Codex host runs local MCP —",
+      "- Local MCP servers in the Chat app (only the Codex host runs local MCP â€”",
       "  that is the separate `codex` adapter).",
       "",
       "## Deliberately NOT provided",

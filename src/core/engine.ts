@@ -404,6 +404,75 @@ function budgetRefusal(channel: Channel, now: number): string | null {
   return null
 }
 
+/**
+ * OPERATOR session creation (GUI [+ New Session] / CLI backend): creates an
+ * ACTIVE session with ZERO members — agents join it with their real host
+ * sessions afterwards. Same validation + budgets as createChannel.
+ */
+export function createSessionAsOperator(
+  state: State,
+  input: {
+    channel: string
+    project_id: string
+    worktree: string
+    max_members?: number
+    rate_limit?: number
+    max_hops?: number
+    budgets?: { max_runtime_ms?: number | null; max_delivered_messages?: number | null }
+  },
+): ToolResult {
+  const name = normalizeChannelName(input.channel)
+  if (!name) return fail("Session name is required.")
+  if (name.length > 64) return fail("Session name must be 64 characters or fewer.")
+  if (!CHANNEL_NAME_PATTERN.test(name)) {
+    return fail(
+      'Session names may only contain lowercase letters, digits, "-" and "_", starting with a letter or digit.',
+    )
+  }
+  if (!input.project_id) return fail("Project id is required.")
+  if (!input.worktree) return fail("Worktree is required.")
+  if (findChannel(state, name)) {
+    return fail(`Session "${input.channel}" already exists.`)
+  }
+  const maxMembers =
+    input.max_members !== undefined
+      ? Math.max(2, Math.min(MAX_MEMBERS_CEILING, Math.floor(input.max_members)))
+      : DEFAULT_MAX_MEMBERS
+  const channel: Channel = {
+    id: newChannelId(),
+    name,
+    project_id: input.project_id,
+    worktree: input.worktree,
+    created_at: Date.now(),
+    paused: false,
+    paused_at: null,
+    lifecycle: "active",
+    description: null,
+    parent_channel_id: null,
+    members: [],
+    max_members: maxMembers,
+    rate: { window_start: Date.now(), count: 0 },
+    cooldown_until: {},
+    seen_content: {},
+    processed_correlations: [],
+    max_hops: clampOptionalInt(input.max_hops, 1, 50, DEFAULT_MAX_HOPS),
+    rate_limit: clampOptionalInt(input.rate_limit, 1, 1000, DEFAULT_RATE_LIMIT),
+    delivery_cooldown_ms: DEFAULT_DELIVERY_COOLDOWN_MS,
+    stale_event_ms: DEFAULT_STALE_EVENT_MS,
+    timer: defaultTimer(),
+    budgets: {
+      max_runtime_ms: clampOptionalPositive(input.budgets?.max_runtime_ms, 60_000, 30 * 24 * 60 * 60_000),
+      max_delivered_messages: clampOptionalPositive(input.budgets?.max_delivered_messages, 1, 1_000_000),
+    },
+    delivered_total: 0,
+  }
+  state.channels[name] = channel
+  return ok(`Session "${input.channel}" created (empty — share the join command with agents).`, {
+    channel_id: channel.id,
+    name,
+  })
+}
+
 export function createChannel(state: State, input: CreateInput): ToolResult {
   const name = normalizeChannelName(input.channel)
   if (!name) return fail("Channel name is required.")
@@ -658,6 +727,85 @@ export function disconnectChannel(state: State, input: DisconnectInput): ToolRes
 }
 
 /**
+ * Queue the kick/removal system notices for every remaining member (shared
+ * by kickChannel and the operator path).
+ */
+function queueRemovalNotices(
+  state: State,
+  channel: Channel,
+  callerSessionId: string,
+  callerRole: string,
+  kickedSessionId: string,
+  kickedRole: string,
+): void {
+  const now = Date.now()
+  for (const remaining of channel.members) {
+    const notice: MessageEnvelope = {
+      message_id: newMessageId(),
+      channel_id: channel.id,
+      sender_session_id: callerSessionId,
+      sender_role: callerRole,
+      recipient_session_id: remaining.session_id,
+      recipient_role: remaining.role,
+      timestamp: now,
+      message_type: "system",
+      content: `${kickedRole} (${kickedSessionId}) was removed from the session by the operator. Remaining members continue as before; rejoin is possible via Join.`,
+      reply_to: null,
+      root_message_id: null,
+      hop_count: 0,
+      delivery_status: "pending",
+      correlation_id: newCorrelationId(),
+      delivered_at: null,
+      attempts: 0,
+      delivery_method: null,
+    }
+    state.messages[notice.message_id] = notice
+    const queue = state.queues[remaining.session_id] ?? []
+    queue.push(notice.message_id)
+    state.queues[remaining.session_id] = queue
+  }
+}
+
+/**
+ * OPERATOR member removal (GUI / CLI backend surface): removes a member
+ * from a session WITHOUT provider authorization checks — the operator is
+ * the trusted local user, not an agent. Removes the OpenComms LINK ONLY;
+ * external provider processes are never touched (work order: keep
+ * "remove from OpenComms" separate from "terminate provider process").
+ * Sender is recorded as "operator" in the system notices.
+ */
+export function removeMemberAsOperator(
+  state: State,
+  input: { channel: string; target_session_id?: string | null; target_role?: string | null },
+): ToolResult {
+  const channel = findChannel(state, input.channel)
+  if (!channel) return fail(`Channel "${input.channel}" does not exist.`)
+  const wantedId = input.target_session_id?.trim().toLowerCase()
+  const wantedRole = input.target_role?.trim().toLowerCase()
+  if (!wantedId && !wantedRole) return fail("Specify target_session_id or target_role.")
+  const target =
+    (wantedId ? channel.members.find((m) => m.session_id.toLowerCase() === wantedId) : undefined) ??
+    (wantedRole ? channel.members.find((m) => m.role.toLowerCase() === wantedRole) : undefined)
+  if (!target) {
+    const roster = channel.members.map((m) => `${m.role} (${m.session_id})`).join(", ")
+    return fail(`No member matches the given target on channel "${channel.name}". Members: ${roster}.`)
+  }
+  const kickedSessionId = target.session_id
+  const kickedRole = target.role
+  removeMember(state, channel, kickedSessionId)
+  queueRemovalNotices(state, channel, "operator", "Operator", kickedSessionId, kickedRole)
+  pruneMessages(state)
+  return ok(
+    `Removed ${kickedRole} (${kickedSessionId}) from session "${channel.name}". Only the OpenComms link was severed — no provider processes were touched.`,
+    {
+      kicked_session_id: kickedSessionId,
+      kicked_role: kickedRole,
+      remaining_session_ids: channel.members.filter((m) => !m.stale).map((m) => m.session_id),
+    },
+  )
+}
+
+/**
  * Privileged removal of another member. Kicking only severs the channel
  * link â€” the kicked session keeps running; it just stops receiving
  * this channel's traffic and gets clean "not a member" errors afterward.
@@ -712,32 +860,7 @@ export function kickChannel(state: State, input: KickInput): ToolResult {
 
   // Inform every remaining member so silence is never mistaken for a stall:
   // one distinct system envelope per recipient, queued normally.
-  const now = Date.now()
-  for (const remaining of channel.members) {
-    const notice: MessageEnvelope = {
-      message_id: newMessageId(),
-      channel_id: channel.id,
-      sender_session_id: input.session_id,
-      sender_role: caller.role,
-      recipient_session_id: remaining.session_id,
-      recipient_role: remaining.role,
-      timestamp: now,
-      message_type: "system",
-      content: `${kickedRole} (${kickedSessionId}) was removed from the channel by ${caller.role}. Remaining members continue as before; rejoin is possible via Join.`,
-      reply_to: null,
-      root_message_id: null,
-      hop_count: 0,
-      delivery_status: "pending",
-      correlation_id: newCorrelationId(),
-      delivered_at: null,
-      attempts: 0,
-      delivery_method: null,
-    }
-    state.messages[notice.message_id] = notice
-    const queue = state.queues[remaining.session_id] ?? []
-    queue.push(notice.message_id)
-    state.queues[remaining.session_id] = queue
-  }
+  queueRemovalNotices(state, channel, input.session_id, caller.role, kickedSessionId, kickedRole)
 
   pruneMessages(state)
 
@@ -1288,19 +1411,27 @@ export function resumeSession(
 /**
  * Delete a session (DESTRUCTIVE): removes the live channel AND its archive
  * (deleted sessions give no future context). Authorization: an ACTIVE
- * session requires a member session_id; a SAVED session can be deleted by
- * the operator via the CLI (session_id null) with confirm=true. Pure: the
- * caller deletes the archive file (phase: "archive" in the result).
+ * session requires a member session_id — UNLESS the caller is the trusted
+ * local operator (GUI console / CLI, `operator: true`, the documented
+ * destructive-confirmation path). Pure: the caller deletes the archive
+ * file (phase: "archive" in the result).
  */
 export function deleteSession(
   state: State,
-  input: { channel: string; session_id?: string | null; confirm: boolean },
+  input: { channel: string; session_id?: string | null; confirm: boolean; operator?: boolean },
 ): ToolResult {
   if (!input.confirm) {
     return fail("Deletion is destructive and permanent (archive included). Pass confirm=true (CLI: --confirm).")
   }
   const channel = findChannel(state, input.channel)
   if (channel) {
+    if (input.operator) {
+      // Trusted local operator path: destructive on confirm, membership N/A.
+      return ok(`Session "${channel.name}" marked for deletion (live state).`, {
+        channel_id: channel.id,
+        phase: "live",
+      })
+    }
     if (input.session_id) {
       const member = memberOf(channel, input.session_id)
       if (!member) return fail(`This session (${input.session_id}) is not a member of "${channel.name}".`)

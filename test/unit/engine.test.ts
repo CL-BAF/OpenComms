@@ -721,7 +721,7 @@ test("kickChannel: privileged role kicks another member with notification", () =
     (m) => m.message_type === "system" && m.recipient_session_id === SESSION_A,
   )
   assert.ok(notice)
-  assert.match(notice!.content, /was removed from the channel/)
+  assert.match(notice!.content, /was removed from the session by/)
   assert.equal((state.queues[SESSION_A] ?? []).includes(notice!.message_id), true)
 })
 

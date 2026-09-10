@@ -26,8 +26,10 @@ import { StateStore } from "../core/store.js"
 import { status } from "../core/engine.js"
 import { buildSessionArchive, commitSessionSave, deleteSession, resumeSession } from "../core/engine.js"
 import { ArchiveStore } from "../core/archive.js"
+import { startGuiServer } from "../gui/server.js"
 import { SCHEMA_VERSION } from "../core/types.js"
 import { listMemberPins, loadProjectPin } from "../mcp/identity.js"
+import { joinCommandFor } from "./join-command.js"
 
 /** Package version, derived from package.json so the CLI can never drift. */
 export const VERSION: string = (() => {
@@ -441,7 +443,7 @@ function runSession(tokens: string[], projectDir: string): Promise<CliResult> {
         }
         case "delete": {
           if (!name) return fail("Usage: opencomms session delete <name> --confirm")
-          const decided = deleteSession(state, { channel: name, session_id: null, confirm: confirmed })
+          const decided = deleteSession(state, { channel: name, session_id: null, confirm: confirmed, operator: true })
           if (!decided.ok) return fail(decided.message)
           const { phase, channel_id: channelId } = decided.data as { phase: string; channel_id: string }
           if (phase === "live") {
@@ -504,27 +506,34 @@ function runSession(tokens: string[], projectDir: string): Promise<CliResult> {
  * host (work order: the GUI shows this; users never copy UUIDs).
  */
 function runJoinCommand(projectDir: string, sessionName: string | undefined, host: string | undefined): CliResult {
+  // Shared helper keeps CLI and GUI on ONE definition of the real command.
   if (!sessionName) return fail("Usage: opencomms join-command <session> [--host <opencode|claude-code|codex>]")
-  const hostId = (host ?? "opencode").toLowerCase()
-  const ch = `Channel=${sessionName}`
-  switch (hostId) {
-    case "opencode":
-      return ok(
-        `Run INSIDE an OpenCode session in this project:\n  /OpenComms Join ${ch} As=<role> [role instructions]\nor have the agent call the tool:\n  opencomms_join(channel="${sessionName}", role="<role>", role_prompt="...")`,
-      )
-    case "claude-code":
-    case "codex":
-      return ok(
-        `Run INSIDE the ${hostId === "codex" ? "Codex" : "Claude Code"} session (MCP tool call by the agent):\n  opencomms_join(channel="${sessionName}", role="<role>", role_prompt="...", spawn_push=true)\n(spawn_push=true enables push delivery via ${hostId === "codex" ? "codex exec resume" : "claude --resume"}).`,
-      )
-    case "claude-desktop":
-    case "chatgpt":
-      return ok(
-        `Run INSIDE the ${hostId} conversation (MCP tool call by the assistant; PULL delivery):\n  opencomms_join(channel="${sessionName}", role="<role>", role_prompt="...")`,
-      )
-    default:
-      return fail(`Unknown host "${hostId}". Supported: opencode, claude-code, codex, claude-desktop, chatgpt.`)
-  }
+  const result = joinCommandFor(sessionName, host ?? "opencode")
+  if ("error" in result) return fail(result.error)
+  return ok(`Run ${result.where}:\n  ${result.command}`)
+}
+
+/**
+ * `opencomms gui` — start the loopback-only local console (blocks until
+ * Ctrl+C). No network exposure; no provider credentials pass through.
+ */
+function startGui(projectDir: string, portFlag: string | undefined): CliResult {
+  const port = portFlag ? Number(portFlag) : 4919
+  if (!Number.isFinite(port) || port < 1 || port > 65_535) return fail(`Invalid --port "${portFlag}".`)
+  void (async () => {
+    const handle = await startGuiServer({ projectDir: resolve(projectDir), port, hostname: "127.0.0.1" })
+    process.stdout.write(
+      `OpenComms console: http://127.0.0.1:${handle.port}\nLoopback-only (no network exposure). Ctrl+C to stop.\n`,
+    )
+    const shutdown = (): void => {
+      void handle.close().then(() => process.exit(0))
+    }
+    process.on("SIGINT", shutdown)
+    process.on("SIGTERM", shutdown)
+    // Keep the event loop alive for the server + SSE timers.
+    setInterval(() => {}, 60_000).unref?.()
+  })().catch((error: Error) => process.stderr.write(`GUI failed: ${error.message}\n`))
+  return ok("Starting OpenComms console...")
 }
 
 /** Session commands hit the async state lock and are awaited by main()/tests directly. */
@@ -559,6 +568,8 @@ export function runCli(argv: string[]): CliResult {
       return ok(`opencomms ${VERSION} (state schema v${SCHEMA_VERSION})`)
     case "install":
       return runInstall(positional, projectDir)
+    case "gui":
+      return startGui(projectDir, flagValue(tokens, "--port"))
     case "session":
       return fail('Session commands are async: await runSession(["save", "<name>"]) (CLI main handles this).')
     case "join-command":
@@ -585,6 +596,7 @@ export function runCli(argv: string[]): CliResult {
           "  opencomms install <opencode|claude-code|claude-desktop|codex|chatgpt> [--project <dir>]",
           "  opencomms install-member [--host <id>] [--id <memberId> | --name <name>] [--project <dir>]",
           "  opencomms session <list|get|save|delete|resume> [name] [--summary ...] [--as name] [--confirm]",
+          "  opencomms gui [--port <port>]        # local console (loopback-only)",
           "  opencomms join-command <session> [--host <opencode|claude-code|codex|claude-desktop|chatgpt>]",
           "  opencomms uninstall <host> [--project <dir>]",
           "  opencomms version",
@@ -595,16 +607,24 @@ export function runCli(argv: string[]): CliResult {
   }
 }
 
-// CLI invocation only (not when imported by tests).
+// CLI invocation only (not when imported by tests). Under a Node SEA
+// single executable, process.execPath IS the CLI itself (argv[1] = exe).
 import { realpathSync } from "node:fs"
 const invoked = process.argv[1] ? realpathSync(process.argv[1]).replace(/\\/g, "/") : ""
-if (/(^|[\\/])cli[\\/](opencomms|main|cli)\.(js|mjs|ts)$/.test(invoked)) {
+const isCliEntry =
+  /(^|[\\/])cli[\\/](opencomms|main|cli)\.(js|mjs|ts)$/.test(invoked) ||
+  (process.argv[1] !== undefined && process.execPath === realpathSync(process.argv[1]))
+if (isCliEntry) {
   const emit = (result: { code: number; output: string }): void => {
     if (result.output) process.stdout.write(result.output + "\n")
     process.exitCode = result.code
   }
   const argv = process.argv.slice(2)
-  if (argv[0] === "session") {
+  if (argv[0] === "gui") {
+    // The GUI server blocks; never take the sync exit path.
+    const guiResult = runCli(argv)
+    if (guiResult.output) process.stdout.write(guiResult.output + "\n")
+  } else if (argv[0] === "session") {
     void runSession(argv.slice(1), projectDirFromFlag(argv, "--project") ?? process.cwd()).then(emit)
   } else {
     emit(runCli(argv))

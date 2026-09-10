@@ -19,7 +19,13 @@ import { fileURLToPath } from "node:url"
 import { randomBytes } from "node:crypto"
 import { saveMemberPin, listMemberPins, isValidMemberId } from "../../mcp/identity.js"
 
-const __dirname2 = dirname(fileURLToPath(import.meta.url))
+const __dirname2 = (() => {
+  try {
+    return dirname(fileURLToPath(import.meta.url))
+  } catch {
+    return process.cwd()
+  }
+})()
 
 export interface ClaudeCodeInstallReport {
   ok: boolean

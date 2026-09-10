@@ -20,7 +20,13 @@ import { execFileSync } from "node:child_process"
 import { join, resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 
-const here = dirname(fileURLToPath(import.meta.url))
+const here = (() => {
+  try {
+    return dirname(fileURLToPath(import.meta.url))
+  } catch {
+    return process.cwd()
+  }
+})()
 
 export interface CodexInstallReport {
   ok: boolean

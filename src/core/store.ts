@@ -100,15 +100,11 @@ function isValidChannel(ch: unknown, legacy = false): boolean {
   if (typeof ch["project_id"] !== "string" || typeof ch["worktree"] !== "string") return false
   if (!Array.isArray(ch["members"])) return false
   const members = ch["members"] as unknown[]
-  // Empty channels are transiently possible but never persisted EXCEPT the
-  // precise resumed-not-yet-repopulated case: an ACTIVE session linked to a
-  // parent archive with zero members is the documented resume state.
-  const isResumedEmpty =
-    members.length === 0 &&
-    ch["lifecycle"] === "active" &&
-    typeof ch["parent_channel_id"] === "string" &&
-    (ch["parent_channel_id"] as string).length > 0
-  if (members.length === 0 && !isResumedEmpty) return false
+  // Empty ACTIVE sessions are legitimate: the GUI/operator creates a session
+  // before any agent joins, and a resumed session starts empty. An empty
+  // channel cannot route anything (no members = no senders/recipients), so
+  // this is corruption-tolerant, not a spoofing surface.
+  if (members.length === 0 && ch["lifecycle"] !== "active") return false
   if (members.length > MAX_MEMBERS_CEILING) return false
   return members.every((m) => isValidMember(m, legacy))
 }

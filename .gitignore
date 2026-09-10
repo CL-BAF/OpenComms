@@ -35,3 +35,5 @@ probe-*.mjs
 
 # Local installer artifacts (this dev repo's own plugin registration)
 opencode.json
+dist-opencomms/
+sea-prep.blob
