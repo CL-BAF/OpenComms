@@ -7,7 +7,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startGuiServer, memberState } from "../../../src/gui/server.js"
@@ -19,6 +19,7 @@ import {
   createSessionAsOperator,
 } from "../../../src/core/engine.js"
 import { emptyState } from "../../../src/core/store.js"
+import { ArchiveStore } from "../../../src/core/archive.js"
 import { joinCommandFor } from "../../../src/cli/join-command.js"
 
 const PROJECT = "proj_gui"
@@ -417,6 +418,76 @@ function okRequest(x: unknown): { status: number } {
 function okStatus(x: { status: number }): number {
   return x.status
 }
+
+test("SSE: archive-only changes (no state.json write) still fire refresh (stale-GUI regression)", async () => {
+  await withServer("gui-arch-watch", async (base, dir) => {
+    // Open the SSE stream like the browser does.
+    const controller = new AbortController()
+    const events: string[] = []
+    const streamPromise = (async () => {
+      const res = await fetch(`${base}/api/events`, { signal: controller.signal })
+      assert.equal(res.status, 200)
+      const reader = res.body!.getReader()
+      const dec = new TextDecoder()
+      let buf = ""
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        let i
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          events.push(buf.slice(0, i))
+          buf = buf.slice(i + 2)
+        }
+      }
+    })()
+
+    await new Promise((r) => setTimeout(r, 400))
+    // External archive mutation WITHOUT touching state.json — exactly what
+    // a CLI `session delete` of a SAVED session (or an MCP save) does.
+    const archives = new ArchiveStore(dirOf(base))
+    mkdirSync(archives.dir, { recursive: true })
+    const archiveId = "chn_reg000000000000000000000000000a"
+    archives.save({
+      schema: 1,
+      channel_id: archiveId,
+      name: "external-archive-write",
+      parent_channel_id: null,
+      description: null,
+      summary: "archive-only write",
+      members: [],
+      budgets: null,
+      created_at: Date.now(),
+      saved_at: Date.now(),
+      saved_by: null,
+      saved_by_role: null,
+      message_count: 0,
+      messages: [],
+      final_state_note: null,
+    })
+    // The list must show it...
+    const list = (await (await fetch(`${base}/api/sessions`)).json()) as {
+      data: { archived: Array<{ name: string }> }
+    }
+    assert.ok(
+      list.data.archived.some((a) => a.name === "external-archive-write"),
+      "archive appears in the session list",
+    )
+
+    // ...and the SSE stream must have announced the change (watcher covers
+    // the archives dir, not just state.json).
+    const deadline = Date.now() + 10_000
+    while (!events.some((e) => e.includes("event: refresh")) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    controller.abort()
+    await streamPromise.catch(() => {})
+    assert.ok(
+      events.some((e) => e.includes("event: refresh")),
+      `archive-only change must fire an SSE refresh (got: ${JSON.stringify(events)})`,
+    )
+  })
+})
 
 test("P1: cross-site write (simulated simple-request CSRF) is rejected with 403", async () => {
   await withServer("gui-h2", async (base) => {

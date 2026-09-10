@@ -102,6 +102,20 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     })
   }
   ensureStatWatcher()
+  // The GUI shows ARCHIVED sessions too: archive files are written/deleted
+  // by OTHER processes (CLI session save/delete, MCP save) without touching
+  // state.json, so a state.json-only watcher leaves the saved-sessions list
+  // STALE. stat-poll the archives DIRECTORY as well: entry creates/replaces
+  // (temp+rename saves) and deletions (unlink) update a directory's mtime,
+  // so every archive mutation fires.
+  let statWatcherArchives: StatWatcher | null = null
+  const ensureArchivesWatcher = (): void => {
+    if (statWatcherArchives) return
+    statWatcherArchives = watchFile(archives.dir, { interval: 750, persistent: false }, (curr, prev) => {
+      if (curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size) onStatChange()
+    })
+  }
+  ensureArchivesWatcher()
 
   const json = (res: ServerResponse, code: number, payload: unknown): void => {
     res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" })
@@ -219,7 +233,24 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" })
       res.write(`event: hello\ndata: {}\n\n`)
       sseClients.add(res)
-      req.on("close", () => sseClients.delete(res))
+      // Keepalive: a periodic SSE comment keeps half-open connections
+      // observable. A dead client surfaces as a write error (pruned below);
+      // the BROWSER sees activity instead of a silent half-open stream and
+      // EventSource reconnects (the frontend refetches on reconnect).
+      const ping = setInterval(() => {
+        for (const client of sseClients) {
+          try {
+            client.write(`: ping\n\n`)
+          } catch {
+            sseClients.delete(client)
+          }
+        }
+      }, 10_000)
+      ping.unref?.()
+      req.on("close", () => {
+        clearInterval(ping)
+        sseClients.delete(res)
+      })
       return
     }
 
@@ -451,12 +482,17 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
         port: (server.address() as { port: number }).port,
         close: () =>
           new Promise<void>((resolveClose) => {
-            // The refresh timer is unref'd; unwind the stat watcher too.
+            // The refresh timer is unref'd; unwind the stat watchers too.
             if (refreshTimer) clearTimeout(refreshTimer)
             try {
               unwatchFile(store.file)
             } catch {
               /* file may already be gone */
+            }
+            try {
+              unwatchFile(archives.dir)
+            } catch {
+              /* dir may already be gone */
             }
             for (const res of sseClients) res.end()
             sseClients.clear()

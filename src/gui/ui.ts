@@ -222,6 +222,9 @@ $("#newBtn").onclick = () => {
 
 const es = new EventSource("/api/events");
 es.addEventListener("refresh", () => { currentDetail ? renderDetail(currentDetail) : renderMain(); });
+// Reconnect = the stream died or the server restarted: refetch immediately
+// so the console NEVER shows stale data after a connection interruption.
+es.addEventListener("open", () => { currentDetail ? renderDetail(currentDetail) : renderMain(); });
 renderMain();
 </script>
 </body>
