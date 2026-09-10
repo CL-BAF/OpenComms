@@ -22,8 +22,11 @@
   "scripts": {
     "install:plugin": "node install.mjs",
     "build": "tsc -p tsconfig.build.json && npm run build:bundle",
-    "build:bundle": "esbuild src/plugin.ts --bundle --format=esm --platform=node --outfile=dist/plugin.bundled.js --external:@opencode-ai/plugin --external:@opencode-ai/sdk --log-level=warning",
+    "build:bundle": "node scripts/bundle.mjs --entry src/plugin.ts --format esm --outfile dist/plugin.bundled.js",
     "build:exe": "node scripts/build-exe.mjs",
+    "build:installer": "node scripts/build-installer.mjs",
+    "build:release": "node scripts/build-release.mjs",
+    "test:windows-release": "node scripts/test-windows-release.mjs",
     "build:test": "tsc -p tsconfig.test.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",

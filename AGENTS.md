@@ -6,7 +6,7 @@
 
 Project-local TypeScript OpenCode plugin that **links existing root OpenCode sessions** (2..N) into a communication channel with an **open role vocabulary** (e.g. Builder <-> Reviewer, or Lead/Coder/Tester trios) **without creating or owning sessions**.
 
-- Package: `opencomms` v1.0.0, ESM, `opencode >=1.18.0`
+- Package: `opencomms` v1.1.0, ESM, `opencode >=1.18.0`
 - Core sources: `src/core/types.ts`, `src/core/store.ts`, `src/core/engine.ts` + OpenCode adapter `src/plugin.ts`
 - State lives at `<project>/.opencomms/state.json` (schema v2), written atomically (temp file + rename). Legacy `.opencode-comms/state.json` exists only until the one-time v1->v2 migration
 - No new sessions ever created. Only links sessions the user already opened.
@@ -19,6 +19,8 @@ Project-local TypeScript OpenCode plugin that **links existing root OpenCode ses
 | `src/core/store.ts` | `StateStore` persistence, atomic writes, corrupt recovery, v1 migration | Changing persistence, file location, atomicity |
 | `src/core/engine.ts` | Pure deterministic business logic (channels, queues, timer, validation) | Changing channel/message/queue/timer logic, validation |
 | `src/plugin.ts` | OpenCode glue: tools, hooks, slash command, delivery | Adding tools, hooks, changing prompt injection |
+| `src/gui/server.ts` + `src/gui/ui.ts` | Loopback API and embedded offline HTML console | Changing workspace selection, operator flows, GUI surfaces |
+| `src/gui/workspace.ts` | Per-user project registry/preferences | Changing recent-project behavior or app-level settings |
 | `docs/ARCHITECTURE.md` | Data flow, lifecycle, invariants | Understanding system before big changes |
 | `docs/API_REFERENCE.md` | Full function signatures with `file:line` | Looking up exact API without reading source |
 | `docs/TOOLS_AND_COMMANDS.md` | 12 tools + `/OpenComms` slash command spec | Working on tool args, descriptions, slash parsing |

@@ -7,10 +7,11 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs"
+import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startGuiServer, memberState } from "../../../src/gui/server.js"
+import { GUI_HTML } from "../../../src/gui/ui.js"
 import {
   createChannel,
   joinChannel,
@@ -60,6 +61,10 @@ const api = async (base: string, path: string, method = "GET", body?: unknown) =
 
 test("GUI: create â†’ list shows the empty active session; join-command is the real one", async () => {
   await withServer("create", async (base) => {
+    const invalid = await api(base, "/api/sessions", "POST", { name: "not a valid name" })
+    assert.equal(invalid.status, 400)
+    assert.equal((invalid.body as { ok: boolean }).ok, false)
+
     const created = (await (
       await fetch(`${base}/api/sessions`, {
         method: "POST",
@@ -87,6 +92,56 @@ test("GUI: create â†’ list shows the empty active session; join-command is 
     assert.match(cmd.data.command, /opencomms_join\(channel="billing-v2"/)
     assert.match(cmd.data.command, /spawn_push=true/)
   })
+})
+
+test("GUI: workspace registry switches projects and never writes state before selection", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-workspace-"))
+  const first = join(root, "project with spaces")
+  const second = join(root, "another-project")
+  mkdirSync(first, { recursive: true })
+  mkdirSync(second, { recursive: true })
+  const previousConfigDir = process.env["OPENCOMMS_CONFIG_DIR"]
+  process.env["OPENCOMMS_CONFIG_DIR"] = join(root, "app-config")
+  const handle = await startGuiServer({ projectDir: join(root, "not-a-project"), port: 0, hostname: "127.0.0.1" })
+  const base = `http://127.0.0.1:${handle.port}`
+  try {
+    const before = await api(base, "/api/workspace")
+    assert.equal(before.status, 200)
+    assert.equal((before.body.data as { current_project: string | null }).current_project, null)
+    const empty = await api(base, "/api/sessions")
+    assert.equal((empty.body.data as { project: string | null }).project, null)
+    assert.equal(existsSync(join(root, "not-a-project", ".opencomms")), false)
+
+    const selected = await api(base, "/api/workspace", "POST", { path: first })
+    assert.equal(selected.status, 200)
+    assert.equal((selected.body.data as { current_project: string }).current_project, first)
+    const created = await api(base, "/api/sessions", "POST", { name: "space-safe" })
+    assert.equal(created.status, 200)
+    assert.equal(existsSync(join(first, ".opencomms", "state.json")), true)
+
+    const switched = await api(base, "/api/workspace", "POST", { path: second })
+    assert.equal(switched.status, 200)
+    assert.equal((switched.body.data as { current_project: string }).current_project, second)
+    const list = await api(base, "/api/sessions")
+    assert.deepEqual((list.body.data as { live: unknown[] }).live, [])
+    assert.equal(existsSync(join(second, ".opencomms", "state.json")), false)
+    assert.equal(existsSync(join(first, ".opencomms", "state.json")), true)
+  } finally {
+    await handle.close()
+    if (previousConfigDir === undefined) delete process.env["OPENCOMMS_CONFIG_DIR"]
+    else process.env["OPENCOMMS_CONFIG_DIR"] = previousConfigDir
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("GUI: embedded application shell uses modals and exposes project, diagnostics, and capability surfaces", () => {
+  assert.match(GUI_HTML, /Saved Sessions/)
+  assert.match(GUI_HTML, /Choose Project/)
+  assert.match(GUI_HTML, /Copy diagnostics/)
+  assert.match(GUI_HTML, /Technical details/)
+  assert.match(GUI_HTML, /Reconnecting/)
+  assert.doesNotMatch(GUI_HTML, /\bprompt\s*\(/)
+  assert.doesNotMatch(GUI_HTML, /\bconfirm\s*\(/)
 })
 
 test("GUI: members endpoint returns live roster with honest states; remove severs the link only", async () => {

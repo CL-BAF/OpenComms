@@ -1,231 +1,124 @@
 /**
- * OpenComms GUI — single-page frontend (v1, work order 2026-09-08).
- *
- * Visual direction (per spec): very dark greys (#111111 page, #1c1c1c
- * cards, #272727 nested, #333333 borders), near-white text, muted grey
- * secondary; colour ONLY for member states (Working / Idle / Offline).
- * No bright dashboard RGB.
- *
- * Provider-independent: every action talks to /api/sessions* (the same
- * provider-neutral backend the CLI uses). The join command shown is the
- * REAL one for the selected host (never fabricated).
+ * OpenComms local GUI. This intentionally stays a dependency-free embedded
+ * document so the standalone executable works offline and can be packaged as
+ * one file. The server remains the source of truth for all session actions.
  */
-
 export const GUI_HTML = String.raw`<!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OpenComms</title>
 <style>
-  :root {
-    --page: #111111; --card: #1c1c1c; --nested: #272727; --border: #333333;
-    --text: #e8e8e8; --secondary: #9a9a9a;
-    --working: #c2a36b; --idle: #7fa878; --offline: #a86b6b;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px; }
-  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-  h1 { font-size: 18px; font-weight: 600; margin: 0; }
-  h1 span { color: var(--secondary); font-weight: 400; }
-  button { background: var(--nested); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
-  button:hover { border-color: #4a4a4a; }
-  button.danger { color: #d99a9a; }
-  button.primary { border-color: #555; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; cursor: pointer; }
-  .card:hover { border-color: #4a4a4a; }
-  .card h3 { margin: 0 0 4px; font-size: 15px; }
-  .card .desc { color: var(--secondary); min-height: 20px; }
-  .card .meta { color: var(--secondary); font-size: 12px; margin-top: 8px; }
-  .agents-line { color: var(--secondary); font-size: 12px; margin-top: 6px; }
-  .section { color: var(--secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin: 22px 0 8px; }
-  .detail { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
-  .detail h2 { margin: 0 0 4px; font-size: 17px; }
-  .nested { background: var(--nested); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 10px 0; }
-  .cmd { font-family: Consolas, monospace; font-size: 12.5px; color: var(--text); word-break: break-all; user-select: all; }
-  .row { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
-  .agent { display: flex; align-items: center; justify-content: space-between; background: var(--nested); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 6px 0; }
-  .agent .who { color: var(--secondary); font-size: 12px; }
-  .state { font-size: 12px; border-radius: 10px; padding: 2px 10px; border: 1px solid var(--border); }
-  .state.Working { color: var(--working); }
-  .state.Idle { color: var(--idle); }
-  .state.Offline { color: #a86b6b; }
-  .muted { color: var(--secondary); }
-  input[type=text] { background: var(--nested); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 7px 10px; font-size: 14px; width: 240px; }
-  select { background: var(--nested); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
-  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--nested); border: 1px solid var(--border); color: var(--text); padding: 10px 18px; border-radius: 8px; display: none; }
-  a.back { color: var(--secondary); text-decoration: none; cursor: pointer; }
-  .lifecycle { font-size: 11px; border-radius: 10px; padding: 2px 8px; border: 1px solid var(--border); color: var(--secondary); }
+:root {
+  --page:#101112; --surface:#17191b; --surface-2:#1d2023; --surface-3:#25292d;
+  --line:#30353a; --line-strong:#424950; --text:#edf0f2; --muted:#929ba3;
+  --dim:#687179; --accent:#d4a35f; --good:#87b58f; --warn:#d2a463; --bad:#c77f7f;
+}
+* { box-sizing:border-box; }
+html,body { min-height:100%; }
+body { margin:0; background:var(--page); color:var(--text); font:13px/1.5 "Segoe UI",system-ui,sans-serif; }
+button,input,select,textarea { font:inherit; }
+button { color:var(--text); background:var(--surface-3); border:1px solid var(--line-strong); border-radius:5px; padding:7px 12px; cursor:pointer; }
+button:hover { border-color:#68727a; background:#2c3136; }
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+button.primary { background:#b88a4e; border-color:#d0a365; color:#151515; font-weight:600; }
+button.primary:hover { background:#c99a5d; }
+button.ghost { background:transparent; border-color:transparent; color:var(--muted); }
+button.danger { color:#e3a3a3; }
+button.small { padding:4px 8px; font-size:12px; }
+.app-shell { display:grid; grid-template-columns:238px minmax(0,1fr); min-height:100vh; }
+.sidebar { display:flex; flex-direction:column; border-right:1px solid var(--line); background:#141617; padding:18px 12px; }
+.brand { display:flex; align-items:center; gap:10px; padding:2px 8px 22px; }
+.brand-mark { width:27px; height:27px; border:1px solid #b88a4e; color:var(--accent); display:grid; place-items:center; border-radius:5px; font-weight:700; letter-spacing:-.08em; }
+.brand-name { font-size:15px; font-weight:650; letter-spacing:.01em; }
+.brand-sub { color:var(--muted); font-size:11px; margin-top:1px; }
+.project-switch { text-align:left; width:100%; padding:10px; background:var(--surface); border-color:var(--line); margin-bottom:22px; }
+.project-label { display:block; color:var(--dim); font-size:10px; text-transform:uppercase; letter-spacing:.11em; }
+.project-path { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:3px; color:var(--text); }
+.nav { display:grid; gap:3px; }
+.nav button { background:transparent; border-color:transparent; color:var(--muted); text-align:left; padding:9px 10px; }
+.nav button:hover,.nav button.active { background:var(--surface-2); border-color:var(--line); color:var(--text); }
+.nav-icon { display:inline-block; width:23px; color:var(--dim); }
+.sidebar-footer { margin-top:auto; padding:16px 9px 0; border-top:1px solid var(--line); color:var(--muted); font-size:11px; }
+.connection { display:flex; align-items:center; gap:7px; }
+.connection-dot { width:7px; height:7px; border-radius:50%; background:var(--good); }
+.connection.offline .connection-dot { background:var(--bad); }
+.connection.reconnecting .connection-dot { background:var(--warn); }
+.main { min-width:0; }
+.topbar { min-height:70px; display:flex; justify-content:space-between; align-items:center; gap:18px; border-bottom:1px solid var(--line); padding:15px 34px; }
+.eyebrow { color:var(--dim); text-transform:uppercase; letter-spacing:.12em; font-size:10px; }
+.page-title { margin:2px 0 0; font-size:19px; font-weight:600; }
+.top-actions { display:flex; align-items:center; gap:12px; }
+.top-connection { color:var(--muted); font-size:12px; }
+.content { max-width:1220px; margin:0 auto; padding:28px 34px 60px; }
+.toolbar { display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-bottom:22px; }
+.toolbar h2 { font-size:18px; margin:0; font-weight:600; }
+.toolbar p { color:var(--muted); margin:4px 0 0; }
+.section-label { color:var(--dim); font-size:10px; text-transform:uppercase; letter-spacing:.12em; margin:26px 0 9px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:11px; }
+.session-card { min-height:155px; padding:16px; border:1px solid var(--line); background:var(--surface); border-radius:7px; cursor:pointer; }
+.session-card:hover { border-color:var(--line-strong); background:var(--surface-2); }
+.session-head { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+.session-name { font-size:15px; font-weight:600; }
+.session-desc { color:var(--muted); min-height:42px; margin-top:9px; }
+.session-meta { display:flex; justify-content:space-between; gap:10px; color:var(--muted); font-size:11px; border-top:1px solid var(--line); padding-top:10px; margin-top:11px; }
+.role-line { color:var(--dim); font-size:11px; margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.badge { display:inline-flex; align-items:center; border:1px solid var(--line-strong); color:var(--muted); border-radius:4px; padding:2px 6px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; }
+.badge.active { color:var(--good); border-color:#46604d; }.badge.paused { color:var(--warn); border-color:#6a5537; }.badge.saved { color:#a8b0b6; }
+.empty { border:1px dashed var(--line-strong); color:var(--muted); padding:24px; border-radius:6px; }
+.detail-wrap { max-width:900px; }
+.back { color:var(--muted); cursor:pointer; text-decoration:none; display:inline-block; margin-bottom:17px; }.back:hover { color:var(--text); }
+.detail-title-row { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }.detail-title { margin:0; font-size:23px; font-weight:600; }
+.detail-desc { color:var(--muted); margin:7px 0 0; max-width:700px; }.detail-actions { display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
+.panel { background:var(--surface); border:1px solid var(--line); border-radius:7px; padding:18px; margin-top:16px; }.panel h3 { margin:0 0 13px; font-size:13px; font-weight:600; }
+.overview { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px; }.kv-label { color:var(--dim); text-transform:uppercase; letter-spacing:.09em; font-size:10px; }.kv-value { margin-top:3px; overflow-wrap:anywhere; }.kv-value.muted { color:var(--muted); }
+.agents { display:grid; gap:7px; }.agent { border:1px solid var(--line); background:var(--surface-2); padding:11px 12px; border-radius:5px; }.agent-row { display:flex; justify-content:space-between; gap:12px; align-items:center; }.agent-role { font-weight:600; }.agent-identity { color:var(--muted); font-size:11px; margin-top:3px; }.agent-actions { display:flex; align-items:center; gap:10px; }
+.state { font-size:11px; }.state.Working { color:var(--warn); }.state.Idle { color:var(--good); }.state.Offline { color:var(--bad); }
+details.tech { margin-top:7px; color:var(--muted); font-size:11px; } details.tech summary { cursor:pointer; color:var(--dim); }.tech-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:7px; margin-top:8px; }
+.join-box { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:end; }.join-controls { display:flex; gap:8px; align-items:center; }.join-where { color:var(--muted); font-size:11px; margin:9px 0 6px; }.command { background:#101112; border:1px solid var(--line); border-radius:4px; padding:12px; color:#d8dde1; font:12px/1.55 Consolas,"Cascadia Code",monospace; overflow-wrap:anywhere; user-select:all; }.cap-warning { color:var(--warn); font-size:11px; margin-top:7px; }
+.summary { white-space:pre-wrap; color:#c6cbd0; background:var(--surface-2); border:1px solid var(--line); padding:12px; border-radius:5px; }.context { white-space:pre-wrap; color:var(--muted); font-size:12px; max-height:250px; overflow:auto; }.notice { border-left:2px solid var(--accent); color:var(--muted); padding:8px 11px; background:var(--surface-2); margin-top:12px; }
+.integration-list,.diagnostic-list { display:grid; gap:8px; }.integration-row,.diagnostic-row { display:flex; justify-content:space-between; gap:18px; border-bottom:1px solid var(--line); padding:11px 0; }.integration-row:last-child,.diagnostic-row:last-child { border-bottom:0; }.integration-name { font-weight:600; }.integration-detail,.diagnostic-value { color:var(--muted); text-align:right; overflow-wrap:anywhere; }.diagnostic-key { color:var(--dim); }.diagnostic-value { max-width:65%; }
+.settings-note { max-width:650px; color:var(--muted); }.modal-backdrop { position:fixed; inset:0; z-index:10; display:grid; place-items:center; padding:20px; background:rgba(0,0,0,.67); }.modal { width:min(560px,100%); max-height:90vh; overflow:auto; background:var(--surface); border:1px solid var(--line-strong); border-radius:7px; box-shadow:0 16px 60px rgba(0,0,0,.45); }.modal-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; border-bottom:1px solid var(--line); padding:18px 20px 14px; }.modal-head h2 { margin:0; font-size:16px; }.modal-body { padding:18px 20px; }.modal-foot { display:flex; justify-content:flex-end; gap:8px; border-top:1px solid var(--line); padding:13px 20px; }
+.field { margin-bottom:14px; }.field label { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }.field-help { color:var(--dim); font-size:11px; margin-top:4px; }.inline-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; }.check-row { display:flex; gap:8px; align-items:center; color:var(--muted); }.check-row input { accent-color:var(--accent); }
+input[type=text],input[type=number],textarea,select { width:100%; background:#111314; color:var(--text); border:1px solid var(--line-strong); border-radius:4px; padding:8px 9px; } textarea { min-height:130px; resize:vertical; }
+.recent-project { display:flex; justify-content:space-between; gap:10px; align-items:center; padding:9px 10px; background:var(--surface-2); border:1px solid var(--line); border-radius:4px; margin:6px 0; }.recent-project.invalid { opacity:.55; }.recent-project code { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.form-error { color:var(--bad); min-height:20px; margin:0 0 8px; }.toast { position:fixed; z-index:20; left:50%; bottom:22px; transform:translateX(-50%); background:#2b3034; border:1px solid var(--line-strong); color:var(--text); padding:9px 15px; border-radius:5px; box-shadow:0 5px 25px rgba(0,0,0,.35); }
+@media (max-width:800px) { .app-shell { grid-template-columns:1fr; }.sidebar { border-right:0; border-bottom:1px solid var(--line); padding:12px; }.brand { padding-bottom:12px; }.project-switch { margin-bottom:9px; }.nav { grid-template-columns:repeat(3,1fr); }.nav button { font-size:11px; }.sidebar-footer { display:none; }.topbar,.content { padding-left:18px; padding-right:18px; }.topbar { min-height:62px; }.top-connection { display:none; }.toolbar { align-items:flex-start; flex-direction:column; }.join-box { grid-template-columns:1fr; }.detail-title-row { flex-direction:column; }.detail-actions { justify-content:flex-start; }.inline-fields { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1>OpenComms <span>— local session console</span></h1>
-    <button id="newBtn" class="primary">+ New Session</button>
-  </header>
-  <div id="view" class="wrap" style="padding:0"></div>
-</div>
+<div class="app-shell"><aside class="sidebar"><div class="brand"><div class="brand-mark">OC</div><div><div class="brand-name">OpenComms</div><div class="brand-sub">Agent session coordination</div></div></div><button class="project-switch" id="projectBtn"><span class="project-label">Current project</span><span class="project-path" id="projectPath">Choose a project</span></button><nav class="nav"><button data-nav="sessions"><span class="nav-icon">◈</span>Sessions</button><button data-nav="saved"><span class="nav-icon">▣</span>Saved Sessions</button><button data-nav="integrations"><span class="nav-icon">⌘</span>Integrations</button><button data-nav="diagnostics"><span class="nav-icon">⌁</span>Diagnostics</button><button data-nav="settings"><span class="nav-icon">⚙</span>Settings</button></nav><div class="sidebar-footer"><div class="connection" id="connection"><span class="connection-dot"></span><span id="connectionText">Connecting</span></div><div style="margin-top:7px">Local-only console</div></div></aside><main class="main"><header class="topbar"><div><div class="eyebrow">OpenComms / local workspace</div><h1 class="page-title" id="pageTitle">Sessions</h1></div><div class="top-actions"><span class="top-connection" id="topConnection">Connecting</span><button class="primary" id="newBtn">New Session</button></div></header><div class="content" id="view"></div></main></div>
+<div id="modalRoot"></div><div id="toastRoot"></div>
 <script>
-const $ = (sel) => document.querySelector(sel);
-let currentDetail = null;
-const api = async (path, opts = {}) => {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
-  return res.json();
-};
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const toast = (msg) => {
-  const t = document.createElement("div");
-  t.className = "toast"; t.style.display = "block"; t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2600);
-};
-
-async function renderMain() {
-  currentDetail = null;
-  const payload = await (await fetch("/api/sessions")).json();
-  const live = payload.data.live, archived = payload.data.archived;
-  const card = (title, agents, desc, meta, onClick, badge) => {
-    const el = document.createElement("div");
-    el.className = "card";
-    el.innerHTML = '<h3>' + esc(title) + '</h3>' +
-      '<div class="desc">' + esc(desc) + '</div>' +
-      '<div class="agents-line">' + esc(agents) + '</div>' +
-      '<div class="meta">' + esc(meta) + '</div>';
-    el.onclick = () => renderDetail(title);
-    return el;
-  };
-  let html = "";
-  html += '<div class="section">Active sessions</div><div class="grid" id="liveGrid"></div>';
-  html += '<div class="section">Saved sessions</div><div class="grid" id="archGrid"></div>';
-  $("#view").innerHTML = html;
-  const liveGrid = $("#liveGrid");
-  if (live.length === 0) liveGrid.innerHTML = '<div class="muted">No active sessions. Create one or resume an archive.</div>';
-  for (const s of live) {
-    const el = document.createElement("div");
-    el.className = "card";
-    const agentList = s.agents.map((a) => a.role).join(", ");
-    el.innerHTML = '<h3>' + esc(s.name) + (s.paused ? ' <span class="lifecycle">paused</span>' : '') + '</h3>' +
-      '<div class="muted">' + esc(s.description) + '</div>' +
-      '<div class="agents-line">' + esc(s.agents.length + "/" + s.max_members + " agents") + '</div>' +
-      '<div class="meta">' + esc(s.agents.map((a) => a.role).join(", ")) + '</div>';
-    el.onclick = () => renderDetail(s.name);
-    liveGrid.appendChild(el);
-  }
-  const archGrid = $("#archGrid") || document.createElement("div");
-  archGrid.className = "grid";
-  $("#view").appendChild(archGrid);
-  for (const a of payload.data.archived) {
-    const el = document.createElement("div");
-    el.className = "card";
-    const date = new Date(a.saved_at).toISOString().slice(0, 10);
-    el.innerHTML = '<h3>' + esc(a.name) + ' <span class="lifecycle">saved ' + esc(date) + '</span></h3>' +
-      '<div class="muted">' + esc(a.description || "No description yet") + '</div>' +
-      '<div class="agents-line">' + esc(a.member_count + " agents | " + a.message_count + " messages") + '</div>';
-    el.onclick = () => renderDetail(a.name);
-    archGrid.appendChild(el);
-  }
-}
-
-async function renderDetail(name) {
-  currentDetail = name;
-  const payload = await (await fetch("/api/sessions/" + encodeURIComponent(name) + "/members")).json();
-  if (!payload.ok) { $("#view").innerHTML = '<p class="muted">' + esc(payload.message) + '</p>'; return; }
-  const d = payload.data;
-  const saved = d.lifecycle === "saved";
-  let html = '<p><a class="back" onclick="renderMain()">← all sessions</a></p>';
-  html += '<div class="detail">';
-  html += '<h2>' + esc(d.name) + (saved ? ' <span class="lifecycle">SAVED</span>' : '') + '</h2>';
-  html += '<div class="muted">' + esc(d.description) + '</div>';
-  html += '<div class="section">Join command (pick a host)</div>';
-  html += '<div class="nested"><div class="row"><select id="hostSel">' +
-    ["opencode","claude-code","codex","claude-desktop","chatgpt"].map((h) => '<option>' + h + '</option>').join("") +
-    '</select><button id="copyBtn">Copy</button></div>' +
-    '<div class="row muted" id="whereTxt"></div>' +
-    '<div class="cmd" id="cmdTxt" style="margin-top:8px"></div></div>';
-  html += '<div class="section">Agents (' + esc(String(d.agents.length)) + (d.max_members ? '/' + esc(String(d.max_members)) : '') + ')</div>';
-  html += '<div id="agentList"></div>';
-  if (saved) {
-    html += '<div class="section">Archive</div><div class="nested muted" id="summary"></div>';
-    html += '<div class="row"><button id="resumeBtn">Resume as new session</button></div>';
-  } else {
-    html += '<div class="row" style="margin-top:18px"><button id="saveBtn">Save Session</button>' +
-      '<button class="danger" id="deleteBtn">Delete Session</button></div>';
-  }
-  html += '</div>';
-  $("#view").innerHTML = html;
-
-  const agentList = $("#agentList");
-  for (const a of d.agents) {
-    const row = document.createElement("div");
-    row.className = "agent";
-    row.innerHTML = '<div><div>' + esc(a.role) + '</div><div class="who">' +
-      esc(a.session_id + " | " + a.host + " | " + a.delivery_mode) + '</div></div>' +
-      '<div style="display:flex;gap:10px;align-items:center">' +
-      '<span class="state ' + esc(a.state) + '">' + esc(a.state) + '</span>' +
-      (saved ? "" : '<button class="rm">Remove</button>') + '</div>';
-    if (!saved) {
-      row.querySelector(".rm").onclick = async (e) => {
-        e.stopPropagation();
-        if (!confirm("Remove " + a.role + " from OpenComms? (Its provider process is NOT terminated)")) return;
-        const r = await fetch("/api/sessions/" + encodeURIComponent(name) + "/members/remove", {
-          method: "POST", body: JSON.stringify({ target_session_id: a.session_id })
-        }).then((r) => r.json());
-        toast(r.message); renderDetail(name);
-      };
-    }
-    agentList.appendChild(row);
-  }
-  if (saved && $("#summary")) $("#summary").textContent = d.summary || "(no summary recorded)";
-
-  async function loadCmd() {
-    const host = $("#hostSel").value;
-    const r = await (await fetch("/api/sessions/" + encodeURIComponent(name) + "/join-command?host=" + host)).json();
-    $("#whereTxt").textContent = r.data ? r.data.where : r.message;
-    $("#cmdTxt").textContent = r.data ? r.data.command : "";
-  }
-  $("#hostSel").onchange = loadCmd; loadCmd();
-  $("#copyBtn").onclick = async () => {
-    try { await navigator.clipboard.writeText($("#cmdTxt").textContent); toast("Join command copied"); }
-    catch { toast("Copy failed — select the text manually"); }
-  };
-  if (!saved) {
-    $("#saveBtn").onclick = async () => {
-      const summary = prompt("Structured summary for future agents (purpose, decisions, completed work, known issues). Leave empty to skip:");
-      if (summary === null) return;
-      const r = await fetch("/api/sessions/" + encodeURIComponent(name) + "/save", { method: "POST", body: JSON.stringify({ summary }) }).then((r) => r.json());
-      toast(r.message); renderMain();
-    };
-    $("#deleteBtn").onclick = async () => {
-      if (!confirm("DELETE session '" + name + "' permanently (no future context)?")) return;
-      const r = await fetch("/api/sessions/" + encodeURIComponent(name), { method: "DELETE" }).then((r) => r.json());
-      toast(r.message); renderMain();
-    };
-  } else {
-    $("#resumeBtn").onclick = async () => {
-      const newName = prompt("New session name (blank = same name):") ?? "";
-      const r = await fetch("/api/sessions/" + encodeURIComponent(name) + "/resume", { method: "POST", body: JSON.stringify({ new_name: newName }) }).then((r) => r.json());
-      toast(r.message); renderMain();
-    };
-  }
-}
-
-$("#newBtn").onclick = () => {
-  const name = prompt("Session name (lowercase letters/digits/-/_):");
-  if (!name) return;
-  fetch("/api/sessions", { method: "POST", body: JSON.stringify({ name }) }).then((r) => r.json()).then((r) => {
-    toast(r.message); renderMain();
-  });
-};
-
-const es = new EventSource("/api/events");
-es.addEventListener("refresh", () => { currentDetail ? renderDetail(currentDetail) : renderMain(); });
-// Reconnect = the stream died or the server restarted: refetch immediately
-// so the console NEVER shows stale data after a connection interruption.
-es.addEventListener("open", () => { currentDetail ? renderDetail(currentDetail) : renderMain(); });
-renderMain();
+var app={route:"sessions",detail:null,workspace:null,connected:false};var hosts=["opencode","claude-code","codex","claude-desktop","chatgpt"];var $=function(sel){return document.querySelector(sel);};var esc=function(value){return String(value==null?"":value).replace(/[&<>\"]/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[c];});};
+var setConnection=function(connected){var isConnected=connected===true,isReconnecting=connected==="reconnecting";app.connected=isConnected;var el=$("#connection"),label=isConnected?"Connected":isReconnecting?"Reconnecting":"Offline";if(el){el.className="connection "+(isConnected?"":isReconnecting?"reconnecting":"offline");$("#connectionText").textContent=label;$("#topConnection").textContent=label;}};
+var api=async function(path,options){try{var res=await fetch(path,Object.assign({headers:{"Content-Type":"application/json"}},options||{}));var body=await res.json();if(!res.ok)body.ok=false;setConnection(true);return body;}catch(error){setConnection(false);return{ok:false,message:"OpenComms backend is unavailable."};}};
+var toast=function(message){var old=$("#toastRoot .toast");if(old)old.remove();var el=document.createElement("div");el.className="toast";el.textContent=message||"Done";$("#toastRoot").appendChild(el);setTimeout(function(){el.remove();},2800);};var closeModal=function(){$("#modalRoot").innerHTML="";};var formError=function(message){var el=$(".form-error");if(el)el.textContent=message||"";};
+var modal=function(title,content,submitText,onSubmit){$("#modalRoot").innerHTML='<div class="modal-backdrop" id="modalBackdrop"><section class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h2>'+esc(title)+'</h2><button class="ghost" id="modalClose" aria-label="Close">×</button></div><form id="modalForm"><div class="modal-body">'+content+'</div><div class="modal-foot"><button type="button" id="modalCancel">Cancel</button><button type="submit" class="primary">'+esc(submitText||"Save")+'</button></div></form></section></div>';$("#modalClose").onclick=closeModal;$("#modalCancel").onclick=closeModal;$("#modalBackdrop").onclick=function(e){if(e.target.id==="modalBackdrop")closeModal();};$("#modalForm").onsubmit=function(e){e.preventDefault();onSubmit(new FormData(e.target));};};
+var projectLabel=function(){return app.workspace&&app.workspace.current_project?app.workspace.current_project:"Choose a project";};var renderShell=function(){$("#projectPath").textContent=projectLabel();$("#newBtn").style.display=app.route==="sessions"?"inline-block":"none";var titles={sessions:"Sessions",saved:"Saved Sessions",integrations:"Integrations",diagnostics:"Diagnostics",settings:"Settings"};$("#pageTitle").textContent=titles[app.route]||"Sessions";document.querySelectorAll("[data-nav]").forEach(function(el){el.classList.toggle("active",el.getAttribute("data-nav")==app.route);});};
+var loadWorkspace=async function(){var r=await api("/api/workspace");if(r.ok)app.workspace=r.data;renderShell();};var emptyProject=function(){$("#view").innerHTML='<div class="detail-wrap"><div class="toolbar"><div><h2>Choose a project</h2><p>OpenComms keeps channels and message history in the project that owns them.</p></div></div><div class="panel"><h3>Start with a coding project</h3><p class="settings-note">Select an existing project directory. OpenComms will not create state in its own installation folder, and switching projects never moves or copies project state.</p><button class="primary" id="chooseProject">Choose Project</button></div></div>';$("#chooseProject").onclick=openProjectModal;};
+var renderSessions=async function(){renderShell();if(!app.workspace||!app.workspace.current_project){emptyProject();return;}var r=await api("/api/sessions");if(!r.ok){$("#view").innerHTML='<div class="empty">'+esc(r.message)+'</div>';return;}var live=r.data.live||[],saved=r.data.archived||[];var h='<div class="toolbar"><div><h2>Active sessions</h2><p>Live OpenComms channels linked to existing agent sessions.</p></div><button class="primary" id="newBtnInline">New Session</button></div><div class="grid">';if(!live.length)h+='<div class="empty">No active sessions yet. Create a session, then share its real join command with your agents.</div>';live.forEach(function(s){var roles=s.agents.map(function(a){return a.role;}).join(", ")||"Waiting for agents to join";var last=s.last_activity?new Date(s.last_activity).toLocaleString():"No activity yet";h+='<article class="session-card" data-open="'+esc(s.name)+'"><div class="session-head"><div class="session-name">'+esc(s.name)+'</div><span class="badge '+(s.paused?'paused':'active')+'">'+(s.paused?'Paused':'Active')+'</span></div><div class="session-desc">'+esc(s.description||"Waiting for the first agent to describe this session…")+'</div><div class="role-line">'+esc(roles)+'</div><div class="session-meta"><span>'+esc(String(s.agents.length)+" / "+String(s.max_members)+" agents")+'</span><span>'+esc(last)+'</span></div></article>';});h+='</div><div class="section-label">Recent saved sessions</div><div class="grid">';if(!saved.length)h+='<div class="empty">Saved sessions will appear here after you save a live session.</div>';saved.slice(0,6).forEach(function(a){h+='<article class="session-card" data-open="'+esc(a.name)+'"><div class="session-head"><div class="session-name">'+esc(a.name)+'</div><span class="badge saved">Saved '+esc(new Date(a.saved_at).toLocaleDateString())+'</span></div><div class="session-desc">'+esc(a.description||"No description yet")+'</div><div class="role-line">'+esc(String(a.member_count)+" agents · "+String(a.message_count)+" messages")+'</div><div class="session-meta"><span>Archive</span><span>Open details</span></div></article>';});h+='</div>';$("#view").innerHTML=h;$("#newBtnInline").onclick=openNewModal;document.querySelectorAll("[data-open]").forEach(function(el){el.onclick=function(){openDetail(el.getAttribute("data-open"));};});};
+var renderSaved=async function(){renderShell();if(!app.workspace||!app.workspace.current_project){emptyProject();return;}var r=await api("/api/sessions");if(!r.ok){$("#view").innerHTML='<div class="empty">'+esc(r.message)+'</div>';return;}var saved=r.data.archived||[];var h='<div class="toolbar"><div><h2>Saved sessions</h2><p>Archives keep summaries, rosters and message history without reviving a provider process.</p></div></div><div class="grid">';if(!saved.length)h+='<div class="empty">No saved sessions in this project.</div>';saved.forEach(function(a){h+='<article class="session-card" data-open="'+esc(a.name)+'"><div class="session-head"><div class="session-name">'+esc(a.name)+'</div><span class="badge saved">Saved</span></div><div class="session-desc">'+esc(a.description||"No description yet")+'</div><div class="role-line">'+esc(new Date(a.saved_at).toLocaleString())+'</div><div class="session-meta"><span>'+esc(String(a.member_count)+" agents")+'</span><span>'+esc(String(a.message_count)+" messages")+'</span></div></article>';});h+='</div>';$("#view").innerHTML=h;document.querySelectorAll("[data-open]").forEach(function(el){el.onclick=function(){openDetail(el.getAttribute("data-open"));};});};
+var hostName=function(h){return({"opencode":"OpenCode","claude-code":"Claude Code","codex":"Codex","claude-desktop":"Claude Desktop","chatgpt":"ChatGPT"})[h]||h;};var capabilities=function(c){return c?Object.keys(c).filter(function(k){return c[k];}).join(", "):"Not reported";};
+var renderAgent=function(a,saved){var identity=hostName(a.host)+" · "+a.surface+" · "+a.delivery_mode;return'<div class="agent"><div class="agent-row"><div><div class="agent-role">'+esc(a.role)+'</div><div class="agent-identity">'+esc(identity)+'</div></div><div class="agent-actions"><span class="state '+esc(a.state)+'">'+esc(a.state)+'</span>'+(saved?'':'<button class="small danger" data-remove="'+esc(a.session_id)+'" data-role="'+esc(a.role)+'">Remove Agent</button>')+'</div></div><details class="tech"><summary>Technical details</summary><div class="tech-grid"><div><span class="kv-label">OpenComms member</span><div>'+esc(a.session_id)+'</div></div><div><span class="kv-label">Host session</span><div>'+esc(a.host_session_id||"Not exposed")+'</div></div><div><span class="kv-label">Capabilities</span><div>'+esc(capabilities(a.endpoint_capabilities))+'</div></div></div></details></div>';};
+var openDetail=async function(name){app.detail=name;var r=await api("/api/sessions/"+encodeURIComponent(name)+"/members");if(!r.ok){toast(r.message);return;}var d=r.data,saved=d.lifecycle==="saved";renderShell();var h='<div class="detail-wrap"><a class="back" id="backBtn">← All sessions</a><div class="detail-title-row"><div><h2 class="detail-title">'+esc(d.name)+' <span class="badge '+(saved?'saved':'active')+'">'+(saved?'Saved':(d.paused?'Paused':'Active'))+'</span></h2><p class="detail-desc">'+esc(d.description||"Waiting for the first agent to describe this session…")+'</p></div><div class="detail-actions">';if(!saved)h+='<button id="pauseBtn">'+(d.paused?'Resume':'Pause')+'</button><button id="saveBtn">Save Session</button>';h+='<button class="danger" id="deleteBtn">Delete Session</button></div></div>';
+h+='<section class="panel"><h3>Overview</h3><div class="overview"><div><div class="kv-label">Lifecycle</div><div class="kv-value">'+esc(d.lifecycle)+'</div></div><div><div class="kv-label">Created</div><div class="kv-value">'+esc(d.created_at?new Date(d.created_at).toLocaleString():"Not available")+'</div></div><div><div class="kv-label">Parent archive</div><div class="kv-value muted">'+esc(d.parent_channel_id||"None")+'</div></div><div><div class="kv-label">Members</div><div class="kv-value">'+esc(String(d.agents.length)+(d.max_members?" / "+d.max_members:""))+'</div></div><div><div class="kv-label">Message budget</div><div class="kv-value">'+esc(d.budgets&&d.budgets.max_delivered_messages!=null?String(d.budgets.max_delivered_messages):"Unlimited")+'</div></div></div></section>';
+if(!saved)h+='<section class="panel"><h3>Join Agent</h3><div class="join-box"><div><div class="join-controls"><select id="hostSel">'+hosts.map(function(x){return '<option value="'+x+'">'+hostName(x)+'</option>';}).join("")+'</select><button class="small" id="copyBtn">Copy command</button></div><div class="join-where" id="joinWhere"></div><div class="command" id="joinCommand">Loading command…</div><div class="cap-warning" id="joinWarning"></div></div></div></section>';
+h+='<section class="panel"><h3>Agents <span class="muted">('+esc(String(d.agents.length))+(d.max_members?" / "+esc(String(d.max_members)):"")+')</span></h3><div class="agents" id="agentList">'+(d.agents.length?d.agents.map(function(a){return renderAgent(a,saved);}).join(""): '<div class="empty">No agents are linked yet. Choose a host above and share the exact command.</div>')+'</div></section>';
+if(saved)h+='<section class="panel"><h3>Archive information</h3><div class="field"><div class="kv-label">Saved</div><div class="kv-value">'+esc(d.saved_at?new Date(d.saved_at).toLocaleString():"Not available")+'</div></div><div class="field"><div class="kv-label">Summary</div><div class="summary">'+esc(d.summary||"No structured summary recorded.")+'</div></div><div class="field"><div class="kv-label">Compact context</div><div class="context">'+esc(d.compact_context||"No compact context available.")+'</div></div><button class="primary" id="resumeBtn">Resume as new session</button></section>';
+h+='</div>';$("#view").innerHTML=h;$("#backBtn").onclick=function(){app.detail=null;renderRoute("sessions");};$("#deleteBtn").onclick=function(){openDeleteModal(d.name,saved);};
+if(!saved){$("#pauseBtn").onclick=async function(){var action=d.paused?"unpause":"pause";var x=await api("/api/sessions/"+encodeURIComponent(d.name)+"/"+action,{method:"POST",body:"{}"});toast(x.message);if(x.ok)openDetail(d.name);};$("#saveBtn").onclick=function(){openSaveModal(d.name);};document.querySelectorAll("[data-remove]").forEach(function(el){el.onclick=function(){openRemoveModal(d.name,el.getAttribute("data-remove"),el.getAttribute("data-role"));};});var loadJoin=async function(){var host=$("#hostSel").value;var x=await api("/api/sessions/"+encodeURIComponent(d.name)+"/join-command?host="+encodeURIComponent(host));$("#joinWhere").textContent=x.data?x.data.where:x.message;$("#joinCommand").textContent=x.data?x.data.command:"";$("#joinWarning").textContent=(host==="claude-desktop"||host==="chatgpt")?"PULL only: the agent must call opencomms_pull when it chooses.":host==="codex"||host==="claude-code"?"PUSH requires an explicitly enabled, compatible resumed session; otherwise use pull.":"";};$("#hostSel").onchange=loadJoin;$("#copyBtn").onclick=async function(){try{await navigator.clipboard.writeText($("#joinCommand").textContent);toast("Join command copied");}catch(e){toast("Copy failed — select the command manually");}};loadJoin();}else $("#resumeBtn").onclick=function(){openResumeModal(d.name,d.summary||"");};};
+var openNewModal=function(){modal("New session",'<p class="settings-note">Create an empty OpenComms session, then connect the provider sessions you already have open. OpenComms never creates provider sessions.</p><div class="field"><label for="sessionName">Session name</label><input id="sessionName" name="name" type="text" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" required placeholder="feature-review" /><div class="field-help">Letters, digits, hyphens and underscores.</div></div><div class="field"><label for="maxMembers">Maximum members</label><input id="maxMembers" name="max_members" type="number" min="2" max="32" value="8" required /></div><details><summary>Advanced safeguards</summary><div style="height:12px"></div><div class="inline-fields"><div class="field"><label>Rate limit / minute</label><input name="rate_limit" type="number" min="1" max="1000" placeholder="Default 20" /></div><div class="field"><label>Maximum reply hops</label><input name="max_hops" type="number" min="1" max="50" placeholder="Default 4" /></div><div class="field"><label>Runtime budget / minutes</label><input name="runtime_minutes" type="number" min="1" placeholder="Unlimited" /></div><div class="field"><label>Delivered-message budget</label><input name="message_budget" type="number" min="1" placeholder="Unlimited" /></div></div></details><p class="form-error"></p>',"Create session",async function(fd){var name=String(fd.get("name")||"").trim(),max=Number(fd.get("max_members"));if(!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)){formError("Use a name beginning with a letter or digit; only letters, digits, - and _ are allowed.");return;}if(!Number.isInteger(max)||max<2||max>32){formError("Maximum members must be between 2 and 32.");return;}var body={name:name,max_members:max};["rate_limit","max_hops"].forEach(function(k){var v=String(fd.get(k)||"");if(v)body[k]=Number(v);});var budgets={};var rt=Number(fd.get("runtime_minutes")),mb=Number(fd.get("message_budget"));if(Number.isFinite(rt)&&rt>0)budgets.max_runtime_ms=rt*60000;if(Number.isFinite(mb)&&mb>0)budgets.max_delivered_messages=mb;if(Object.keys(budgets).length)body.budgets=budgets;var x=await api("/api/sessions",{method:"POST",body:JSON.stringify(body)});if(!x.ok){formError(x.message);return;}closeModal();toast(x.message);renderSessions();});$("#sessionName").focus();};
+var openSaveModal=function(name){modal("Save session",'<p class="settings-note">Save ends the live session and writes an archive containing the description, final roster, structured summary and retained OpenComms messages. Save is not Delete; the archive remains available to resume.</p><div class="field"><label for="saveSummary">Structured summary</label><textarea id="saveSummary" name="summary" maxlength="2000" placeholder="Purpose, decisions, completed work, known issues…"></textarea></div><p class="form-error"></p>',"Save session",async function(fd){var x=await api("/api/sessions/"+encodeURIComponent(name)+"/save",{method:"POST",body:JSON.stringify({summary:String(fd.get("summary")||"")})});if(!x.ok){formError(x.message);return;}closeModal();toast(x.message);app.detail=null;renderRoute("sessions");});};
+var openResumeModal=function(name,summary){modal("Resume saved session",'<p class="settings-note">Resume creates a new active OpenComms session linked to the saved archive. It does not reopen or create any provider-native session.</p><div class="notice">Source archive: <strong>'+esc(name)+'</strong><br>'+esc(summary||"No structured summary recorded.")+'</div><div class="field" style="margin-top:15px"><label for="resumeName">New session name</label><input id="resumeName" name="new_name" type="text" maxlength="64" placeholder="Leave blank to use the source name" /></div><p class="form-error"></p>',"Resume as new",async function(fd){var newName=String(fd.get("new_name")||"").trim();if(newName&&!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(newName)){formError("Use letters, digits, hyphens and underscores only.");return;}var x=await api("/api/sessions/"+encodeURIComponent(name)+"/resume",{method:"POST",body:JSON.stringify({new_name:newName})});if(!x.ok){formError(x.message);return;}closeModal();toast(x.message);app.detail=null;renderRoute("sessions");});};
+var openDeleteModal=function(name,saved){modal("Delete session",'<p class="settings-note">This permanently removes the '+(saved?'saved archive':'live OpenComms session and its retained messages')+'. It does not terminate, delete or alter any native provider process.</p><div class="notice" style="border-color:var(--bad)">This action cannot be undone and the session will no longer provide future context.</div><p class="form-error"></p>',"Delete permanently",async function(){var x=await api("/api/sessions/"+encodeURIComponent(name),{method:"DELETE"});if(!x.ok){formError(x.message);return;}closeModal();toast(x.message);app.detail=null;renderRoute("sessions");});};
+var openRemoveModal=function(name,id,role){modal("Remove agent",'<p class="settings-note">Remove <strong>'+esc(role)+'</strong> from OpenComms? This severs only the channel link. The native provider process continues running.</p><div class="notice">Member: '+esc(id)+'</div><p class="form-error"></p>',"Remove agent",async function(){var x=await api("/api/sessions/"+encodeURIComponent(name)+"/members/remove",{method:"POST",body:JSON.stringify({target_session_id:id})});if(!x.ok){formError(x.message);return;}closeModal();toast(x.message);openDetail(name);});};
+var openProjectModal=async function(){var r=await api("/api/workspace");if(r.ok)app.workspace=r.data;var recent=(app.workspace&&app.workspace.recent_projects)||[];var list=recent.length?recent.map(function(p){return '<div class="recent-project '+(p.exists?'':'invalid')+'"><code title="'+esc(p.path)+'">'+esc(p.path)+'</code><button class="small" data-project="'+esc(p.path)+'" '+(p.exists?'':'disabled')+'>'+ (p.exists?'Open':'Missing')+'</button></div>';}).join(""): '<p class="muted">No recent projects yet.</p>';modal("Choose project",'<p class="settings-note">The selected project owns its own .opencomms state and archive. Missing recent folders are kept visible until you choose a replacement.</p><div class="field"><label for="projectPathInput">Project directory</label><input id="projectPathInput" name="path" type="text" placeholder="C:\\work\\my-project" required /><div class="field-help">Use Browse for a native folder picker on Windows.</div></div><button type="button" id="browseBtn">Browse…</button><div class="section-label">Recent projects</div>'+list+'<p class="form-error"></p>',"Open project",async function(fd){var path=String(fd.get("path")||"").trim();if(!path){formError("Choose a project directory.");return;}var x=await api("/api/workspace",{method:"POST",body:JSON.stringify({path:path})});if(!x.ok){formError(x.message);return;}app.workspace=x.data;closeModal();toast(x.message);renderRoute(app.route);});$("#browseBtn").onclick=async function(){var x=await api("/api/workspace/browse",{method:"POST",body:"{}"});if(x.ok&&x.data&&x.data.current_project){app.workspace=x.data;closeModal();toast(x.message);renderRoute(app.route);}else if(x.message)formError(x.message);};document.querySelectorAll("[data-project]").forEach(function(el){el.onclick=async function(){var x=await api("/api/workspace",{method:"POST",body:JSON.stringify({path:el.getAttribute("data-project")})});if(x.ok){app.workspace=x.data;closeModal();renderRoute(app.route);}else formError(x.message);};});};
+var renderIntegrations=async function(){renderShell();var r=await api("/api/integrations");if(!r.ok){$("#view").innerHTML='<div class="empty">'+esc(r.message)+'</div>';return;}var h='<div class="toolbar"><div><h2>Integrations</h2><p>Honest provider capability status for the current project and local machine.</p></div></div><div class="panel"><div class="integration-list">';(r.data||[]).forEach(function(x){h+='<div class="integration-row"><div><div class="integration-name">'+esc(x.name)+'</div><div class="muted">'+esc(x.delivery)+'</div></div><div class="integration-detail">'+esc(x.status)+'</div></div>';});h+='</div></div><div class="notice">Setup commands are intentionally not duplicated here. Use the documented host installer so unrelated provider configuration is preserved.</div>';$("#view").innerHTML=h;};
+var renderDiagnostics=async function(){renderShell();var r=await api("/api/diagnostics");if(!r.ok){$("#view").innerHTML='<div class="empty">'+esc(r.message)+'</div>';return;}var d=r.data,rows=[['OpenComms version',d.version],['Selected project',d.project||'None selected'],['State file',d.state_file||'Not active'],['State status',d.state_exists?'Present':'Not created yet'],['State schema',d.state_schema],['Archive directory',d.archive_directory||'Not active'],['Archive status',d.archive_exists?'Present':'Not created yet'],['GUI backend',d.backend],['Loopback port',d.port],['App config',d.app_config]];var h='<div class="toolbar"><div><h2>Diagnostics</h2><p>Local health and storage details. Credentials and provider secrets are never included.</p></div><button id="copyDiag">Copy diagnostics</button></div><div class="panel"><div class="diagnostic-list">';rows.forEach(function(row){h+='<div class="diagnostic-row"><div class="diagnostic-key">'+esc(row[0])+'</div><div class="diagnostic-value">'+esc(row[1])+'</div></div>';});h+='</div></div><div class="panel"><h3>Recent OpenComms errors</h3><div class="context">'+esc((d.errors||[]).map(function(e){return new Date(e.at).toLocaleString()+"  "+e.message;}).join("\n")||"No recent errors.")+'</div></div>';$("#view").innerHTML=h;$("#copyDiag").onclick=async function(){var text=rows.map(function(x){return x[0]+": "+x[1];}).join("\n");try{await navigator.clipboard.writeText(text);toast("Diagnostics copied");}catch(e){toast("Copy failed — select the values manually");}};};
+var renderSettings=function(){renderShell();$("#view").innerHTML='<div class="toolbar"><div><h2>Settings</h2><p>Small app-level preferences for this local console.</p></div></div><div class="panel"><h3>Workspace</h3><p class="settings-note">OpenComms remembers recent and last-selected project directories in the per-user app configuration shown in Diagnostics. Channel state, archives and message history remain project-local.</p><button id="settingsProject">Change current project</button></div><div class="panel"><h3>Security boundary</h3><p class="settings-note">The backend binds to loopback only, validates Host and browser write origins, and never sends provider credentials to this UI.</p></div>' ;$("#settingsProject").onclick=openProjectModal;};
+var renderRoute=function(route){app.route=route||app.route;renderShell();if(app.route==="sessions")renderSessions();else if(app.route==="saved")renderSaved();else if(app.route==="integrations")renderIntegrations();else if(app.route==="diagnostics")renderDiagnostics();else renderSettings();};document.querySelectorAll("[data-nav]").forEach(function(el){el.onclick=function(){app.detail=null;renderRoute(el.getAttribute("data-nav"));};});$("#projectBtn").onclick=openProjectModal;$("#newBtn").onclick=openNewModal;
+var events=new EventSource("/api/events");events.addEventListener("open",function(){setConnection(true);if(app.detail)openDetail(app.detail);else renderRoute(app.route);});events.addEventListener("error",function(){setConnection("reconnecting");});events.addEventListener("refresh",function(){if(app.detail)openDetail(app.detail);else renderRoute(app.route);});(async function(){setConnection(false);await loadWorkspace();renderRoute("sessions");})();
 </script>
 </body>
 </html>`

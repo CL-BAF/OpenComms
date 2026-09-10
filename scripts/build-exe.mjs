@@ -42,15 +42,7 @@ npmRun("build")
 
 // 2. Bundle the CLI to CommonJS (SEA runs CJS; dist is ESM).
 const bundle = join(repoRoot, "dist", "cli", "cli-bundle.cjs")
-run(process.execPath, [
-  join(repoRoot, "node_modules", "esbuild", "bin", "esbuild"),
-  "dist/cli/main.js",
-  "--bundle",
-  "--platform=node",
-  "--format=cjs",
-  `--outfile=${bundle}`,
-  "--log-level=warning",
-])
+run(process.execPath, [join(repoRoot, "scripts", "bundle.mjs"), "--entry", join(repoRoot, "dist", "cli", "main.js"), "--format", "cjs", "--outfile", bundle])
 if (!existsSync(bundle)) throw new Error("CLI bundle was not produced")
 
 // 3. SEA preparation blob.

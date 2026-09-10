@@ -708,6 +708,22 @@ export function resumeChannel(state: State, input: ResumeInput): ToolResult {
   return ok(`Channel "${input.channel}" resumed. Pending messages will be delivered.`)
 }
 
+/** Local GUI/CLI operator pause control; this does not impersonate a member. */
+export function setSessionPausedAsOperator(state: State, input: { channel: string; paused: boolean }): ToolResult {
+  const channel = findChannel(state, input.channel)
+  if (!channel) return fail(`Channel "${input.channel}" does not exist.`)
+  if (input.paused) {
+    if (!channel.paused) {
+      channel.paused = true
+      channel.paused_at = Date.now()
+    }
+    return ok(`Session "${channel.name}" paused.`)
+  }
+  channel.paused = false
+  channel.paused_at = null
+  return ok(`Session "${channel.name}" resumed.`)
+}
+
 /**
  * Shared member-removal cleanup: drop membership, purge the departing
  * session's queue (marking those envelopes rejected), and fold/stop their

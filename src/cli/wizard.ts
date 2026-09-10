@@ -2,7 +2,7 @@
  * Windows install wizard (spec: Windows-first cross-platform installers).
  *
  * Double-clicking the standalone exe must DO something visible: the CLI's
- * no-args path on a Windows TTY launches this PowerShell/WinForms wizard,
+ * no-args path on a Windows packaged executable launches this PowerShell/WinForms wizard,
  * which installs the exe into the user's programs directory, optionally adds
  * it to the user PATH, and creates Start Menu / desktop shortcuts. The same
  * script exposes headless core functions (-TestCore) so the install logic is
@@ -31,6 +31,26 @@ export const WIZARD_PS1 = String.raw`param(
   [switch]$Uninstall
 )
 $ErrorActionPreference = "Stop"
+$script:logPath = if ($env:OPENCOMMS_WIZARD_LOG) { $env:OPENCOMMS_WIZARD_LOG } else { Join-Path $env:LOCALAPPDATA "OpenComms\logs\installer.log" }
+
+function Write-InstallLog([string]$message) {
+  try {
+    $parent = Split-Path -Parent $script:logPath
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    Add-Content -LiteralPath $script:logPath -Value ("[" + (Get-Date).ToString("o") + "] " + $message)
+  } catch { }
+}
+
+trap {
+  $detail = $_.Exception.ToString()
+  Write-InstallLog ("FATAL: " + $detail)
+  try {
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    [System.Windows.Forms.MessageBox]::Show("OpenComms setup could not start or complete." + [Environment]::NewLine + [Environment]::NewLine + $detail + [Environment]::NewLine + [Environment]::NewLine + "Log: " + $script:logPath, "OpenComms Setup", "OK", "Error") | Out-Null
+  } catch { }
+  exit 1
+}
+Write-InstallLog "Wizard started. Source=$SourceExe InstallDir=$InstallDir"
 
 function Get-DefaultInstallDir {
   Join-Path $env:LOCALAPPDATA "Programs\OpenComms"
@@ -81,13 +101,13 @@ function Remove-FromUserPath([string]$dir) {
   return "Removed from user PATH: $dir"
 }
 
-function New-Shortcut([string]$linkPath, [string]$targetPath, [string]$arguments, [string]$description, [string]$iconPath) {
+function New-Shortcut([string]$linkPath, [string]$targetPath, [string]$arguments, [string]$description, [string]$iconPath, [string]$workingDir) {
   $shell = New-Object -ComObject WScript.Shell
   $link = $shell.CreateShortcut($linkPath)
   $link.TargetPath = $targetPath
   if ($arguments -ne "") { $link.Arguments = $arguments }
   $link.Description = $description
-  $link.WorkingDirectory = Split-Path -Parent $targetPath
+  $link.WorkingDirectory = if ($workingDir -ne "") { $workingDir } else { Split-Path -Parent $targetPath }
   if ($iconPath -ne "") { $link.IconLocation = "$iconPath, 0" }
   $link.Save()
 }
@@ -105,16 +125,40 @@ function Invoke-InstallCore([string]$srcExe, [string]$iconSrc, [string]$dir, [bo
     Copy-Item -LiteralPath $iconSrc -Destination $iconPath -Force
     $log += "Icon installed: $iconPath"
   }
+  # wscript.exe is a GUI-subsystem launcher, so opening the desktop shortcut
+  # never flashes a console window. It starts the real CLI exe with gui.
+  $launcherPath = Join-Path $dir "OpenComms.vbs"
+  $launcher = @'
+Option Explicit
+Dim fso, shell, exe, args, i
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set shell = CreateObject("WScript.Shell")
+exe = fso.BuildPath(fso.GetParentFolderName(WScript.ScriptFullName), "opencomms.exe")
+If Not fso.FileExists(exe) Then
+  MsgBox "OpenComms is missing from its installation folder.", 16, "OpenComms"
+  WScript.Quit 1
+End If
+args = ""
+For i = 0 To WScript.Arguments.Count - 1
+  args = args & " " & Chr(34) & Replace(WScript.Arguments(i), Chr(34), Chr(34) & Chr(34)) & Chr(34)
+Next
+shell.CurrentDirectory = fso.GetParentFolderName(exe)
+shell.Run Chr(34) & exe & Chr(34) & args, 0, False
+'@
+  Set-Content -LiteralPath $launcherPath -Value $launcher -Encoding ASCII
+  $wscript = Join-Path $env:WINDIR "System32\wscript.exe"
+  $launchArgs = [char]34 + $launcherPath + [char]34 + " gui"
   if ($menu) {
     $menuDir = Get-StartMenuDir
     New-Item -ItemType Directory -Force -Path $menuDir | Out-Null
-    New-Shortcut (Join-Path $menuDir "OpenComms.lnk") $target "gui" "OpenComms console" $iconPath
-    New-Shortcut (Join-Path $menuDir "OpenComms Uninstall.lnk") $target "uninstall-self" "Uninstall OpenComms" $iconPath
+    New-Shortcut (Join-Path $menuDir "OpenComms.lnk") $wscript $launchArgs "OpenComms" $iconPath $dir
+    New-Shortcut (Join-Path $menuDir "OpenComms Uninstall.lnk") $target "uninstall-self" "Uninstall OpenComms" $iconPath $dir
     $log += "Start Menu shortcuts: $menuDir"
   }
   if ($desktop) {
     $deskDir = if ($shortcutOverride -ne "") { $shortcutOverride } else { Get-DesktopDir }
-    New-Shortcut (Join-Path $deskDir "OpenComms.lnk") $target "gui" "OpenComms console" $iconPath
+    New-Item -ItemType Directory -Force -Path $deskDir | Out-Null
+    New-Shortcut (Join-Path $deskDir "OpenComms.lnk") $wscript $launchArgs "OpenComms" $iconPath $dir
     $log += "Desktop shortcut: $(Join-Path $deskDir 'OpenComms.lnk')"
   }
   if ($path) { $log += (Add-ToUserPath $dir) }

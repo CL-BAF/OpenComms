@@ -14,11 +14,12 @@
  * Never prints secrets (env values, pin contents are summarized, not dumped).
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs"
 import { join, resolve, dirname } from "node:path"
 import { tmpdir } from "node:os"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import { randomBytes } from "node:crypto"
+import { isSea } from "node:sea"
 import { installClaudeCode, registerProjectMember } from "../adapters/claude-code/install.js"
 import { installCodex, detectCodex } from "../adapters/codex/install.js"
 import { buildDesktopBundle, DESKTOP_CAPABILITIES } from "../adapters/claude-desktop/package.js"
@@ -28,31 +29,15 @@ import { status } from "../core/engine.js"
 import { buildSessionArchive, commitSessionSave, deleteSession, resumeSession } from "../core/engine.js"
 import { ArchiveStore } from "../core/archive.js"
 import { startGuiServer } from "../gui/server.js"
+import { initialWorkspaceProject, workspaceConfigDir } from "../gui/workspace.js"
 import { SCHEMA_VERSION } from "../core/types.js"
 import { listMemberPins, loadProjectPin } from "../mcp/identity.js"
 import { joinCommandFor } from "./join-command.js"
 import { WIZARD_PS1 } from "./wizard.js"
 import { iconIcoBytes } from "./icon-base64.js"
+import { VERSION } from "../version.js"
 
 /** Package version, derived from package.json so the CLI can never drift. */
-export const VERSION: string = (() => {
-  try {
-    let dir: string = import.meta.dirname ?? process.cwd()
-    for (;;) {
-      const candidate = join(dir, "package.json")
-      if (existsSync(candidate)) {
-        const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { version?: unknown }
-        if (typeof parsed.version === "string" && parsed.version) return parsed.version
-      }
-      const parent = dirname(dir)
-      if (parent === dir) return "0.0.0"
-      dir = parent
-    }
-  } catch {
-    return "0.0.0"
-  }
-})()
-
 function flagValue(tokens: string[], name: string): string | undefined {
   const idx = tokens.indexOf(name)
   return idx >= 0 ? tokens[idx + 1] : undefined
@@ -520,14 +505,39 @@ function runJoinCommand(projectDir: string, sessionName: string | undefined, hos
  * `opencomms gui` — start the loopback-only local console (blocks until
  * Ctrl+C). No network exposure; no provider credentials pass through.
  */
-function startGui(projectDir: string, portFlag: string | undefined): CliResult {
+function appendInstallerLog(message: string): void {
+  try {
+    const file = join(workspaceConfigDir(), "logs", "installer.log")
+    mkdirSync(dirname(file), { recursive: true })
+    appendFileSync(file, `[${new Date().toISOString()}] ${message}\n`, "utf8")
+  } catch {
+    // Logging must never prevent the fallback error path from completing.
+  }
+}
+
+function openGuiUrl(url: string): void {
+  const command = process.platform === "win32" ? "rundll32.exe" : process.platform === "darwin" ? "open" : "xdg-open"
+  const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url]
+  try {
+    const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true })
+    child.on("error", (error) => appendInstallerLog(`Could not open GUI URL ${url}: ${error.message}`))
+    child.unref()
+  } catch (error) {
+    appendInstallerLog(`Could not open GUI URL ${url}: ${(error as Error).message}`)
+  }
+}
+
+function startGui(projectDir: string | undefined, portFlag: string | undefined, openBrowser = true): CliResult {
   const port = portFlag ? Number(portFlag) : 4919
   if (!Number.isFinite(port) || port < 1 || port > 65_535) return fail(`Invalid --port "${portFlag}".`)
   void (async () => {
-    const handle = await startGuiServer({ projectDir: resolve(projectDir), port, hostname: "127.0.0.1" })
+    const selectedProject = initialWorkspaceProject(projectDir)
+    const handle = await startGuiServer({ projectDir: selectedProject ?? undefined, port, hostname: "127.0.0.1" })
+    const url = `http://127.0.0.1:${handle.port}`
     process.stdout.write(
-      `OpenComms console: http://127.0.0.1:${handle.port}\nLoopback-only (no network exposure). Ctrl+C to stop.\n`,
+      `OpenComms console: ${url}\n${selectedProject ? `Project: ${selectedProject}\n` : "No project selected yet.\n"}Loopback-only (no network exposure). Ctrl+C to stop.\n`,
     )
+    if (openBrowser) openGuiUrl(url)
     const shutdown = (): void => {
       void handle.close().then(() => process.exit(0))
     }
@@ -544,8 +554,26 @@ function startGui(projectDir: string, portFlag: string | undefined): CliResult {
  * the double-click case has NO argv[1], the explicit-command case has
  * argv[1] === execPath. Under plain `node`, argv[1] is a script path.
  */
-function runningAsPackagedExe(): boolean {
-  return process.argv[1] === undefined || process.argv[1] === process.execPath
+export function runningAsPackagedExe(): boolean {
+  return isSea()
+}
+
+/**
+ * Identify the CLI entry point without assuming that a SEA process has a
+ * script path. Node SEA uses no argv[1] for a double-click launch and may use
+ * the executable itself for an explicit command; regular Node imports use a
+ * real script path and must not execute the CLI side effect.
+ */
+export function isCliEntryPoint(
+  invoked: string,
+  argv1: string | undefined,
+  execPath: string,
+  packaged = false,
+): boolean {
+  return (
+    /(^|[\\/])cli[\\/](opencomms|main|cli)\.(js|mjs|ts)$/.test(invoked) ||
+    (packaged && (argv1 === undefined || argv1 === execPath || invoked === execPath.replace(/\\/g, "/")))
+  )
 }
 
 /**
@@ -557,7 +585,6 @@ function shouldLaunchWizard(argv: string[]): boolean {
   return (
     process.platform === "win32" &&
     argv.length === 0 &&
-    process.stdin.isTTY === true &&
     runningAsPackagedExe() &&
     process.env["OPENCOMMS_NO_WIZARD"] !== "1"
   )
@@ -584,19 +611,32 @@ function launchWizard(): CliResult {
   try {
     writeFileSync(iconPath, iconIcoBytes())
   } catch (error) {
+    appendInstallerLog(`Could not extract the icon: ${(error as Error).stack ?? (error as Error).message}`)
     return fail(`Could not extract the icon: ${(error as Error).message}`)
   }
   const encoded = Buffer.from(WIZARD_PS1, "utf16le").toString("base64")
-  const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
-    detached: true,
-    stdio: "ignore",
-    env: {
-      ...process.env,
-      OPENCOMMS_WIZARD_EXE: process.execPath,
-      OPENCOMMS_WIZARD_ICON: iconPath,
-    },
-  })
-  child.unref()
+  try {
+    const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: {
+        ...process.env,
+        OPENCOMMS_WIZARD_EXE: process.execPath,
+        OPENCOMMS_WIZARD_ICON: iconPath,
+        OPENCOMMS_WIZARD_LOG: join(workspaceConfigDir(), "logs", "installer.log"),
+      },
+    })
+    child.on("error", (error) =>
+      appendInstallerLog(`Could not start installer wizard: ${error.stack ?? error.message}`),
+    )
+    child.unref()
+  } catch (error) {
+    appendInstallerLog(`Could not start installer wizard: ${(error as Error).stack ?? (error as Error).message}`)
+    return fail(
+      `Could not start the installer wizard. Details were written to ${join(workspaceConfigDir(), "logs", "installer.log")}.`,
+    )
+  }
   return ok("Installer wizard launched (a setup window will open shortly).")
 }
 
@@ -643,7 +683,8 @@ export function runCli(argv: string[]): CliResult {
   // "opencomms --project <dir> members <ch>" both work).
   const tokens = argv.filter(Boolean) as string[]
   const cmd = tokens[0]
-  const projectDir = projectDirFromFlag(tokens, "--project") ?? process.cwd()
+  const explicitProjectDir = projectDirFromFlag(tokens, "--project")
+  const projectDir = explicitProjectDir ?? process.cwd()
   // The positional (host/channel name) = first token after the command that
   // is not a flag or a flag value.
   let positional: string | undefined
@@ -669,7 +710,11 @@ export function runCli(argv: string[]): CliResult {
     case "install":
       return runInstall(positional, projectDir)
     case "gui":
-      return startGui(projectDir, flagValue(tokens, "--port"))
+      return startGui(
+        explicitProjectDir,
+        flagValue(tokens, "--port"),
+        !tokens.includes("--server") && !tokens.includes("--no-open"),
+      )
     case "install-wizard":
       return launchWizard()
     case "uninstall-self":
@@ -700,7 +745,7 @@ export function runCli(argv: string[]): CliResult {
           "  opencomms install <opencode|claude-code|claude-desktop|codex|chatgpt> [--project <dir>]",
           "  opencomms install-member [--host <id>] [--id <memberId> | --name <name>] [--project <dir>]",
           "  opencomms session <list|get|save|delete|resume> [name] [--summary ...] [--as name] [--confirm]",
-          "  opencomms gui [--port <port>]        # local console (loopback-only)",
+          "  opencomms gui [--project <dir>] [--port <port>] [--server]  # embedded HTML console",
           "  opencomms install-wizard             # Windows setup wizard (also launched by double-clicking the exe)",
           "  opencomms uninstall-self             # remove PATH entry, shortcuts, and the install folder",
           "  opencomms join-command <session> [--host <opencode|claude-code|codex|claude-desktop|chatgpt>]",
@@ -717,9 +762,7 @@ export function runCli(argv: string[]): CliResult {
 // single executable, process.execPath IS the CLI itself (argv[1] = exe).
 import { realpathSync } from "node:fs"
 const invoked = process.argv[1] ? realpathSync(process.argv[1]).replace(/\\/g, "/") : ""
-const isCliEntry =
-  /(^|[\\/])cli[\\/](opencomms|main|cli)\.(js|mjs|ts)$/.test(invoked) ||
-  (process.argv[1] !== undefined && process.execPath === realpathSync(process.argv[1]))
+const isCliEntry = isCliEntryPoint(invoked, process.argv[1], process.execPath, runningAsPackagedExe())
 if (isCliEntry) {
   const emit = (result: { code: number; output: string }): void => {
     if (result.output) process.stdout.write(result.output + "\n")
@@ -728,9 +771,7 @@ if (isCliEntry) {
   const argv = process.argv.slice(2)
   if (shouldLaunchWizard(argv)) {
     emit(launchWizard())
-    process.exit(process.exitCode ?? 0)
-  }
-  if (argv[0] === "gui") {
+  } else if (argv[0] === "gui") {
     // The GUI server blocks; never take the sync exit path.
     const guiResult = runCli(argv)
     if (guiResult.output) process.stdout.write(guiResult.output + "\n")

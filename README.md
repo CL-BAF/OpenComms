@@ -32,10 +32,10 @@ exist** - across tabs, terminals, and providers.
 - **Honest about limits.** Where a host cannot do something, OpenComms reports
   UNSUPPORTED instead of faking parity. See
   [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the evidence-backed matrix.
-- **Operator console + portable CLI.** A loopback-only local GUI
-  (`opencomms gui`) creates sessions, shows honest agent states, and hands out
-  real join commands; a standalone executable builds without Node
-  (`npm run build:exe`).
+- **Operator console + portable CLI.** A loopback-only local GUI made from
+  embedded HTML/CSS/JavaScript (`opencomms gui`) creates sessions, shows honest
+  agent states, and hands out real join commands; a standalone executable builds
+  without Node (`npm run build:exe`).
 
 ## Supported hosts
 
@@ -92,12 +92,16 @@ opencomms install-member --host claude-code --name architect   # human member id
 
 ## Local GUI console
 
-`opencomms gui` starts a **loopback-only** web console (no network exposure,
-no auth needed at loopback trust — the same boundary as state.json):
+`opencomms gui` starts the **embedded HTML** console, opens the default browser,
+and binds the backend to loopback only (no network exposure, no auth needed at
+loopback trust — the same boundary as state.json). If no project is supplied,
+the console offers the last valid/recent project or a native folder picker:
 
 ```bash
-opencomms gui            # http://127.0.0.1:4919
-opencomms gui --port 5000
+opencomms gui                         # opens the console
+opencomms gui --project C:\work\repo   # select a project explicitly
+opencomms gui --port 5000              # use a different loopback port
+opencomms gui --server                 # start without opening a browser
 ```
 
 Features: session cards (active + archived) with agent counts and
@@ -108,24 +112,30 @@ never terminates provider processes), **Save Session** (with a structured
 summary prompt), **Resume as new**, and **Delete** (confirm). Live updates
 stream over SSE.
 
-## Standalone executable + install wizard (no Node required)
+## Standalone executable + Windows installer (no Node required)
 
 ```bash
 npm run build:exe        # -> dist-opencomms/opencomms(.exe)
+npm run build:release    # Windows: exe + OpenComms-Setup-<version>.exe
 ```
 
 Produces a single-file executable of the full CLI (Node Single Executable
 App) - `version`, `session`, `gui` and every other command work without a
 Node.js installation. Rebuild per platform on the machine you target.
 
-**Windows-first installer (per spec):** double-clicking `opencomms.exe` (or
-running `opencomms install-wizard`) opens a **setup wizard** - dark-themed,
-matching the console - that installs the exe to
-`%LOCALAPPDATA%\Programs\OpenComms`, optionally adds it to the user PATH, and
-creates Start Menu + desktop shortcuts **with the OpenComms icon**. Nothing
-is installed outside your user profile; an uninstall shortcut and
-`opencomms uninstall-self` (removes the PATH entry, shortcuts, and the
-install folder) are included. Escape hatch: `OPENCOMMS_NO_WIZARD=1`.
+**Windows release installer:** `npm run build:release` produces a per-user
+Inno Setup installer in `dist-release/`. It installs to
+`%LOCALAPPDATA%\Programs\OpenComms`, creates a Start Menu shortcut and a
+desktop shortcut by default, includes the OpenComms icon, and offers an
+opt-in user-PATH entry. Uninstall removes only the installed application files
+and its PATH entry when the installer added it; project `.opencomms` data is
+never removed. The executable also retains the legacy `install-wizard`
+fallback for portable/manual builds. `OPENCOMMS_NO_WIZARD=1` is an escape hatch
+for that fallback.
+
+The release build is pinned in Windows CI to Node 22.14.0 and Inno Setup 6.4.x.
+For a local build, install those tools first; the generated executable and
+installer are platform-specific.
 
 For macOS/Linux: build on the target OS (`npm run build:exe`), then
 `sh scripts/install.sh dist-opencomms/opencomms` copies the binary into

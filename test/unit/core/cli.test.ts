@@ -9,7 +9,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { runCli } from "../../../src/cli/main.js"
+import { isCliEntryPoint, runCli } from "../../../src/cli/main.js"
 import { StateStore } from "../../../src/core/store.js"
 import { createChannel, joinChannel } from "../../../src/core/engine.js"
 import { emptyState } from "../../../src/core/store.js"
@@ -19,6 +19,15 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const repoRoot = resolve(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", ".."))
+
+test("CLI entry detection handles Node SEA double-click launches without argv[1]", () => {
+  const exe = "C:/Users/test/AppData/Local/Programs/OpenComms/opencomms.exe"
+  assert.equal(isCliEntryPoint("", undefined, exe, true), true)
+  assert.equal(isCliEntryPoint(exe, exe, exe, true), true)
+  assert.equal(isCliEntryPoint("C:/repo/dist/cli/main.js", "C:/repo/dist/cli/main.js", exe), true)
+  assert.equal(isCliEntryPoint("", undefined, exe), false)
+  assert.equal(isCliEntryPoint("C:/repo/test-runner.js", "C:/repo/test-runner.js", exe, true), false)
+})
 
 function mkProject(name = "oc-cli"): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "oc-cli-"))

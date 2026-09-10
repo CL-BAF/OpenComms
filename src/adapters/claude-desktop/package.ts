@@ -135,20 +135,12 @@ export function buildDesktopBundle(opts: { projectDir: string; outDir?: string }
   mkdirSync(serverDir, { recursive: true })
   let bundled = false
   try {
-    const esbuildBin = join(packageRoot, "node_modules", "esbuild", "bin", "esbuild")
+    const bundleScript = join(packageRoot, "scripts", "bundle.mjs")
     const mainSource = join(packageRoot, "src", "mcp", "main.ts")
     execFileSync(
       process.execPath,
-      [
-        esbuildBin,
-        mainSource,
-        "--bundle",
-        "--format=esm",
-        "--platform=node",
-        `--outfile=${join(serverDir, "main.mjs")}`,
-        "--log-level=warning",
-      ],
-      { stdio: "pipe", timeout: 120_000 },
+      [bundleScript, "--entry", mainSource, "--format", "esm", "--outfile", join(serverDir, "main.mjs")],
+      { stdio: "pipe", timeout: 120_000, cwd: packageRoot },
     )
     bundled = existsSync(join(serverDir, "main.mjs"))
   } catch (error) {
