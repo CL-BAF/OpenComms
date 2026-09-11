@@ -171,6 +171,21 @@ function validateState(
   return { ok: true, state }
 }
 
+/**
+ * A GUI-created session is intentionally empty until an agent joins. During
+ * an upgrade, that harmless placeholder must not strand a valid legacy v1
+ * channel in the old directory. Only this fully inert shape is safe to merge
+ * automatically: any v2 activity remains authoritative and untouched.
+ */
+function isEmptyOperatorState(state: State): boolean {
+  return (
+    Object.keys(state.messages).length === 0 &&
+    Object.values(state.queues).every((queue) => queue.length === 0) &&
+    Object.values(state.delivered_to).every((recipients) => recipients.length === 0) &&
+    Object.values(state.channels).every((channel) => channel.lifecycle === "active" && channel.members.length === 0)
+  )
+}
+
 /** Backfill/migrate older persisted shapes into the current schema. */
 function backfillState(state: State): void {
   for (const channel of Object.values(state.channels)) {
@@ -367,10 +382,11 @@ export class StateStore {
    *
    * Discipline (Reviewer Item 4): when the new dir is absent and a VALID v1
    * state exists, back it up, migrate it, and write MIGRATED_FROM_V1 so a
-   * second load never re-migrates (no double-members, no duplication). The
-   * legacy dir is left untouched; the legacy plugin, if still loaded, reads
-   * v1 with its own validator â€” it cannot fork v2 state (it fails validation
-   * and starts empty with a recorded error, never dual-writes).
+   * second load never re-migrates (no double-members, no duplication). An
+   * existing v2 state is left alone except for the narrow upgrade case where
+   * it contains only GUI-created empty sessions: legacy channels then replace
+   * same-name placeholders and coexist with other placeholders. The legacy
+   * dir is left untouched.
    *
    * Tampered legacy files are NOT migrated: fail-closed to empty state, with
    * the reason recorded in errors.
@@ -379,9 +395,22 @@ export class StateStore {
    */
   migrateFromLegacyIfPresent(): string | null {
     const markerPath = join(this.dir, MIGRATION_MARKER)
-    if (existsSync(markerPath) || existsSync(this.file)) return null
+    if (existsSync(markerPath)) return null
     const legacyFile = join(this.projectDir, LEGACY_STATE_DIR, STATE_FILE)
     if (!existsSync(legacyFile)) return null
+
+    // A real v2 conversation always wins. The sole recoverable collision is
+    // a pre-upgrade GUI placeholder: it has no members, messages, or queues.
+    let placeholderState: State | null = null
+    if (existsSync(this.file)) {
+      try {
+        const current = validateState(JSON.parse(readFileSync(this.file, "utf8")))
+        if (!current.ok || !isEmptyOperatorState(current.state)) return null
+        placeholderState = current.state
+      } catch {
+        return null
+      }
+    }
 
     let legacyRaw: string
     try {
@@ -422,10 +451,18 @@ export class StateStore {
         ),
       )
     }
+    if (placeholderState) {
+      // Keep unrelated empty sessions the GUI created before the upgrade. A
+      // same-name placeholder is deliberately replaced by the real v1 channel.
+      for (const [name, channel] of Object.entries(placeholderState.channels)) {
+        if (!migrated.channels[name]) migrated.channels[name] = channel
+      }
+      migrated.errors.push(...placeholderState.errors)
+    }
     if (!Array.isArray(migrated.errors)) migrated.errors = []
     migrated.errors.push({
       at: Date.now(),
-      message: `Migrated OpenComms state from ${LEGACY_STATE_DIR}/state.json (schema v1) to ${STATE_DIR}/state.json (schema v2); legacy file backed up as state.v1.bak.json and left in place.`,
+      message: `Migrated OpenComms state from ${LEGACY_STATE_DIR}/state.json (schema v1) to ${STATE_DIR}/state.json (schema v2)${placeholderState ? "; recovered over empty GUI placeholders" : ""}; legacy file backed up as state.v1.bak.json and left in place.`,
     })
 
     mkdirSync(this.dir, { recursive: true })
@@ -434,18 +471,25 @@ export class StateStore {
     } catch {
       /* backup is best-effort; migration itself is still safe */
     }
+    if (placeholderState) {
+      try {
+        copyFileSync(this.file, join(this.dir, "state.v2.empty.bak.json"))
+      } catch {
+        /* backup is best-effort; migration itself is still safe */
+      }
+    }
     this.save(migrated)
     writeFileSync(
       markerPath,
       JSON.stringify({ migrated_at: Date.now(), from: LEGACY_STATE_DIR, schema: 1 }, null, 2),
       "utf8",
     )
-    return `Migrated OpenComms state from ${LEGACY_STATE_DIR}/state.json (schema v1) to ${STATE_DIR}/state.json (schema v2). Channels, members, queues, and timers preserved.`
+    return `Migrated OpenComms state from ${LEGACY_STATE_DIR}/state.json (schema v1) to ${STATE_DIR}/state.json (schema v2)${placeholderState ? ", recovering over empty GUI placeholders" : ""}. Channels, members, queues, and timers preserved.`
   }
 
   load(): State {
     // Cutover: migrate legacy v1 state before any read path can miss it.
-    if (!existsSync(this.file) && !existsSync(join(this.dir, MIGRATION_MARKER))) {
+    if (!existsSync(join(this.dir, MIGRATION_MARKER))) {
       const notice = this.migrateFromLegacyIfPresent()
       if (notice) {
         // Return the MIGRATED state (not just a notice): the migration already

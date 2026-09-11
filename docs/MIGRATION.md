@@ -12,8 +12,8 @@
 
 ## Automatic migration
 
-On the first load of any v2 component, when `.opencomms/state.json` does
-not exist and a VALID v1 state exists:
+On the first load of any v2 component, when a VALID v1 state exists and no
+migration marker exists:
 
 1. Backup: legacy file copied to `.opencomms/state.v1.bak.json`.
 2. Migrate: v1 channels/messages/queues/timers are preserved verbatim;
@@ -25,6 +25,12 @@ not exist and a VALID v1 state exists:
 4. The legacy directory and file are left UNTOUCHED.
 5. A migration notice is recorded in state errors (visible via
    `opencomms status`).
+
+If an earlier GUI version created only empty, agentless v2 sessions before the
+migration ran, OpenComms safely recovers the v1 state: same-name empty
+placeholders are replaced, unrelated empty placeholders are retained, and the
+previous v2 file is backed up as `state.v2.empty.bak.json`. A v2 state with
+any members, messages, or queued work is never auto-merged.
 
 Tests: `test/unit/core/migration.test.ts` (single migration, marker
 discipline, tampered legacy rejected fail-closed, no-legacy no-op).

@@ -12,6 +12,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { StateStore } from "../../../src/core/store.js"
 import { MIGRATION_MARKER } from "../../../src/core/types.js"
+import { createSessionAsOperator } from "../../../src/core/engine.js"
+import { emptyState } from "../../../src/core/store.js"
 
 function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), "oc-migrate-"))
@@ -150,6 +152,36 @@ test("second load does NOT re-migrate (marker discipline)", () => {
     assert.equal(second.schema_version, 2)
     assert.equal(second.errors.filter((e: { message: string }) => e.message.includes("Migrated")).length, noticeCount1)
     assert.equal(second.channels["feat-x"]!.members[0]!.joined_at, first.channels["feat-x"]!.members[0]!.joined_at)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("legacy state recovers over an empty GUI placeholder with the same channel name", () => {
+  const dir = tmpProject()
+  try {
+    mkdirSync(join(dir, ".opencode-comms"), { recursive: true })
+    writeFileSync(join(dir, ".opencode-comms", "state.json"), JSON.stringify(v1Fixture()), "utf8")
+
+    // An older GUI may have created the v2 file before this migration path
+    // existed. It is safe to replace only because it contains no activity.
+    const placeholder = emptyState()
+    const created = createSessionAsOperator(placeholder, {
+      channel: "feat-x",
+      project_id: "gui-local-project",
+      worktree: dir,
+    })
+    assert.equal(created.ok, true)
+    const store = new StateStore(dir)
+    store.save(placeholder)
+
+    const state = store.load()
+    assert.equal(state.channels["feat-x"]!.members.length, 2)
+    assert.equal(state.messages["ocm_1"]?.content, "hello from v1")
+    assert.ok(state.errors.some((e) => e.message.includes("recovered over empty GUI placeholders")))
+    assert.ok(existsSync(join(dir, ".opencomms", "state.v1.bak.json")))
+    assert.ok(existsSync(join(dir, ".opencomms", "state.v2.empty.bak.json")))
+    assert.ok(existsSync(join(dir, ".opencomms", MIGRATION_MARKER)))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
