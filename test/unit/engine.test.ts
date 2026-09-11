@@ -712,7 +712,7 @@ function createKickPair(state: State) {
   createPair(state)
 }
 
-test("kickChannel: privileged role kicks another member with notification", () => {
+test("kickChannel: channel coordinator kicks another member with notification", () => {
   const state = freshState()
   createKickPair(state)
   sendMessage(state, { channel: "my-feature", content: "queued for victim" }, SESSION_A)
@@ -741,18 +741,18 @@ test("kickChannel: privileged role kicks another member with notification", () =
   assert.equal((state.queues[SESSION_A] ?? []).includes(notice!.message_id), true)
 })
 
-test("kickChannel denies non-privileged roles, self-kick, and unknown targets", () => {
+test("kickChannel denies non-coordinators, self-kick, and unknown targets", () => {
   const state = freshState()
   createKickPair(state)
 
-  // Reviewer is not in the default kick policy.
+  // The second member is not the channel coordinator.
   const denied = kickChannel(state, {
     channel: "my-feature",
     session_id: SESSION_B,
     target_role: "Builder",
   })
   assert.equal(denied.ok, false)
-  assert.match(denied.message, /not allowed to kick/)
+  assert.match(denied.message, /channel coordinator/)
 
   // Self-kick rejected (use disconnect).
   const self = kickChannel(state, {
@@ -771,6 +771,35 @@ test("kickChannel denies non-privileged roles, self-kick, and unknown targets", 
   })
   assert.equal(ghost.ok, false)
   assert.match(ghost.message, /No member matches/)
+})
+
+test("kickChannel authority follows first membership, not a role name", () => {
+  const state = freshState()
+  const created = createChannel(state, {
+    channel: "custom-roles",
+    role: "Lead",
+    role_prompt: "p",
+    session_id: SESSION_A,
+    project_id: PROJECT,
+    worktree: WORKTREE,
+  })
+  assert.equal(created.ok, true)
+  const joined = joinChannel(state, {
+    channel: "custom-roles",
+    role: "Frontend",
+    role_prompt: "p",
+    session_id: SESSION_B,
+    project_id: PROJECT,
+    worktree: WORKTREE,
+  })
+  assert.equal(joined.ok, true)
+
+  const result = kickChannel(state, {
+    channel: "custom-roles",
+    session_id: SESSION_A,
+    target_session_id: SESSION_B,
+  })
+  assert.equal(result.ok, true)
 })
 
 test("kickChannel stops cleanly after removal and timer folds", () => {

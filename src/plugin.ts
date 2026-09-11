@@ -54,7 +54,8 @@ import {
 import type { SenderMessageType, State, TimerInput, ToolResult } from "./core/types.js"
 
 const ROLE_PROMPT_HEADER = "## OpenComms role instructions"
-const ROLE_RULES = 'Role must be 1-32 characters: letters first, then letters, digits, spaces, "-" or "_".'
+const ROLE_RULES =
+  'Role labels are user-defined; there is no allowed-role list. Preserve the user\'s label exactly (apart from surrounding whitespace). It must be 1-32 characters: letters first, then letters, digits, spaces, "-" or "_".'
 
 function buildRolePrompt(role: string, prompt: string, channelName?: string): string {
   const scope = channelName ? ` on OpenComms channel "${channelName}"` : " on an OpenComms channel"
@@ -191,10 +192,10 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
   const tools = {
     opencomms_create: tool({
       description:
-        "Create a NEW OpenComms channel and register the CURRENT session under a role label (e.g. Lead, Backend, Frontend, Reviewer â€” any short unique label). Use this ONLY when the user explicitly asks to create a new channel. Never call it as a fallback after a failed join; report the join error instead. The current session's real session id is taken from the tool execution context â€” no new session is created. Role instructions in `role_prompt` become the persistent per-session system instructions.",
+        "Create a NEW OpenComms channel and register the CURRENT session under the exact role label the user chose. There is no role allowlist: never rename, translate, or substitute that label. Use this ONLY when the user explicitly asks to create a new channel. Never call it as a fallback after a failed join; report the join error instead. The current session's real session id is taken from the tool execution context â€” no new session is created. Role instructions in `role_prompt` become the persistent per-session system instructions.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive slug)."),
-        role: tool.schema.string().describe(`Role label. ${ROLE_RULES}`),
+        role: tool.schema.string().describe(`User-chosen role label, unique within the channel. ${ROLE_RULES}`),
         role_prompt: tool.schema.string().describe("Persistent role instructions for this session."),
         max_members: tool.schema.number().optional().describe(`Optional membership cap (default ${8}).`),
         rate_limit: tool.schema
@@ -246,10 +247,10 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
 
     opencomms_join: tool({
       description:
-        "Join an existing OpenComms channel with the CURRENT session under a free role label (e.g. Lead, Backend, Frontend, Reviewer â€” any short unique label). The current session's real session id is taken from the tool execution context â€” no new session is created. If joining fails for any reason, STOP and report the exact error. Do not create another channel, change roles, replace, disconnect, or take over a member unless the user separately and explicitly instructs you to do so. Rejects joining the same session twice, using one session for two roles, replacing an existing member, full channels, child sessions, and sessions from incompatible projects or worktrees.",
+        "Join an existing OpenComms channel with the CURRENT session under the exact free role label the user chose. There is no role allowlist: never rename, translate, or substitute that label. The current session's real session id is taken from the tool execution context â€” no new session is created. If joining fails for any reason, STOP and report the exact error. Do not create another channel, change roles, replace, disconnect, or take over a member unless the user separately and explicitly instructs you to do so. Rejects joining the same session twice, using one session for two roles, replacing an existing member, full channels, child sessions, and sessions from incompatible projects or worktrees.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
-        role: tool.schema.string().describe(`Role label (unique within the channel). ${ROLE_RULES}`),
+        role: tool.schema.string().describe(`User-chosen role label, unique within the channel. ${ROLE_RULES}`),
         role_prompt: tool.schema.string().describe("Persistent role instructions for this session."),
       },
       async execute(args, ctx: ToolContext) {
@@ -481,7 +482,7 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
 
     opencomms_kick: tool({
       description:
-        "Remove ANOTHER member from a channel (Builder only). Kicking only severs the channel link â€” the kicked OpenCode session keeps running; it just stops receiving this channel's traffic and gets clean 'not a member' errors. Remaining members are notified with a system message. The channel survives even with one member and can be rejoined.",
+        "Remove ANOTHER member from a channel. Only the channel coordinator (the first current member), not any particular role name, may do this. Kicking only severs the channel link â€” the kicked OpenCode session keeps running; it just stops receiving this channel's traffic and gets clean 'not a member' errors. Remaining members are notified with a system message. The channel survives even with one member and can be rejoined.",
       args: {
         channel: tool.schema.string().describe("Channel name (case-insensitive)."),
         target_session_id: tool.schema.string().optional().nullable().describe("Session id of the member to remove."),

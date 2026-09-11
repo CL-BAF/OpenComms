@@ -106,7 +106,7 @@ drainForDelivery(recipientId) on idle          // engine drainQueue + plugin del
 pause/resume/disconnect/kick                   // engine lifecycle fns
   â””â”€ pause: sets paused=true, blocks send+drain
   â””â”€ disconnect: removes caller via shared removeMember (reject their queued msgs, fold their timer segment), deletes channel if empty
-  â””â”€ kick (Builder-only): same removal path for a TARGET member + system notice envelope per remaining member,
+  â””â”€ kick (channel-coordinator only, independent of role label): same removal path for a TARGET member + system notice envelope per remaining member,
      returns remaining_session_ids so the plugin drains notices immediately; channel survives with â‰¥1 member
   â””â”€ never deletes OpenCode sessions â€” only channel links die
 ```

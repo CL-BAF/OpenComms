@@ -84,4 +84,5 @@ Registered per pinned-member instance by `src/mcp/opencomms-tools.ts`:
 | opencomms_kick | yes | **admin instances only** (desktop-facing default OFF) |
 
 All mutating calls run under the cross-process state lock; reads are
-lock-free. `opencomms_kick` follows the engine's Builder-only policy.
+lock-free. `opencomms_kick` follows the engine's channel-coordinator policy;
+the first current member is the coordinator, independent of its role label.

@@ -16,7 +16,6 @@ import { createHash, randomUUID } from "node:crypto"
 import {
   DEFAULT_MAX_MEMBERS,
   MAX_MEMBERS_CEILING,
-  ROLE_BUILDER,
   VALID_SENDER_MESSAGE_TYPES,
   type Channel,
   type ChannelSummary,
@@ -865,10 +864,14 @@ export function kickChannel(state: State, input: KickInput): ToolResult {
     return fail(`This session is not a member of channel "${input.channel}".`)
   }
 
-  // Authorization policy v1: only a Builder may kick.
-  if (caller.role.toLowerCase() !== ROLE_BUILDER.toLowerCase()) {
+  // Permission follows channel membership order, not a role name. The first
+  // current member is the coordinator; this lets users choose ANY role label
+  // (Lead, Architect, Frontend, etc.) without gaining or losing privileges
+  // because of the spelling they chose.
+  const coordinator = channel.members[0]
+  if (!coordinator || coordinator.session_id !== caller.session_id) {
     return fail(
-      `Role ${caller.role} is not allowed to kick members on channel "${input.channel}". Only the Builder can kick.`,
+      `Only the channel coordinator (${coordinator?.role ?? "first member"}) may remove members from channel "${input.channel}". Role names do not grant or remove this permission.`,
     )
   }
 

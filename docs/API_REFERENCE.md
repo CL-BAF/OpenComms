@@ -11,7 +11,7 @@
 | `STATE_DIR` | `".opencomms"` | Subdir under project root (v2) |
 | `STATE_FILE` | `"state.json"` | Inside `STATE_DIR` |
 | `SCHEMA_VERSION` | `1` | Bump on breaking State shape change |
-| `ROLE_BUILDER` | `"Builder"` | Legacy default label (kick policy v1 checks this) |
+| `ROLE_BUILDER` | `"Builder"` | Legacy default label only; not a privileged or required role |
 | `ROLE_REVIEWER` | `"Reviewer"` | Legacy default label |
 | `DEFAULT_MAX_MEMBERS` | `8` | Per-channel membership cap; clamped â‰¥2 at creation |
 | `VALID_SENDER_MESSAGE_TYPES` | `["review_request","review_response","manual"]` | Whitelist; `"system"` is internal-only |
@@ -161,7 +161,7 @@ Channel ops (all `state` mutated in place, return `ToolResult`):
 | `updateRole(state, input)` | membership + non-empty prompt | not member |
 | `pauseChannel` / `resumeChannel` | Idempotent no-op messages | not member |
 | `disconnectChannel(state, input)` | Shared `removeMember`: purge own queue as rejected, fold+stop held timer segment | deletes channel if empty |
-| `kickChannel(state, input)` | Builder-only caller; self-kick denied (id OR role spellings); target must exist | queues distinct `system` notice per remaining member; returns `{kicked_session_id, kicked_role, remaining_session_ids}`; single-member channel survives |
+| `kickChannel(state, input)` | Channel coordinator (first current member) only; self-kick denied (id OR role spellings); target must exist | queues distinct `system` notice per remaining member; returns `{kicked_session_id, kicked_role, remaining_session_ids}`; single-member channel survives |
 
 Messaging:
 

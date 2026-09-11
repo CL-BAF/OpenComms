@@ -17,7 +17,7 @@
 | 9 | `opencomms_resume` | Yes | Yes | `channel` |
 | 10| `opencomms_disconnect` | Yes | Yes | `channel` |
 | 11| `opencomms_timer` | Yes | Yes | `channel`, `action`, `limit_ms?`, `to?` |
-| 12| `opencomms_kick` | Yes | Yes (Builder only) | `channel`, `target_session_id?` / `target_role?` |
+| 12| `opencomms_kick` | Yes | Yes (channel coordinator only) | `channel`, `target_session_id?` / `target_role?` |
 
 ### Schemas (exact)
 
