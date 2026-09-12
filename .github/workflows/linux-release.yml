@@ -36,11 +36,17 @@ jobs:
       - name: Test summary on failure
         if: failure()
         run: |
-          echo "## Linux CI failure" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          npm run typecheck 2>&1 | tail -n 80 >> $GITHUB_STEP_SUMMARY || true
-          npm run test:unit 2>&1 | tail -n 120 >> $GITHUB_STEP_SUMMARY || true
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          mkdir -p ci-failure
+          npm run typecheck > ci-failure/typecheck.txt 2>&1 || true
+          npm run test:unit > ci-failure/test-unit.txt 2>&1 || true
+          tail -c 20000 ci-failure/typecheck.txt >> ci-failure/combined.txt 2>&1 || true
+          tail -c 20000 ci-failure/test-unit.txt >> ci-failure/combined.txt 2>&1 || true
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: ci-failure-logs
+          path: ci-failure/
       - name: Build Linux release tarball
         run: npm run build:release
       - name: Smoke-test Linux release
