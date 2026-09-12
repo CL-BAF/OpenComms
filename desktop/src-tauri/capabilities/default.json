@@ -1,0 +1,25 @@
+{
+  "$schema": "..\\gen\\schemas\\capabilities.json",
+  "identifier": "spike-capabilities",
+  "description": "SPIKE (M0): deny-by-default IPC; the ONLY grant is spawning the bundled coordinator sidecar with a fixed arg validator. No broad shell access.",
+  "windows": ["main"],
+  "permissions": [
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/opencomms-coordinator",
+          "sidecar": true,
+          "args": [
+            "gui",
+            "--port",
+            { "validator": "\\d{1,5}" },
+            "--server",
+            "--project",
+            { "validator": "\\S+" }
+          ]
+        }
+      ]
+    }
+  ]
+}

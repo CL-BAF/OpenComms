@@ -1,0 +1,14 @@
+{
+  "name": "opencomms-desktop",
+  "version": "0.0.1",
+  "private": true,
+  "description": "SPIKE (M0, disposable): Tauri v2 desktop shell wrapping the existing OpenComms loopback GUI server. Owns no business logic.",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "spike:dev": "tauri dev"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

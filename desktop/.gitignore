@@ -1,0 +1,16 @@
+# Generated Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Local dev placeholder for the webview shell (served by the loopback server)
+dist-shell/
+
+# Node
+node_modules/
+
+# Stand-in binaries (real per-triple coordinator lands in M1 via
+# Platform/Backend; the placeholder exe must never be committed)
+binaries/*.exe
+
+# Rust/toolchain local state
+src-tauri/binaries/*.exe

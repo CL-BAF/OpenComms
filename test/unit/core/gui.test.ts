@@ -1,4 +1,4 @@
-﻿/**
+/**
  * GUI server tests (loopback-only): API round-trips for the session
  * console â€” create/list, members, save, resume-as-new, delete, member
  * removal, join-command, and the loopback bind refusal. Runs against a
@@ -135,7 +135,15 @@ test("GUI: workspace registry switches projects and never writes state before se
 })
 
 test("GUI: embedded application shell uses modals and exposes project, diagnostics, and capability surfaces", () => {
-  assert.match(GUI_HTML, /Saved Sessions/)
+  // M1 IA: seven-surface nav (docs/gui-ia.md §2, Lead-approved).
+  assert.match(GUI_HTML, /data-nav="overview"/)
+  assert.match(GUI_HTML, /data-nav="team"/)
+  assert.match(GUI_HTML, /data-nav="nodes"/)
+  assert.match(GUI_HTML, /data-nav="activity"/)
+  // Saved sessions are a tab inside Sessions; Integrations/Diagnostics live
+  // under Settings tabs.
+  assert.match(GUI_HTML, /data-stab="saved"/)
+  assert.match(GUI_HTML, /data-tab="diagnostics"/)
   assert.match(GUI_HTML, /Choose Project/)
   assert.match(GUI_HTML, /Copy diagnostics/)
   assert.match(GUI_HTML, /Technical details/)
