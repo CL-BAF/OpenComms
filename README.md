@@ -37,6 +37,38 @@ exist** - across tabs, terminals, and providers.
   agent states, and hands out real join commands; a standalone executable builds
   without Node (`npm run build:exe`).
 
+## Install (one command)
+
+Linux/Debian/Ubuntu/VPS (x86_64):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CL-Baf/OpenComms/main/scripts/install.sh | bash
+```
+
+Downloads the latest release from GitHub Releases, verifies its SHA256SUMS
+checksums, test-runs the binary in an isolated staging dir, and installs to
+`~/.local/bin` (atomic replace with rollback — a failed or incomplete artifact
+is never installed). Adds a single idempotent PATH line to `~/.profile`
+(skip with `--no-path-edit`). Running via `sudo` resolves to the invoking
+user's home and says so. Project `.opencomms` state is never touched by
+install or update. For the optional systemd user service, run the installer
+from a checkout or the extracted tarball with `--service --project <dir>`
+(curl|bash defaults to binary-only). Pin a version with `--version vX.Y.Z`.
+
+```bash
+opencomms version && opencomms doctor   # verify
+opencomms gui --project /path --server --no-open   # headless daemon
+```
+
+**Update:** `opencomms update` (or `opencomms update --check` to preview).
+Explicitly user-initiated, never automatic; atomic replace, checksum-verified,
+project state preserved.
+
+Windows: download `OpenComms-Setup-<version>.exe` from
+[GitHub Releases](https://github.com/CL-BAF/OpenComms/releases).
+`opencomms update` on Windows prints the installer pointer (self-replace of a
+running exe is refused by design).
+
 ## Supported hosts
 
 | Host | Setup | Status | How members receive messages |
@@ -46,6 +78,11 @@ exist** - across tabs, terminals, and providers.
 | **Codex CLI** | `config.toml` MCP: `opencomms install codex` | **PUSH** (exec-compatible sessions) | `codex exec resume <id> "<msg>"` (documented continuation); join with `spawn_push=true`. TUI-created-session resume is UNVERIFIED. Otherwise `opencomms_pull` |
 | **Claude Desktop** | `.mcpb` extension bundle | **PULL** (platform limit) | The agent calls `opencomms_pull`. Desktop exposes no session identity and no push path - a platform limitation, not an OpenComms one |
 | **ChatGPT** (web/desktop) | remote MCP (operator-hosted) | **BLOCKED** by platform requirements | Would be PULL via a public HTTPS MCP endpoint; ChatGPT requires operator-hosted OAuth - [docs/CHATGPT.md](docs/CHATGPT.md) |
+
+| CLI command | Purpose |
+|-------------|---------|
+| `opencomms update --check` | Preview an available update (read-only) |
+| `opencomms update` | Download, verify, and atomically install the latest release (Linux; Windows prints the installer pointer) |
 
 Any mix of these hosts can share one channel. Delivery mode is explicit per
 member (`push | spawn_push | pull | poll | managed_thread`), with per-member
@@ -116,7 +153,7 @@ never terminates provider processes), **Save Session** (with a structured
 summary prompt), **Resume as new**, and **Delete** (confirm). Live updates
 stream over SSE.
 
-## Standalone executable + Windows installer (no Node required)
+## Development build (from source)
 
 ```bash
 npm run build:exe        # -> dist-opencomms/opencomms(.exe)
@@ -141,9 +178,13 @@ The release build is pinned in Windows CI to Node 22.14.0 and Inno Setup 6.4.x.
 For a local build, install those tools first; the generated executable and
 installer are platform-specific.
 
-For macOS/Linux: build on the target OS (`npm run build:exe`), then
-`sh scripts/install.sh dist-opencomms/opencomms` copies the binary into
-`~/.local/bin` and wires the PATH.
+For macOS/Linux: prefer the one-command install above. To build from source on
+the target OS (`npm run build:exe` — note: SEA builds require exactly Node
+22.14.0, enforced by the build preflight), `sh scripts/install.sh
+dist-opencomms/opencomms` copies the binary into `~/.local/bin` and wires the
+PATH. Linux CI builds are pinned to the same Node 22.14.0
+(`engines.buildNode`); the build fails closed on any other Node version (see
+`scripts/build-exe.mjs` preflight).
 
 ## Quick start (OpenCode, two tabs)
 

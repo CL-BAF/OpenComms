@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenComms console (loopback-only headless daemon)
+AssertPathIsDirectory="@PROJECT_DIR@"
+
+[Service]
+Type=simple
+WorkingDirectory="@PROJECT_DIR@"
+ExecStart="@BIN@" gui --project "@PROJECT_DIR@" --server --no-open
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
