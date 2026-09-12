@@ -309,7 +309,12 @@ async function pollServeReady(
         detail: `serve did not report listening within ${timeoutMs}ms${output ? ` (output: ${output.slice(0, 200)})` : ""}`,
       })
     }, timeoutMs)
-    timer.unref?.()
+    // NOTE: intentionally NOT unref'd — this timer is promise-critical: under
+    // node:test on Node v22 (CI's pinned buildNode) an unref'd timeout with no
+    // other pending work lets the loop drain before it fires, so the awaited
+    // promise never resolves and the whole test run cancels. Orphan-safety is
+    // guaranteed by the explicit child.kill("SIGTERM") on the timeout path
+    // below, not by unref. (Platform CI diagnosis 2026-09-12.)
     const onLine = (chunk: Buffer | string): void => {
       output += chunk.toString()
       if (output.includes("listening")) {
