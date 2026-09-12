@@ -27,14 +27,29 @@ import { createOrchestratorFeed, listEvents } from "../../../src/orchestrator/ev
 import { listModelsCatalog, ensureServe, resolveOpencodeBinary } from "../../../src/orchestrator/runtimes/opencode.js"
 import { execFileSync } from "node:child_process"
 import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runtime.js"
-import type { AgentRecord } from "../../../src/orchestrator/state.js"
+import type { AgentRecord, AgentRuntimeStatus } from "../../../src/orchestrator/state.js"
 
 /** Fake runtime for API tests: no live serve needed; deterministic ids. */
 function fakeRuntime(
   assigned: Map<string, string>,
-  opts: { resumeFails?: boolean; aborts?: number[] } = {},
+  opts: {
+    resumeFails?: boolean
+    aborts?: number[]
+    /** Optional handle methods (e.g. permissionsDrain) attached to BOTH handles. */
+    handleExtras?: Record<string, unknown>
+  } = {},
 ): AgentRuntime {
   let counter = 0
+  const withExtras = (handle: {
+    deliver: (framed: string) => Promise<"delivered" | "failed">
+    abort: () => Promise<void>
+    status: () => Promise<{ status: AgentRuntimeStatus; detail?: string }>
+    stop: (force?: boolean) => Promise<void>
+  }): typeof handle =>
+    ({
+      ...handle,
+      ...opts.handleExtras,
+    }) as typeof handle
   return {
     runtime: "opencode",
     host: "opencode",
@@ -48,7 +63,7 @@ function fakeRuntime(
       return {
         ok: true,
         result: { host_session_id: id, spawn_cmd_redacted: "opencode serve --port X (password via env only)" },
-        handle: {
+        handle: withExtras({
           async deliver() {
             return "delivered" as const
           },
@@ -61,14 +76,14 @@ function fakeRuntime(
           async stop() {
             opts.aborts?.push(1)
           },
-        },
+        }),
       }
     },
     async resume(rec: AgentRecord) {
       if (opts.resumeFails || !rec.host_session_id) return { ok: false as const, message: "no session" }
       return {
         ok: true as const,
-        handle: {
+        handle: withExtras({
           async deliver() {
             return "delivered" as const
           },
@@ -81,7 +96,7 @@ function fakeRuntime(
           async stop() {
             opts.aborts?.push(1)
           },
-        },
+        }),
       }
     },
     async shutdownNode() {},
@@ -110,6 +125,9 @@ function testDeps(
     feed,
     projectId: () => null,
     createRuntime: () => fakeRuntime(new Map()),
+    loadChannelEngineState: () => ({ messages: {} }),
+    engineSend: () => ({ ok: true, message: "sent (test fake)" }),
+    saveChannelEngineState: () => {},
     ...overrides,
   }
 }
@@ -251,6 +269,9 @@ test("orchestrator api: model pinning is required and validated", async () => {
       withLock: <T>(fn: () => T) => store.withLock(fn),
       loadOrchestrator: () => store.load(),
       saveOrchestrator: (s: ReturnType<typeof store.load>) => store.save(s),
+      loadChannelEngineState: () => ({ messages: {} }),
+      engineSend: () => ({ ok: true, message: "sent (test fake)" }),
+      saveChannelEngineState: () => {},
       createRuntime: () => fakeRuntime(new Map()),
       feed,
       projectId: () => null,
@@ -474,6 +495,9 @@ test("orchestrator feed: emit persists via locked mutate and broadcasts with seq
       withLock: <T>(fn: () => T) => store.withLock(fn),
       loadOrchestrator: () => store.load(),
       saveOrchestrator: (s: ReturnType<typeof store.load>) => store.save(s),
+      loadChannelEngineState: () => ({ messages: {} }),
+      engineSend: () => ({ ok: true, message: "sent (test fake)" }),
+      saveChannelEngineState: () => {},
       feed,
       projectId: () => null,
     })
@@ -585,6 +609,171 @@ test("orchestrator api: agent worktree dir is created idempotently under .openco
     const createdTwice = await api.createAgent({ name: "w2", host: "opencode", role: "Worker2", role_prompt: "p" })
     assert.ok(createdTwice.ok)
     assert.ok(existsSync(join(dir, ".opencomms", "agents")))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("orchestrator api M2: tasks/assign rides the engine and GET /tasks derives honestly", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    // Engine fake: records sends, returns state we can seed for derivation.
+    const sentTasks: Array<{ channel: string; content: string; type: string; sender: string }> = []
+    let engineMessages: Record<
+      string,
+      {
+        message_id: string
+        channel_id: string
+        sender_session_id: string
+        recipient_session_id: string
+        timestamp: number
+        message_type: string
+        content: string
+        hop_count: number
+        correlation_id: string
+        delivery_status: string
+      }
+    > = {}
+    let counter = 0
+    const deps = {
+      ...testDeps(store, dir),
+      loadChannelEngineState: () => ({ messages: engineMessages }),
+      engineSend: (
+        state: unknown,
+        input: { channel: string; content: string; message_type: "review_request" },
+        sender: string,
+      ) => {
+        void state
+        counter += 1
+        sentTasks.push({ channel: input.channel, content: input.content, type: input.message_type, sender })
+        const taskId = /\[task (tsk_[0-9a-f]{24})\]/.exec(input.content)?.[1] ?? "unknown"
+        engineMessages = {
+          ...engineMessages,
+          [`msg_${counter}`]: {
+            message_id: `msg_${counter}`,
+            channel_id: input.channel,
+            sender_session_id: sender,
+            recipient_session_id: "ses_worker",
+            timestamp: Date.now(),
+            message_type: input.message_type,
+            content: input.content,
+            hop_count: 0,
+            correlation_id: `cor_${taskId}`,
+            delivery_status: "pending",
+          },
+        }
+        return { ok: true, message: `sent msg_${counter}` }
+      },
+      saveChannelEngineState: () => {},
+    }
+    const api = new OrchestratorApi(deps)
+    const created = await api.createAgent({ name: "w", host: "opencode", role: "Worker", role_prompt: "p" })
+    assert.ok(created.ok)
+    const data = created.data as { id: string }
+    // Missing fields => validation errors.
+    const noTitle = await api.assignTask({ agent_id: data.id, task: { body: "b", channel: "c" } })
+    assert.equal(noTitle.ok, false)
+    const noChannel = await api.assignTask({ agent_id: data.id, task: { title: "t", body: "b" } })
+    assert.equal(noChannel.ok, false)
+    const unknown = await api.assignTask({ agent_id: "agt_nope", task: { title: "t", body: "b", channel: "c" } })
+    assert.equal(unknown.ok, false)
+    // Assign rides the ENGINE as review_request with the tsk_ marker.
+    const assigned = await api.assignTask({
+      agent_id: data.id,
+      task: { title: "Fix the bug", body: "See the failing test.", channel: "m1-proof" },
+    })
+    assert.ok(assigned.ok, assigned.message)
+    const assignedData = assigned.data as { task_id: string }
+    assert.match(assignedData.task_id, /^tsk_[0-9a-f]{24}$/)
+    assert.equal(sentTasks.length, 1)
+    assert.equal(sentTasks[0]?.type, "review_request")
+    assert.ok(sentTasks[0]?.content.includes(`[task ${assignedData.task_id}]`))
+    assert.ok(sentTasks[0]?.content.includes("Fix the bug"))
+    // Feed event carried task_id.
+    const events = api.listEvents(0)
+    const eventList = (events.data as { events: Array<{ type: string; task_id: string | null }> }).events
+    assert.ok(eventList.some((e) => e.type === "task_assigned" && e.task_id === assignedData.task_id))
+    // Derivation: queued while pending.
+    const tasks = api.listTasks()
+    assert.ok(tasks.ok)
+    const list = (tasks.data as { tasks: Array<{ task_id: string; status: string }> }).tasks
+    assert.equal(list.length, 1)
+    assert.equal(list[0]?.task_id, assignedData.task_id)
+    assert.equal(list[0]?.status, "queued")
+    // Acked: a later reply envelope in the same correlation chain.
+    engineMessages = {
+      ...engineMessages,
+      msg_reply: {
+        message_id: "msg_reply",
+        channel_id: "m1-proof",
+        sender_session_id: "ses_worker",
+        recipient_session_id: "operator",
+        timestamp: Date.now() + 1,
+        message_type: "review_response",
+        content: "done",
+        hop_count: 1,
+        correlation_id: engineMessages["msg_1"]?.correlation_id ?? "cor_x",
+        delivery_status: "delivered",
+      },
+    }
+    const after = api.listTasks()
+    const afterList = (after.data as { tasks: Array<{ task_id: string; status: string }> }).tasks
+    assert.equal(afterList[0]?.status, "acked")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("orchestrator api M2: permissionsDrain surface is operator-only and honest about support", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    let respondCalls = 0
+    const assigned = new Map<string, string>()
+    // handleExtras attaches the permission methods to BOTH the create- and
+    // resume-returned handles (Lead's identified gap: the handle-return path
+    // must not drop the methods).
+    const deps = {
+      ...testDeps(store, dir),
+      createRuntime: () =>
+        fakeRuntime(assigned, {
+          handleExtras: {
+            async permissionsDrain() {
+              return [{ permission_id: "perm_1", request: { tool: "bash" } }]
+            },
+            async permissionsRespond(permissionId: string, response: string) {
+              respondCalls++
+              return { ok: true, message: `permission ${permissionId} ${response}ed` }
+            },
+          },
+        }),
+    }
+    const api = new OrchestratorApi(deps)
+    const created = await api.createAgent({ name: "w", host: "opencode", role: "Worker", role_prompt: "p" })
+    assert.ok(created.ok)
+    const data = created.data as { id: string }
+    // List returns the pending prompt (supported=true).
+    const list = await api.listPermissions(data.id)
+    assert.ok(list.ok, list.message)
+    const listData = list.data as { supported: boolean; pending: Array<{ permission_id: string; request: unknown }> }
+    assert.equal(listData.supported, true)
+    assert.equal(listData.pending.length, 1)
+    assert.equal(listData.pending[0]?.permission_id, "perm_1")
+    // Respond requires a valid response value.
+    const badResponse = await api.respondPermission(data.id, "perm_1", { response: "maybe" })
+    assert.equal(badResponse.ok, false)
+    assert.match(badResponse.message, /allow" or "deny/)
+    // Operator allow action works + is evented.
+    const allowed = await api.respondPermission(data.id, "perm_1", { response: "allow" })
+    assert.ok(allowed.ok, allowed.message)
+    assert.equal(respondCalls, 1)
+    const events = api.listEvents(0)
+    const eventList = (events.data as { events: Array<{ type: string; message: string }> }).events
+    assert.ok(eventList.some((e) => e.type === "agent_status" && e.message.includes("perm_1")))
+    // Unknown agent => 404-shape.
+    const unknown = await api.listPermissions("agt_nope")
+    assert.equal(unknown.ok, false)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

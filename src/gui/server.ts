@@ -1,15 +1,15 @@
-﻿/**
+/**
  * OpenComms local GUI server (work order 2026-09-08: "backend-ready now,
- * frontend later" â€” this IS the backend + a first frontend).
+ * frontend later" — this IS the backend + a first frontend).
  *
  * SECURITY: binds to the loopback interface ONLY (127.0.0.1). No auth is
- * required for a loopback-only socket (same trust boundary as state.json â€”
+ * required for a loopback-only socket (same trust boundary as state.json —
  * any local process can already read/write the project state). Refuses any
  * non-loopback hostname. No provider credentials pass through this server.
  *
  * The API is provider-independent: it exposes sessions (live + archived),
  * members, lifecycle operations (create/save/delete/resume), member
- * removal (OpenComms link ONLY â€” never touches provider processes), the
+ * removal (OpenComms link ONLY — never touches provider processes), the
  * real per-host join commands, and an SSE event stream for live updates.
  */
 
@@ -27,6 +27,7 @@ import {
   resumeSession,
   effectiveEndpointCapabilities,
   setSessionPausedAsOperator,
+  sendMessage,
 } from "../core/engine.js"
 import { ArchiveStore, buildArchiveContext, type SessionArchive } from "../core/archive.js"
 import { StateStore, emptyState } from "../core/store.js"
@@ -112,7 +113,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   // Managed shared serve (M1 ensureServe): ONE child per project, spawned
   // lazily on the first agent create; password is generated here, held in
   // memory + the child's env only (never logged, never persisted). Killed
-  // on server close — no orphans. authHeader lives in process memory only
+  // on server close � no orphans. authHeader lives in process memory only
   // and is handed to the runtime env for transport authentication.
   let serveChild: import("node:child_process").ChildProcess | null = null
   let serveAuthHeader: string | null = null
@@ -191,6 +192,14 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       saveOrchestrator: (s) => apiOrchestratorStore.save(s),
       feed: apiFeed,
       projectId: () => null,
+      loadChannelEngineState: () => apiStore.load(),
+      engineSend: (state, input, senderSessionId) =>
+        sendMessage(
+          state as never,
+          { channel: input.channel, content: input.content, type: input.message_type },
+          senderSessionId,
+        ),
+      saveChannelEngineState: (state) => apiStore.save(state as never),
     })
   }
   const load = (): State => store?.load() ?? emptyState()
@@ -227,7 +236,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       }
     }
   }
-  // Live-state change detection (P3-1): real mtime watch on state.json —
+  // Live-state change detection (P3-1): real mtime watch on state.json �
   // change-driven events, not wall-clock ticks. persistent:false never
   // holds the host event loop open (same pattern as the delivery wake).
   let statWatcher: StatWatcher | null = null
@@ -333,6 +342,14 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       saveOrchestrator: (s) => activeOrchestratorStore.save(s),
       feed: activeFeedRef,
       projectId: () => null,
+      loadChannelEngineState: () => activeStoreRef.load(),
+      engineSend: (state, input, senderSessionId) =>
+        sendMessage(
+          state as never,
+          { channel: input.channel, content: input.content, type: input.message_type },
+          senderSessionId,
+        ),
+      saveChannelEngineState: (state) => activeStoreRef.save(state as never),
     })
     ensureStatWatcher()
     ensureArchivesWatcher()
@@ -350,16 +367,16 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
    * NETWORK exposure but NOT against the user's browser. DNS rebinding
    * makes a remote page same-origin with our port; CORS-simple POSTs (no
    * preflight) can mutate state from any site. Defense:
-   *   1. Host header must be loopback (with optional :port) — kills
+   *   1. Host header must be loopback (with optional :port) � kills
    *      rebinding (the browser sends the rebound name as Host).
    *   2. Non-GET requests must carry Origin/Referer that is ABSENT (curl,
    *      same-process clients) or matches this loopback origin, or
-   *      Sec-Fetch-Site: same-origin/none — kills simple-request CSRF.
+   *      Sec-Fetch-Site: same-origin/none � kills simple-request CSRF.
    */
   const MUTATING = new Set(["POST", "PUT", "DELETE", "PATCH"])
   const guard = (req: IncomingMessage): string | null => {
     const host = (req.headers["host"] ?? "").toLowerCase().trim()
-    // IPv6-safe: "[::1]:3000" → "[::1]" (cut after ']'); plain "h:p" → "h".
+    // IPv6-safe: "[::1]:3000" ? "[::1]" (cut after ']'); plain "h:p" ? "h".
     const bracketEnd = host.indexOf("]")
     const hostName = bracketEnd >= 0 ? host.slice(0, bracketEnd + 1) : (host.split(":")[0] ?? "")
     if (!(hostName === "127.0.0.1" || hostName === "localhost" || hostName === "[::1]")) {
@@ -462,7 +479,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" })
       res.write(`event: hello\ndata: {}\n\n`)
       sseClients.add(res)
-      // Additive orchestrator topic (contract v0.3 §9): the feed's emit()
+      // Additive orchestrator topic (contract v0.3 �9): the feed's emit()
       // broadcasts `event: orchestrator` through this same client set;
       // generic `refresh` semantics stay unchanged.
       const ping = setInterval(() => {
@@ -515,7 +532,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
         if (method === "POST" && sub === "/agents/create") {
           // Lazy serve bootstrap: the shared serve spawns on the FIRST create
           // (Lead-approved ensureServe spec). Failure fails the create
-          // cleanly with a clear message — no half-spawned agent rows beyond
+          // cleanly with a clear message � no half-spawned agent rows beyond
           // what createAgent itself already marks failed.
           const serveReady = await ensureServeRunning()
           if (!serveReady.ok) {
@@ -523,7 +540,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
             return
           }
           // Ledger assertion (M1 proof follow-up): the FIRST GUI-path create
-          // must never proceed with an unrecorded serve port — the bootstrap
+          // must never proceed with an unrecorded serve port � the bootstrap
           // above guarantees it, and we fail loudly if it ever drifts.
           if (!Number.isFinite(servePort) || servePort <= 0) {
             recordError(
@@ -561,10 +578,38 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           json(res, 200, activeApi.trustView())
           return
         }
+        if (method === "GET" && sub === "/tasks") {
+          json(res, 200, activeApi.listTasks())
+          return
+        }
+        if (method === "POST" && sub === "/tasks/assign") {
+          const body = await readBody(req)
+          const result = await activeApi.assignTask(body)
+          if (result.ok) broadcast("refresh", { reason: "orchestrator_task_assigned" })
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
         if (method === "POST" && (sub === "/nodes/approve" || sub === "/nodes/revoke")) {
           const body = await readBody(req)
           const result = await activeApi.approveOrRevoke(body, sub === "/nodes/approve" ? "approve" : "revoke")
           json(res, result.ok ? 200 : result.message.startsWith("Owner approval") ? 403 : 400, result)
+          return
+        }
+        const permListMatch = sub.match(/^\/agents\/([^/]+)\/permissions$/)
+        if (method === "GET" && permListMatch) {
+          const result = await activeApi.listPermissions(decodeURIComponent(permListMatch[1] ?? ""))
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        const permRespondMatch = sub.match(/^\/agents\/([^/]+)\/permissions\/([^/]+)$/)
+        if (method === "POST" && permRespondMatch) {
+          const body = await readBody(req)
+          const result = await activeApi.respondPermission(
+            decodeURIComponent(permRespondMatch[1] ?? ""),
+            decodeURIComponent(permRespondMatch[2] ?? ""),
+            body,
+          )
+          json(res, result.ok ? 200 : 400, result)
           return
         }
         json(res, 404, { ok: false, message: `No orchestrator route for ${method} ${sub}` })
@@ -746,7 +791,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           activeStore.save(state)
           return { ok: true, message: `Session ${channelId} DELETED.` }
         }
-        // Non-live phase: the decided id may be a NAME — resolve it to the
+        // Non-live phase: the decided id may be a NAME � resolve it to the
         // archive id (chn_*) before touching files.
         const archiveId = channelId.startsWith("chn_")
           ? channelId

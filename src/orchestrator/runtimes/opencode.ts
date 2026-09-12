@@ -90,6 +90,13 @@ export interface OpencodeTransport {
       parts: Array<{ type: string; text?: string }>
     }>
   >
+  /**
+   * M2 §9b-4: host permission surface (GET list + POST response), backed by
+   * the serve's /session/:id/permissions routes. Returns null for "list
+   * unsupported" on older serves.
+   */
+  permissionsList(sessionId: string): Promise<Array<{ permission_id: string; request?: unknown }> | null>
+  permissionsRespond(sessionId: string, permissionId: string, response: "allow" | "deny"): Promise<void>
 }
 
 /** Basic-auth header helper (loopback-only; header form, never ?auth_token=). */
@@ -163,6 +170,25 @@ export function createHttpTransport(baseUrl: string, password: string, username 
         | Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }>
         | { data?: Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }> }
       return Array.isArray(payload) ? payload : (payload.data ?? [])
+    },
+    async permissionsList(sessionId) {
+      // GET /session/:id/permissions — 404 on older serves = unsupported.
+      try {
+        const payload = (await call(`/session/${sessionId}/permissions`)) as
+          | Array<{ id?: string; permission_id?: string; request?: unknown }>
+          | { data?: Array<{ id?: string; permission_id?: string; request?: unknown }> }
+        const rows = Array.isArray(payload) ? payload : (payload.data ?? [])
+        return rows.map((r) => ({ permission_id: r.permission_id ?? r.id ?? "", request: (r.request ?? r) as unknown }))
+      } catch (error) {
+        if (/\(404\)/.test(String(error))) return null
+        throw error
+      }
+    },
+    async permissionsRespond(sessionId, permissionId, response) {
+      await call(`/session/${sessionId}/permissions/${permissionId}`, {
+        method: "POST",
+        body: JSON.stringify({ response, remember: false }),
+      })
     },
   }
 }
@@ -398,6 +424,23 @@ export function createOpencodeRuntime(opts: OpencodeRuntimeOptions): AgentRuntim
         await ensureTransport().abort(sessionId)
       } catch {
         /* already stopped */
+      }
+    },
+    async permissionsDrain() {
+      try {
+        const rows = await ensureTransport().permissionsList(sessionId)
+        if (rows === null) return null
+        return rows.map((r) => ({ permission_id: r.permission_id, request: r.request as unknown }))
+      } catch {
+        return null
+      }
+    },
+    async permissionsRespond(permissionId, response) {
+      try {
+        await ensureTransport().permissionsRespond(sessionId, permissionId, response)
+        return { ok: true, message: `permission ${permissionId} ${response}ed` }
+      } catch (error) {
+        return { ok: false, message: (error as Error).message }
       }
     },
   })

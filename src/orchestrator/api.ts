@@ -72,6 +72,34 @@ export interface OrchestratorApiDeps {
    * live serve while the production behavior stays unchanged.
    */
   createRuntime?: () => AgentRuntime
+  /**
+   * Channel-engine surface for task assignment (M2 §9b-3): the orchestrator
+   * sends AS the operator session via the SAME engine mutation path as any
+   * other send. The GUI wiring supplies the real engine fns; tests inject.
+   */
+  loadChannelEngineState: () => {
+    messages: Record<
+      string,
+      {
+        message_id: string
+        channel_id: string
+        sender_session_id: string
+        recipient_session_id: string
+        timestamp: number
+        message_type: string
+        content: string
+        hop_count: number
+        correlation_id: string
+        delivery_status: string
+      }
+    >
+  }
+  engineSend: (
+    state: unknown,
+    input: { channel: string; content: string; message_type: "review_request" },
+    senderSessionId: string,
+  ) => { ok: boolean; message: string }
+  saveChannelEngineState: (state: unknown) => void
 }
 
 /** Validation failure shape (contract §6: 400/403/404/409/500). */
@@ -620,10 +648,207 @@ export class OrchestratorApi {
     return pass(`Node ${nodeId} ${action}d.`)
   }
 
+  /**
+   * GET /api/orchestrator/agents/{id}/permissions (M2, design §9b-4).
+   * Trust boundary (Review priority): this surface is OPERATOR-ONLY —
+   * served from the GUI process behind the loopback + browser-surface
+   * guard; agent-facing tools never reach it. A null drain means the host
+   * exposes no permission API (honest "unsupported", never faked empty).
+   */
+  async listPermissions(agentId: string): Promise<ApiResult> {
+    const state = this.deps.loadOrchestrator()
+    const agent = state.agents.find((a) => a.id === agentId)
+    if (!agent) return fail(`Unknown agent "${agentId}".`)
+    if (!agent.host_session_id) return fail(`Agent ${agent.name} has no live session.`)
+    const runtime = this.deps.createRuntime
+      ? this.deps.createRuntime()
+      : createOpencodeRuntime({
+          projectDir: this.deps.projectDir,
+          port: this.deps.servePort(),
+          env: {
+            ...process.env,
+            OPENCOMMS_ORCH_SERVE_PASSWORD: this.deps.servePassword(),
+            OPENCOMMS_ORCH_SERVE_MODEL: agent.model ?? "",
+          },
+        })
+    const resumed = await runtime.resume(agent)
+    if (!resumed.ok) return fail(resumed.message)
+    if (!resumed.handle.permissionsDrain) return fail(`Runtime "${agent.runtime}" exposes no permission API.`)
+    const pending = await resumed.handle.permissionsDrain()
+    if (pending === null) {
+      return pass("ok", {
+        supported: false,
+        pending: [],
+        detail: `runtime "${agent.runtime}" exposes no permission API`,
+      })
+    }
+    return pass("ok", { supported: true, pending })
+  }
+
+  /**
+   * POST /api/orchestrator/agents/{id}/permissions/{permissionID} — answers
+   * ONE pending prompt. Operator-only action (see listPermissions); the M1
+   * least-privilege spawn defaults still gate what the agent can request.
+   */
+  async respondPermission(agentId: string, permissionId: string, body: Record<string, unknown>): Promise<ApiResult> {
+    const response = body["response"]
+    if (response !== "allow" && response !== "deny") {
+      return fail('response must be "allow" or "deny".')
+    }
+    const state = this.deps.loadOrchestrator()
+    const agent = state.agents.find((a) => a.id === agentId)
+    if (!agent) return fail(`Unknown agent "${agentId}".`)
+    if (!agent.host_session_id) return fail(`Agent ${agent.name} has no live session.`)
+    const runtime = this.deps.createRuntime
+      ? this.deps.createRuntime()
+      : createOpencodeRuntime({
+          projectDir: this.deps.projectDir,
+          port: this.deps.servePort(),
+          env: {
+            ...process.env,
+            OPENCOMMS_ORCH_SERVE_PASSWORD: this.deps.servePassword(),
+            OPENCOMMS_ORCH_SERVE_MODEL: agent.model ?? "",
+          },
+        })
+    const resumed = await runtime.resume(agent)
+    if (!resumed.ok) return fail(resumed.message)
+    if (!resumed.handle.permissionsRespond) return fail(`Runtime "${agent.runtime}" exposes no permission API.`)
+    const result = await resumed.handle.permissionsRespond(permissionId, response)
+    if (result.ok) {
+      this.deps.feed.emit({
+        type: "agent_status",
+        message: `Permission ${permissionId} ${response}ed for ${agent.name} (operator).`,
+        agent_id: agent.id,
+      })
+    }
+    return result.ok ? pass(result.message) : fail(result.message)
+  }
+
   /** Sentinel stamping (Reviewer item 3): REAL project id when available. */
   projectIdForChannel(): string {
     return this.deps.projectId() ?? "gui-local-project"
   }
+
+  /**
+   * POST /api/orchestrator/tasks/assign (M2, design §9b-3).
+   *
+   * Trust boundary (Review priority): the task body is UNTRUSTED content —
+   * it rides the EXISTING message engine as review_request semantics sent
+   * AS the operator session, framed identically to peer mail. The
+   * orchestrator is just another channel participant, never a privileged
+   * injection path: no new message type, no new delivery route, engine
+   * invariants (dedup, rate limit, hops, framing) apply unchanged.
+   */
+  async assignTask(body: Record<string, unknown>): Promise<ApiResult> {
+    const agentId = typeof body["agent_id"] === "string" ? body["agent_id"].trim() : ""
+    if (!agentId) return fail("agent_id is required.")
+    const task = body["task"] && typeof body["task"] === "object" ? (body["task"] as Record<string, unknown>) : null
+    if (!task) return fail("task object is required ({ title, body, channel }).")
+    const title = typeof task["title"] === "string" ? task["title"].trim() : ""
+    const taskBody = typeof task["body"] === "string" ? task["body"].trim() : ""
+    const channel = typeof task["channel"] === "string" ? task["channel"].trim() : ""
+    if (!title) return fail("task.title is required.")
+    if (!taskBody) return fail("task.body is required.")
+    if (!channel) return fail("task.channel is required (the agent's channel).")
+    if (title.length > 200) return fail("task.title must be 200 characters or fewer.")
+    if (taskBody.length > 90_000)
+      return fail("task.body must be 90,000 characters or fewer (engine 100k cap minus framing).")
+
+    const state = this.deps.loadOrchestrator()
+    const agent = state.agents.find((a) => a.id === agentId)
+    if (!agent) return fail(`Unknown agent "${agentId}".`)
+    if (agent.status !== "running" && agent.status !== "idle") {
+      return fail(`Agent ${agent.name} is ${agent.status}; only running/idle agents can be assigned tasks.`)
+    }
+    if (agent.host_session_id === null) {
+      return fail(`Agent ${agent.name} has no live session (not spawned or stopped).`)
+    }
+
+    // Send via the engine under the channel-state lock (same mutation path
+    // as any other operator send; the task id travels in the correlation).
+    const taskId = newTaskId()
+    const operatorSessionId = `operator-${agent.node_id}`
+    const sent = await this.deps.withLock(() => {
+      const channelState = this.deps.loadChannelEngineState()
+      const composed = `${title}\n\n${taskBody}\n\n[task ${taskId}]`
+      const result = this.deps.engineSend(
+        channelState,
+        {
+          channel,
+          content: composed,
+          message_type: "review_request",
+        },
+        operatorSessionId,
+      )
+      if (!result.ok) return result
+      this.deps.saveChannelEngineState(channelState)
+      return result
+    })
+    if (!sent.ok) return fail(sent.message)
+    this.deps.feed.emit({
+      type: "task_assigned",
+      message: `Task ${taskId} (${title}) assigned to ${agent.name} via channel ${channel}.`,
+      agent_id: agent.id,
+      task_id: taskId,
+      kind: "channel_notice",
+    })
+    return pass(`Task ${taskId} assigned to ${agent.name}.`, { task_id: taskId, agent_id: agent.id, channel })
+  }
+
+  /**
+   * GET /api/orchestrator/tasks — honest derivation from channel state
+   * (design §9b-3): tasks are envelopes with `[task tsk_*]` markers; acked =
+   * the agent replied in the same correlation chain; delivered = handed to
+   * the host; queued = pending. No separate task store in M2.
+   */
+  listTasks(): ApiResult {
+    const engineState = this.deps.loadChannelEngineState()
+    const tasks: Array<{
+      task_id: string
+      agent_id: string | null
+      channel: string
+      title: string
+      status: "queued" | "delivered" | "acked"
+      message_id: string
+      assigned_at: number
+    }> = []
+    for (const msg of Object.values(engineState.messages)) {
+      if (msg.message_type !== "review_request") continue
+      const match = /\[task (tsk_[0-9a-f]{24})\]\s*$/.exec(msg.content)
+      if (!match) continue
+      const taskId = match[1] as string
+      const title = msg.content.split("\n")[0]?.slice(0, 200) ?? ""
+      const agent = this.deps
+        .loadOrchestrator()
+        .agents.find((a) => a.host_session_id !== null && msg.recipient_session_id === a.host_session_id)
+      // Acked = any later envelope in the SAME correlation chain authored by
+      // the recipient (their reply), or an explicit review_response reply.
+      const acked = Object.values(engineState.messages).some(
+        (m) =>
+          m.correlation_id === msg.correlation_id &&
+          m.sender_session_id === msg.recipient_session_id &&
+          (m.message_type === "review_response" || m.hop_count > 0),
+      )
+      tasks.push({
+        task_id: taskId,
+        agent_id: agent?.id ?? null,
+        channel: msg.channel_id,
+        title,
+        status: acked ? "acked" : msg.delivery_status === "delivered" ? "delivered" : "queued",
+        message_id: msg.message_id,
+        assigned_at: msg.timestamp,
+      })
+    }
+    tasks.sort((a, b) => b.assigned_at - a.assigned_at)
+    return pass("ok", { tasks })
+  }
+}
+
+/** Task ids mirror the agt_/node_ pattern. */
+export function newTaskId(): string {
+  const bytes = new Uint8Array(12)
+  for (let i = 0; i < 12; i++) bytes[i] = Math.floor(Math.random() * 256)
+  return `tsk_${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`
 }
 
 export function agentSpawnCmdRedacted(state: OrchestratorState): string {
