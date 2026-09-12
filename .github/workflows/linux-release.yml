@@ -41,12 +41,17 @@ jobs:
           npm run test:unit > ci-failure/test-unit.txt 2>&1 || true
           tail -c 20000 ci-failure/typecheck.txt >> ci-failure/combined.txt 2>&1 || true
           tail -c 20000 ci-failure/test-unit.txt >> ci-failure/combined.txt 2>&1 || true
-          # Emit the last 30 non-empty lines as ::error annotations — those are
+          # Emit failing-test signatures as ::error annotations — those are
           # anonymous-readable via the check-runs annotations API (Platform
-          # verified; artifacts + step summaries are auth-gated).
-          tail -n 30 ci-failure/combined.txt | while IFS= read -r line; do
-            [ -n "$line" ] && echo "::error::${line:0:400}"
-          done
+          # verified; artifacts + step summaries are auth-gated). Grep failure
+          # signatures with context, not a tail: the failing test may sit well
+          # before the final lines (Platform diagnosis after run 34691955898).
+          if [ -f ci-failure/combined.txt ]; then
+            grep -n -A 12 -E "^not ok|# cancelled|ERR_TEST_FAILURE|AssertionError" ci-failure/combined.txt | tail -n 60 | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::${line:0:400}"
+            done
+            grep -c "not ok" ci-failure/combined.txt > /dev/null 2>&1 || echo "::error::no 'not ok' lines in combined output (see uploaded artifact ci-failure-logs)"
+          fi
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4.6.2
