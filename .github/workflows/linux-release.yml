@@ -1,0 +1,44 @@
+name: Linux release smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "installer/**"
+      - "package.json"
+      - "package-lock.json"
+      - "install.mjs"
+      - ".github/workflows/linux-release.yml"
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 22.14.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck and unit tests
+        run: |
+          npm run typecheck
+          npm run test:unit
+      - name: Build Linux release tarball
+        run: npm run build:release
+      - name: Smoke-test Linux release
+        run: node scripts/test-linux-release.mjs
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: opencomms-linux
+          path: dist-release/*
