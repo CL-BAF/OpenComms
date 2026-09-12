@@ -44,6 +44,9 @@ import {
 import { detectCodex } from "../adapters/codex/install.js"
 import { detectChatGptDesktop } from "../adapters/chatgpt/install.js"
 import { VERSION } from "../version.js"
+import { OrchestratorStore } from "../orchestrator/state.js"
+import { createOrchestratorFeed } from "../orchestrator/events.js"
+import { OrchestratorApi } from "../orchestrator/api.js"
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"])
 
@@ -88,6 +91,52 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   let projectDir = initialWorkspaceProject(deps.projectDir)
   let store = projectDir ? new StateStore(projectDir) : null
   let archives = projectDir ? new ArchiveStore(projectDir) : null
+  // Orchestrator core (M1): in-process in THIS server (ADR-0005 leaning);
+  // Tauri sidecar argv stays exactly `gui --port N --server --project dir`.
+  let orchestratorStore: OrchestratorStore | null = null
+  if (projectDir && store) {
+    orchestratorStore = new OrchestratorStore(projectDir, store)
+  }
+  // Serve password + model are in-memory only (never persisted, never
+  // returned, never logged; Reviewer redaction-by-value gate).
+  const servePassword = (): string => {
+    const env = process.env["OPENCOMMS_ORCH_SERVE_PASSWORD"]
+    return env?.trim() ? env : ""
+  }
+  const serveModel = (): string | undefined => {
+    const env = process.env["OPENCOMMS_ORCH_SERVE_MODEL"]
+    return env?.trim() ? env.trim() : undefined
+  }
+  let servePort = 0
+  let feed: ReturnType<typeof createOrchestratorFeed> | null = null
+  if (orchestratorStore) {
+    const initialOrchestratorStore = orchestratorStore
+    feed = createOrchestratorFeed((fn) =>
+      initialOrchestratorStore.withLock(() => {
+        const oState = initialOrchestratorStore.load()
+        const seq = fn(oState)
+        initialOrchestratorStore.save(oState)
+        return seq
+      }),
+    )
+  }
+  let orchestratorApi: OrchestratorApi | null = null
+  if (projectDir && orchestratorStore && feed && store) {
+    const apiOrchestratorStore = orchestratorStore
+    const apiStore = store
+    const apiFeed = feed
+    orchestratorApi = new OrchestratorApi({
+      projectDir,
+      servePassword,
+      serveModel: () => process.env["OPENCOMMS_ORCH_SERVE_MODEL"],
+      servePort: () => servePort,
+      withLock: (fn) => apiStore.withLock(fn),
+      loadOrchestrator: () => apiOrchestratorStore.load(),
+      saveOrchestrator: (s) => apiOrchestratorStore.save(s),
+      feed: apiFeed,
+      projectId: () => null,
+    })
+  }
   const load = (): State => store?.load() ?? emptyState()
   const recordError = (message: string): void => {
     if (store) {
@@ -192,6 +241,29 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     projectDir = normalized
     store = new StateStore(normalized)
     archives = new ArchiveStore(normalized)
+    orchestratorStore = new OrchestratorStore(normalized, store)
+    const activeOrchestratorStore = orchestratorStore
+    feed = createOrchestratorFeed((fn) =>
+      activeOrchestratorStore.withLock(() => {
+        const oState = activeOrchestratorStore.load()
+        const seq = fn(oState)
+        activeOrchestratorStore.save(oState)
+        return seq
+      }),
+    )
+    const activeStoreRef = store
+    const activeFeedRef = feed
+    orchestratorApi = new OrchestratorApi({
+      projectDir: normalized,
+      servePassword,
+      serveModel: () => process.env["OPENCOMMS_ORCH_SERVE_MODEL"],
+      servePort: () => servePort,
+      withLock: (fn) => activeStoreRef.withLock(fn),
+      loadOrchestrator: () => activeOrchestratorStore.load(),
+      saveOrchestrator: (s) => activeOrchestratorStore.save(s),
+      feed: activeFeedRef,
+      projectId: () => null,
+    })
     ensureStatWatcher()
     ensureArchivesWatcher()
     onStatChange()
@@ -320,10 +392,9 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" })
       res.write(`event: hello\ndata: {}\n\n`)
       sseClients.add(res)
-      // Keepalive: a periodic SSE comment keeps half-open connections
-      // observable. A dead client surfaces as a write error (pruned below);
-      // the BROWSER sees activity instead of a silent half-open stream and
-      // EventSource reconnects (the frontend refetches on reconnect).
+      // Additive orchestrator topic (contract v0.3 §9): the feed's emit()
+      // broadcasts `event: orchestrator` through this same client set;
+      // generic `refresh` semantics stay unchanged.
       const ping = setInterval(() => {
         for (const client of sseClients) {
           try {
@@ -337,6 +408,81 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       req.on("close", () => {
         clearInterval(ping)
         sseClients.delete(res)
+      })
+      return
+    }
+
+    // Orchestrator routes (contract v0.3): dispatch via the in-process API.
+    const orchMatch = path.match(/^\/api\/orchestrator(\/.*)?$/)
+    if (orchMatch) {
+      const activeApi = orchestratorApi
+      const activeFeed = feed
+      if (!activeApi || !activeFeed || !orchestratorStore) {
+        json(res, 409, { ok: false, message: "Select a project before using orchestrator routes." })
+        return
+      }
+      const orchestratorDispatch = async (): Promise<void> => {
+        const sub = orchMatch[1] ?? "/"
+        if (method === "GET" && sub === "/nodes") {
+          json(res, 200, activeApi.listNodes())
+          return
+        }
+        const runtimesMatch = sub.match(/^\/nodes\/([^/]+)\/runtimes$/)
+        if (method === "GET" && runtimesMatch) {
+          const result = await activeApi.listRuntimes(decodeURIComponent(runtimesMatch[1] ?? ""))
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        if (method === "GET" && sub === "/agents") {
+          json(res, 200, activeApi.listAgents())
+          return
+        }
+        const agentDetail = sub.match(/^\/agents\/([^/]+)$/)
+        if (method === "GET" && agentDetail) {
+          json(res, 200, activeApi.getAgent(decodeURIComponent(agentDetail[1] ?? "")))
+          return
+        }
+        if (method === "POST" && sub === "/agents/create") {
+          const body = await readBody(req)
+          const result = await activeApi.createAgent(body)
+          if (result.ok) broadcast("refresh", { reason: "orchestrator_agent_created" })
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        if (method === "POST" && sub === "/agents/stop") {
+          const body = await readBody(req)
+          const result = await activeApi.stopAgent(body)
+          if (result.ok) broadcast("refresh", { reason: "orchestrator_agent_stopped" })
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        if (method === "POST" && sub === "/agents/restart") {
+          const body = await readBody(req)
+          const result = await activeApi.restartAgent(body)
+          if (result.ok) broadcast("refresh", { reason: "orchestrator_agent_restarted" })
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        if (method === "GET" && sub === "/events") {
+          const since = Number(url.searchParams.get("since") ?? "0")
+          json(res, 200, activeApi.listEvents(Number.isFinite(since) ? since : 0))
+          return
+        }
+        if (method === "GET" && sub === "/trust") {
+          json(res, 200, activeApi.trustView())
+          return
+        }
+        if (method === "POST" && (sub === "/nodes/approve" || sub === "/nodes/revoke")) {
+          const body = await readBody(req)
+          const result = await activeApi.approveOrRevoke(body, sub === "/nodes/approve" ? "approve" : "revoke")
+          json(res, result.ok ? 200 : result.message.startsWith("Owner approval") ? 403 : 400, result)
+          return
+        }
+        json(res, 404, { ok: false, message: `No orchestrator route for ${method} ${sub}` })
+      }
+      await orchestratorDispatch().catch((error) => {
+        recordError(`Orchestrator API failed: ${(error as Error).message}`)
+        if (!res.headersSent) json(res, 500, { ok: false, message: `Internal error: ${(error as Error).message}` })
       })
       return
     }
