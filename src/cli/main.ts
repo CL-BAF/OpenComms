@@ -35,6 +35,7 @@ import { listMemberPins, loadProjectPin } from "../mcp/identity.js"
 import { joinCommandFor } from "./join-command.js"
 import { WIZARD_PS1 } from "./wizard.js"
 import { iconIcoBytes } from "./icon-base64.js"
+import { updateCommand } from "./update.js"
 import { VERSION } from "../version.js"
 
 /** Package version, derived from package.json so the CLI can never drift. */
@@ -731,6 +732,9 @@ export function runCli(argv: string[]): CliResult {
       return fmtDoctor(projectDir)
     case "version":
       return ok(`opencomms ${VERSION} (state schema v${SCHEMA_VERSION})`)
+    case "update":
+      // Async (network): handled on the async path below, like session.
+      return fail("Update commands are async: await updateCommand(...) (CLI main handles this).")
     case "install":
       return runInstall(positional, projectDir)
     case "gui":
@@ -773,6 +777,7 @@ export function runCli(argv: string[]): CliResult {
           "  opencomms install-wizard             # Windows setup wizard (also launched by double-clicking the exe)",
           "  opencomms uninstall-self             # remove PATH entry, shortcuts, and the install folder",
           "  opencomms join-command <session> [--host <opencode|claude-code|codex|claude-desktop|chatgpt>]",
+          "  opencomms update [--check] [--json]  # self-update (Linux; Windows prints the installer pointer)",
           "  opencomms uninstall <host> [--project <dir>]",
           "  opencomms version",
         ].join("\n"),
@@ -801,6 +806,12 @@ if (isCliEntry) {
     if (guiResult.output) process.stdout.write(guiResult.output + "\n")
   } else if (argv[0] === "session") {
     void runSession(argv.slice(1), projectDirFromFlag(argv, "--project") ?? process.cwd()).then(emit)
+  } else if (argv[0] === "update") {
+    void updateCommand(argv.slice(1), {
+      currentVersion: VERSION,
+      execPath: process.execPath,
+      env: process.env,
+    }).then(emit)
   } else {
     emit(runCli(argv))
   }
