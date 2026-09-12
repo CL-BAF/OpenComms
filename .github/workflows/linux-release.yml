@@ -41,11 +41,14 @@ jobs:
           npm run test:unit > ci-failure/test-unit.txt 2>&1 || true
           tail -c 20000 ci-failure/typecheck.txt >> ci-failure/combined.txt 2>&1 || true
           tail -c 20000 ci-failure/test-unit.txt >> ci-failure/combined.txt 2>&1 || true
-          # Decisive amendment (Platform): target the KNOWN internal-stack
-          # fragment — the error message always precedes the stack, so a -B 20
-          # window around 'internal/test_runner' captures it + the crashing
-          # test name. Fallback annotation points to the artifact otherwise.
+          # FINAL surgical amendment (Platform): the lines just BEFORE the
+          # counters are where node --test prints its final error — and the
+          # internal/test_runner window plus the counter-neighborhood cover
+          # both crash shapes.
           if [ -f ci-failure/combined.txt ]; then
+            grep -n -B 3 "cancelled 0" ci-failure/combined.txt | head -n 20 | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error precounters::${line:0:400}"
+            done
             grep -n -B 20 -A 8 "internal/test_runner" ci-failure/combined.txt | head -n 40 | while IFS= read -r line; do
               [ -n "$line" ] && echo "::error::${line:0:400}"
             done
