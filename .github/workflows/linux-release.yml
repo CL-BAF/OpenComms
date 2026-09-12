@@ -41,6 +41,12 @@ jobs:
           npm run test:unit > ci-failure/test-unit.txt 2>&1 || true
           tail -c 20000 ci-failure/typecheck.txt >> ci-failure/combined.txt 2>&1 || true
           tail -c 20000 ci-failure/test-unit.txt >> ci-failure/combined.txt 2>&1 || true
+          # Emit the last 30 non-empty lines as ::error annotations — those are
+          # anonymous-readable via the check-runs annotations API (Platform
+          # verified; artifacts + step summaries are auth-gated).
+          tail -n 30 ci-failure/combined.txt | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error::${line:0:400}"
+          done
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4.6.2
