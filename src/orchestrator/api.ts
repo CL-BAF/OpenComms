@@ -22,6 +22,7 @@
 
 import { mkdirSync, existsSync } from "node:fs"
 import { join } from "node:path"
+import { randomBytes } from "node:crypto"
 import {
   localNodeIdFor,
   newAgentId,
@@ -844,11 +845,9 @@ export class OrchestratorApi {
   }
 }
 
-/** Task ids mirror the agt_/node_ pattern. */
+/** Task ids mirror the agt_/node_ pattern (crypto randomBytes, Reviewer P3). */
 export function newTaskId(): string {
-  const bytes = new Uint8Array(12)
-  for (let i = 0; i < 12; i++) bytes[i] = Math.floor(Math.random() * 256)
-  return `tsk_${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`
+  return `tsk_${randomBytes(12).toString("hex")}`
 }
 
 export function agentSpawnCmdRedacted(state: OrchestratorState): string {
