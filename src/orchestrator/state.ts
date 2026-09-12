@@ -100,6 +100,12 @@ export interface NodeRecord {
   capabilities: NodeCapabilities
   approved_at: number | null
   approved_by: "owner" | null
+  /**
+   * M2 restart policy (design §9b-2): operator-controlled; M2 ships
+   * "manual" ONLY (no auto-respawn). The hook exists so M3 can flip it
+   * per-node without a migration.
+   */
+  restart_policy: "manual" | "auto"
 }
 
 export interface AgentRecord {
@@ -151,6 +157,7 @@ export function emptyOrchestratorState(worktree: string): OrchestratorState {
     capabilities: { max_agents: 8, runtimes: [], headless: false },
     approved_at: Date.now(),
     approved_by: "owner",
+    restart_policy: "manual",
   }
   return {
     orchestrator_schema_version: ORCHESTRATOR_SCHEMA_VERSION,
@@ -175,6 +182,7 @@ const AGENT_STATUSES: readonly string[] = ["starting", "running", "idle", "stale
 
 function isValidNode(n: unknown): boolean {
   if (!isRecord(n)) return false
+  const policy = n["restart_policy"]
   return (
     typeof n["id"] === "string" &&
     NODE_ID_PATTERN.test(n["id"]) &&
@@ -183,7 +191,7 @@ function isValidNode(n: unknown): boolean {
     typeof n["platform"] === "string" &&
     (n["status"] === "online" || n["status"] === "offline" || n["status"] === "pending_approval") &&
     isRecord(n["capabilities"]) &&
-    isRecord(n["trust_placeholder"] ?? {})
+    (policy === undefined || policy === "manual" || policy === "auto")
   )
 }
 
@@ -270,6 +278,10 @@ export function backfillOrchestratorState(state: OrchestratorState): void {
     if (typeof agent.last_heartbeat !== "number") agent.last_heartbeat = null
     if (typeof agent.restart_count !== "number" || !Number.isFinite(agent.restart_count)) agent.restart_count = 0
     if (typeof agent.model !== "string") agent.model = null
+  }
+  for (const node of state.nodes) {
+    // M2 restart_policy backfill: old nodes default to "manual" (binding).
+    if (node.restart_policy !== "manual" && node.restart_policy !== "auto") node.restart_policy = "manual"
   }
   if (!Array.isArray(state.trust.pending_pairing_requests)) state.trust.pending_pairing_requests = []
   if (!Array.isArray(state.trust.approved_node_ids)) state.trust.approved_node_ids = []

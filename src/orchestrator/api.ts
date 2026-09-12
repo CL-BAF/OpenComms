@@ -391,11 +391,71 @@ export class OrchestratorApi {
   async stopAgent(body: Record<string, unknown>): Promise<ApiResult> {
     const agentId = typeof body["agent_id"] === "string" ? body["agent_id"].trim() : ""
     if (!agentId) return fail("agent_id is required.")
+    const force = body["force"] === true
     const state = this.deps.loadOrchestrator()
     const agent = state.agents.find((a) => a.id === agentId)
     if (!agent) return fail(`Unknown agent "${agentId}".`)
     if (agent.designated === "lead") {
       return fail("The designated Lead cannot be stopped; the owner stops the built-in Lead manually.")
+    }
+    if (agent.status === "stopped") return pass(`Agent ${agent.name} is already stopped.`)
+    const runtime = this.deps.createRuntime
+      ? this.deps.createRuntime()
+      : createOpencodeRuntime({
+          projectDir: this.deps.projectDir,
+          port: this.deps.servePort(),
+          env: {
+            ...process.env,
+            OPENCOMMS_ORCH_SERVE_PASSWORD: this.deps.servePassword(),
+            OPENCOMMS_ORCH_SERVE_MODEL: agent.model ?? "",
+          },
+        })
+    // M2 real stop (design §9b-1): graceful abort → session-level stop. The
+    // shared serve child is NEVER touched here — killing it would stop ALL
+    // agents on the node; orphan prevention (Review priority) = the stop
+    // path asserts exactly one abort and never releases the serve.
+    let stopDetail = "no live session (row was not running)"
+    if (
+      agent.host_session_id &&
+      (agent.status === "running" || agent.status === "idle" || agent.status === "starting" || agent.status === "stale")
+    ) {
+      const resumed = await runtime.resume(agent)
+      if (resumed.ok) {
+        if (force) {
+          await resumed.handle.abort()
+          stopDetail = "forced: abort issued, marked stopped immediately"
+        } else {
+          await resumed.handle.stop()
+          stopDetail = "graceful: turn aborted + session stopped"
+        }
+      } else {
+        stopDetail = `resume failed (${resumed.message}); marking stopped from record state`
+      }
+    }
+    await this.deps.withLock(() => {
+      const fresh = this.deps.loadOrchestrator()
+      const rec = fresh.agents.find((a) => a.id === agentId)
+      if (rec) rec.status = "stopped"
+      this.deps.saveOrchestrator(fresh)
+      return 0
+    })
+    this.deps.feed.emit({
+      type: "agent_stopped",
+      message: `Agent ${agent.name} stopped (${stopDetail}).`,
+      agent_id: agent.id,
+    })
+    return pass(`Agent ${agent.name} stopped.`, { detail: stopDetail })
+  }
+
+  /** POST /api/orchestrator/agents/restart — REAL lifecycle (M2, design §9b-1). */
+  async restartAgent(body: Record<string, unknown>): Promise<ApiResult> {
+    const agentId = typeof body["agent_id"] === "string" ? body["agent_id"].trim() : ""
+    if (!agentId) return fail("agent_id is required.")
+    const state = this.deps.loadOrchestrator()
+    const agent = state.agents.find((a) => a.id === agentId)
+    if (!agent) return fail(`Unknown agent "${agentId}".`)
+    if (agent.designated === "lead") {
+      return fail("The designated Lead cannot be restarted; the owner runs the built-in Lead.")
     }
     const runtime = this.deps.createRuntime
       ? this.deps.createRuntime()
@@ -408,46 +468,80 @@ export class OrchestratorApi {
             OPENCOMMS_ORCH_SERVE_MODEL: agent.model ?? "",
           },
         })
-    const resumed = await runtime.resume(agent)
-    if (resumed.ok) {
-      await resumed.handle.stop()
+    // Identity adoption FIRST (Review priority: restart vs duplicate
+    // identities): session ids persist across serve restarts, so resume is
+    // the happy path and the host_session_id stays UNCHANGED.
+    const adopted = agent.host_session_id ? await runtime.resume(agent) : null
+    if (adopted?.ok) {
+      await this.deps.withLock(() => {
+        const fresh = this.deps.loadOrchestrator()
+        const rec = fresh.agents.find((a) => a.id === agentId)
+        if (rec) {
+          rec.status = "running"
+          rec.restart_count += 1
+          // host_session_id intentionally UNCHANGED (identity adopted).
+        }
+        this.deps.saveOrchestrator(fresh)
+        return 0
+      })
+      this.deps.feed.emit({
+        type: "agent_restarted",
+        message: `Agent ${agent.name} restarted (session adopted: ${agent.host_session_id}).`,
+        agent_id: agent.id,
+      })
+      return pass(`Agent ${agent.name} restarted (existing session adopted).`, {
+        mode: "adopted",
+        host_session_id: agent.host_session_id,
+        restart_count: this.deps.loadOrchestrator().agents.find((a) => a.id === agentId)?.restart_count ?? 0,
+      })
+    }
+    // Resume failed → re-create from the PERSISTED spawn fields and persist
+    // the NEW host_session_id, eventing the identity change honestly.
+    const respawn = await runtime.create({
+      agent_id: agent.id,
+      name: agent.name,
+      role: agent.role,
+      role_prompt: agent.role_prompt,
+      worktree: agent.worktree,
+      model: agent.model ?? undefined,
+    })
+    if (!respawn.ok) {
+      await this.deps.withLock(() => {
+        const fresh = this.deps.loadOrchestrator()
+        const rec = fresh.agents.find((a) => a.id === agentId)
+        if (rec) rec.status = "failed"
+        this.deps.saveOrchestrator(fresh)
+        return 0
+      })
+      this.deps.feed.emit({
+        type: "agent_failed",
+        message: `Restart failed for ${agent.name}: ${respawn.message}`,
+        agent_id: agent.id,
+      })
+      return fail(respawn.message)
     }
     await this.deps.withLock(() => {
       const fresh = this.deps.loadOrchestrator()
       const rec = fresh.agents.find((a) => a.id === agentId)
-      if (rec) rec.status = "stopped"
-      this.deps.saveOrchestrator(fresh)
-      return 0
-    })
-    this.deps.feed.emit({ type: "agent_stopped", message: `Agent ${agent.name} stopped.`, agent_id: agent.id })
-    return pass(`Agent ${agent.name} stopped.`)
-  }
-
-  /** POST /api/orchestrator/agents/restart (M1: restart-stub, marks + respawns) */
-  async restartAgent(body: Record<string, unknown>): Promise<ApiResult> {
-    const agentId = typeof body["agent_id"] === "string" ? body["agent_id"].trim() : ""
-    if (!agentId) return fail("agent_id is required.")
-    const state = this.deps.loadOrchestrator()
-    const agent = state.agents.find((a) => a.id === agentId)
-    if (!agent) return fail(`Unknown agent "${agentId}".`)
-    await this.deps.withLock(() => {
-      const fresh = this.deps.loadOrchestrator()
-      const rec = fresh.agents.find((a) => a.id === agentId)
       if (rec) {
-        rec.status = "starting"
+        rec.host_session_id = respawn.result.host_session_id
+        rec.status = "running"
         rec.restart_count += 1
+        rec.spawn_cmd_redacted = redactValue(respawn.result.spawn_cmd_redacted, [this.deps.servePassword()])
       }
       this.deps.saveOrchestrator(fresh)
       return 0
     })
-    // M1 stub: real respawn lands in M2 (restart policy); the record and
-    // event are honest about it.
     this.deps.feed.emit({
       type: "agent_restarted",
-      message: `Agent ${agent.name} restart requested (M1 stub: marked starting).`,
+      message: `Agent ${agent.name} restarted with a NEW session (old ${agent.host_session_id ?? "n/a"} → new ${respawn.result.host_session_id}).`,
       agent_id: agent.id,
     })
-    return pass(`Agent ${agent.name} restart requested.`)
+    return pass(`Agent ${agent.name} restarted (new session created).`, {
+      mode: "recreated",
+      host_session_id: respawn.result.host_session_id,
+      old_host_session_id: agent.host_session_id,
+    })
   }
 
   /** GET /api/orchestrator/events?since= */

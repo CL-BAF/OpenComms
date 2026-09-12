@@ -30,7 +30,10 @@ import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runti
 import type { AgentRecord } from "../../../src/orchestrator/state.js"
 
 /** Fake runtime for API tests: no live serve needed; deterministic ids. */
-function fakeRuntime(assigned: Map<string, string>): AgentRuntime {
+function fakeRuntime(
+  assigned: Map<string, string>,
+  opts: { resumeFails?: boolean; aborts?: number[] } = {},
+): AgentRuntime {
   let counter = 0
   return {
     runtime: "opencode",
@@ -49,27 +52,35 @@ function fakeRuntime(assigned: Map<string, string>): AgentRuntime {
           async deliver() {
             return "delivered" as const
           },
-          async abort() {},
+          async abort() {
+            opts.aborts?.push(1)
+          },
           async status() {
             return { status: "running" as const }
           },
-          async stop() {},
+          async stop() {
+            opts.aborts?.push(1)
+          },
         },
       }
     },
     async resume(rec: AgentRecord) {
-      if (!rec.host_session_id) return { ok: false as const, message: "no session" }
+      if (opts.resumeFails || !rec.host_session_id) return { ok: false as const, message: "no session" }
       return {
         ok: true as const,
         handle: {
           async deliver() {
             return "delivered" as const
           },
-          async abort() {},
+          async abort() {
+            opts.aborts?.push(1)
+          },
           async status() {
             return { status: "running" as const }
           },
-          async stop() {},
+          async stop() {
+            opts.aborts?.push(1)
+          },
         },
       }
     },
@@ -316,6 +327,126 @@ test("orchestrator events: ring cap + cursor pagination", () => {
     assert.equal(page.cursor, newest.seq)
     assert.ok(page.events.every((e) => e.seq > 10))
     assert.equal(eventsSince(state, newest.seq).length, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("orchestrator api M2: REAL restart adopts the existing session (no duplicate identity)", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const assigned = new Map<string, string>()
+    const deps = { ...testDeps(store, dir), createRuntime: () => fakeRuntime(assigned) }
+    const api = new OrchestratorApi(deps)
+    const created = await api.createAgent({ name: "w", host: "opencode", role: "Worker", role_prompt: "p" })
+    assert.ok(created.ok)
+    const data = created.data as { id: string; host_session_id: string }
+    const originalSession = data.host_session_id
+    const restarted = await api.restartAgent({ agent_id: data.id })
+    assert.ok(restarted.ok, restarted.message)
+    const payload = restarted.data as { mode: string; host_session_id: string }
+    assert.equal(payload.mode, "adopted")
+    // Identity ADOPTED: same session, restart_count incremented, no new id.
+    assert.equal(payload.host_session_id, originalSession)
+    const detail = api.getAgent(data.id)
+    const rec = detail.data as { restart_count: number; status: string; host_session_id: string }
+    assert.equal(rec.restart_count, 1)
+    assert.equal(rec.status, "running")
+    assert.equal(rec.host_session_id, originalSession)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("orchestrator api M2: restart after resume failure re-creates and events the identity change", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const assigned = new Map<string, string>()
+    let resumeCalls = 0
+    // resumeFails: the fake refuses resume ONLY for the pre-existing
+    // session; create() still issues fresh ids (counter keeps counting).
+    const runtimeWithFailingResume: AgentRuntime = {
+      ...fakeRuntime(assigned, { resumeFails: true }),
+      async resume(rec: AgentRecord) {
+        resumeCalls++
+        return { ok: false as const, message: "session row gone" }
+      },
+    }
+    const deps = { ...testDeps(store, dir), createRuntime: () => resumeWithFailingResume(runtimeWithFailingResume) }
+    const api = new OrchestratorApi(deps)
+    const created = await api.createAgent({ name: "w", host: "opencode", role: "Worker", role_prompt: "p" })
+    assert.ok(created.ok)
+    const data = created.data as { id: string; host_session_id: string }
+    const oldSession = data.host_session_id
+    const restarted = await api.restartAgent({ agent_id: data.id })
+    assert.ok(restarted.ok, restarted.message)
+    const payload = restarted.data as { mode: string; host_session_id: string; old_host_session_id: string }
+    assert.equal(payload.mode, "recreated")
+    assert.equal(payload.old_host_session_id, oldSession)
+    assert.notEqual(payload.host_session_id, oldSession)
+    const rec = api.getAgent(data.id).data as { host_session_id: string; restart_count: number }
+    assert.equal(rec.host_session_id, payload.host_session_id)
+    assert.equal(rec.restart_count, 1)
+    assert.ok(resumeCalls >= 1, "restart did not attempt resume before re-creating")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+function resumeWithFailingResume(rt: AgentRuntime): AgentRuntime {
+  return rt
+}
+
+test("orchestrator api M2: stop is graceful, lead-protected, and idempotent", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const assigned = new Map<string, string>()
+    const aborts: number[] = []
+    const deps = { ...testDeps(store, dir), createRuntime: () => fakeRuntime(assigned, { aborts }) }
+    const api = new OrchestratorApi(deps)
+    const lead = await api.createAgent({
+      name: "lead",
+      host: "opencode",
+      role: "Lead",
+      role_prompt: "p",
+      designated: "lead",
+    })
+    assert.ok(lead.ok)
+    const leadData = lead.data as { id: string }
+    const leadStop = await api.stopAgent({ agent_id: leadData.id })
+    assert.equal(leadStop.ok, false)
+    assert.match(leadStop.message, /designated Lead cannot be stopped/)
+    const created = await api.createAgent({ name: "w", host: "opencode", role: "Worker", role_prompt: "p" })
+    assert.ok(created.ok)
+    const data = created.data as { id: string }
+    const stopped = await api.stopAgent({ agent_id: data.id })
+    assert.ok(stopped.ok, stopped.message)
+    // Orphan prevention: exactly ONE stop call hit the runtime handle.
+    assert.equal(aborts.length, 1)
+    const rec = api.getAgent(data.id).data as { status: string }
+    assert.equal(rec.status, "stopped")
+    const again = await api.stopAgent({ agent_id: data.id })
+    assert.ok(again.ok)
+    assert.equal(aborts.length, 1, "second stop re-invoked the runtime handle")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("orchestrator state M2: restart_policy backfills to manual and validates", () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const state = store.load()
+    assert.equal(state.nodes[0]?.restart_policy, "manual")
+    // Tampered policy fails closed.
+    const raw = JSON.parse(readFileSync(store.file, "utf8")) as Record<string, unknown>
+    ;(raw["nodes"] as Array<Record<string, unknown>>)[0]!["restart_policy"] = "auto-whatever"
+    const result = validateOrchestratorState(raw)
+    assert.equal(result.ok, false)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
