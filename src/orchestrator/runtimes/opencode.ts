@@ -23,11 +23,19 @@
 import { spawn as nodeSpawn, execFileSync, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
+import { randomBytes } from "node:crypto"
 import type { AgentHandle, AgentRuntime, RuntimeDetectResult, SpawnRequest, SpawnResult } from "../runtime.js"
 import type { AgentRecord, AgentRuntimeStatus } from "../state.js"
 
 /** Env override for the native opencode binary (generalized M1 decision). */
 export const OPENCODE_NATIVE_BIN_ENV = "OPENCOMMS_OPENCODE_BIN"
+
+/**
+ * Serve-ready timeout (Lead requirement 2): the stdout "listening" poll is
+ * TIMEOUT-BOUNDED, never open-ended (same rule as turn waits).
+ */
+export const SERVE_READY_TIMEOUT_MS = 30_000
+const SERVE_POLL_MS = 200
 
 /** Resolve the spawnable native executable (npm shims cannot be execFile'd).
  *  Windows: APPDATA npm layout scan. Linux: bare PATH lookup — see Platform's
@@ -38,7 +46,10 @@ export function resolveOpencodeBinary(env: NodeJS.ProcessEnv = process.env): str
   if (override) return override
   const direct = join("node_modules", "opencode-ai", "bin", "opencode.exe")
   for (const base of [process.env.APPDATA ? join(process.env.APPDATA, "npm") : null].filter(Boolean) as string[]) {
-    if (existsSync(join(base, direct))) return join(base, join("opencode-ai", "bin", "opencode.exe"))
+    // Regression invariant (Frontend-found bug): the RETURNED path must be
+    // the SAME path that existsSync checked — never a re-joined variant.
+    const candidate = join(base, direct)
+    if (existsSync(candidate)) return candidate
   }
   // Fall back to the bare name (POSIX, or a caller-managed PATH resolution).
   return "opencode"
@@ -187,6 +198,142 @@ async function waitTurn(
       return { text: "", error: `opencode turn wait timed out after ${turnTimeoutMs}ms` }
     }
   }
+}
+
+/**
+ * Result of ensureServe (M1's last code item; Lead-approved spec):
+ * the shared serve is ONE managed child per project, argv-only launch,
+ * env-only password (NEVER logged, NEVER persisted — memory + child env).
+ */
+export interface ServeLaunchResult {
+  ok: boolean
+  port: number
+  detail: string
+  child: ChildProcess | null
+  /**
+   * The generated basic-auth header value for the serve (memory-only). The
+   * GUI's ensureServeRunning() keeps this in process memory and passes it to
+   * the runtime env — it is NEVER logged, persisted, or returned by any API.
+   * Exposed here (not a raw password) so callers hold exactly the credential
+   * they need and nothing more.
+   */
+  authHeader: string | null
+}
+
+/**
+ * Ensure exactly one `opencode serve` is running for the project.
+ * Idempotent: a second call while the first child is alive returns the
+ * existing port. Readiness = the stdout "listening" line, timeout-bounded.
+ * On spawn failure (ENOENT / binary missing) the caller fails the create
+ * cleanly — the orchestrator never leaves an orphan.
+ */
+export async function ensureServe(opts: {
+  projectDir: string
+  preferredPort: number
+  /** Injected env (tests); the generated password is WRITTEN here only. */
+  env?: NodeJS.ProcessEnv
+  spawnFn?: (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcess
+  /** Existing managed child from a prior call (idempotence). */
+  existing?: ChildProcess | null
+  existingPort?: number
+  readyTimeoutMs?: number
+}): Promise<ServeLaunchResult> {
+  const env = opts.env ?? process.env
+  if (opts.existing && !opts.existing.killed && opts.existing.exitCode === null) {
+    return {
+      ok: true,
+      port: opts.existingPort ?? opts.preferredPort,
+      detail: "serve already running",
+      child: opts.existing,
+      authHeader: null,
+    }
+  }
+  const exe = resolveOpencodeBinary(env)
+  const password = `ocserve-${randomBytes(16).toString("base64url")}`
+  const username = "orchestrator"
+  let child: ChildProcess
+  try {
+    child = (opts.spawnFn ?? defaultServeSpawn)(
+      exe,
+      ["serve", "--port", String(opts.preferredPort), "--hostname", "127.0.0.1"],
+      {
+        cwd: opts.projectDir,
+        env: { ...env, OPENCODE_SERVER_PASSWORD: password, OPENCODE_SERVER_USERNAME: username },
+      },
+    )
+  } catch (error) {
+    return {
+      ok: false,
+      port: 0,
+      detail: `serve spawn failed: ${(error as Error).message}`,
+      child: null,
+      authHeader: null,
+    }
+  }
+  child.on?.("error", () => {
+    /* surfaced via the ready-poll timeout/close; the result below reports */
+  })
+  const ready = await pollServeReady(child, opts.readyTimeoutMs ?? SERVE_READY_TIMEOUT_MS)
+  if (!ready.ok) {
+    try {
+      child.kill("SIGTERM")
+    } catch {
+      /* best effort; nothing to orphan on a failed launch */
+    }
+    return { ok: false, port: 0, detail: ready.detail, child: null, authHeader: null }
+  }
+  return {
+    ok: true,
+    port: opts.preferredPort,
+    detail: `serve ready on 127.0.0.1:${opts.preferredPort}`,
+    child,
+    authHeader: basicAuthHeader(username, password),
+  }
+}
+
+function defaultServeSpawn(cmd: string, args: string[], spOpts: { cwd: string; env: NodeJS.ProcessEnv }): ChildProcess {
+  return nodeSpawn(cmd, args, { ...spOpts, stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true })
+}
+
+/** Poll the child's stdout for the readiness line (timeout-bounded). */
+async function pollServeReady(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<{ ok: true } | { ok: false; detail: string }> {
+  let output = ""
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      cleanup()
+      resolve({
+        ok: false,
+        detail: `serve did not report listening within ${timeoutMs}ms${output ? ` (output: ${output.slice(0, 200)})` : ""}`,
+      })
+    }, timeoutMs)
+    timer.unref?.()
+    const onLine = (chunk: Buffer | string): void => {
+      output += chunk.toString()
+      if (output.includes("listening")) {
+        cleanup()
+        resolve({ ok: true })
+      }
+    }
+    const onExit = (code: number | null): void => {
+      cleanup()
+      resolve({
+        ok: false,
+        detail: `serve exited during startup (code ${code})${output ? `: ${output.slice(0, 200)}` : ""}`,
+      })
+    }
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      child.stdout?.off("data", onLine)
+      child.stderr?.off("data", onLine)
+      child.off("exit", onExit)
+    }
+    child.stdout?.on("data", onLine)
+    child.stderr?.on("data", onLine)
+    child.on("exit", onExit)
+  })
 }
 
 export function createOpencodeRuntime(opts: OpencodeRuntimeOptions): AgentRuntime {

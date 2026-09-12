@@ -47,6 +47,7 @@ import { VERSION } from "../version.js"
 import { OrchestratorStore } from "../orchestrator/state.js"
 import { createOrchestratorFeed } from "../orchestrator/events.js"
 import { OrchestratorApi } from "../orchestrator/api.js"
+import { ensureServe } from "../orchestrator/runtimes/opencode.js"
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"])
 
@@ -108,6 +109,45 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     return env?.trim() ? env.trim() : undefined
   }
   let servePort = 0
+  // Managed shared serve (M1 ensureServe): ONE child per project, spawned
+  // lazily on the first agent create; password is generated here, held in
+  // memory + the child's env only (never logged, never persisted). Killed
+  // on server close — no orphans. authHeader lives in process memory only
+  // and is handed to the runtime env for transport authentication.
+  let serveChild: import("node:child_process").ChildProcess | null = null
+  let serveAuthHeader: string | null = null
+  const ensureServeRunning = async (): Promise<{ ok: boolean; message: string }> => {
+    if (!projectDir) return { ok: false, message: "Select a project before spawning agents." }
+    const result = await ensureServe({
+      projectDir,
+      preferredPort: servePort || 4923,
+      existing: serveChild,
+      existingPort: servePort || undefined,
+    })
+    if (!result.ok) return { ok: false, message: result.detail }
+    serveChild = result.child
+    servePort = result.port
+    if (result.authHeader) serveAuthHeader = result.authHeader
+    // Record port + serve_started_at on the local node record (locked).
+    if (orchestratorStore) {
+      const activeStore = orchestratorStore
+      await activeStore
+        .withLock(() => {
+          const oState = activeStore.load()
+          const local = oState.nodes.find((n) => n.id === oState.local_node_id)
+          if (local) {
+            oState.serve = { port: result.port, password_redacted: true }
+            if (!("serve_started_at" in (local as unknown as Record<string, unknown>))) {
+              ;(local as unknown as Record<string, unknown>)["serve_started_at"] = Date.now()
+            }
+          }
+          activeStore.save(oState)
+          return 0
+        })
+        .catch(() => {})
+    }
+    return { ok: true, message: result.detail }
+  }
   let feed: ReturnType<typeof createOrchestratorFeed> | null = null
   if (orchestratorStore) {
     const initialOrchestratorStore = orchestratorStore
@@ -125,9 +165,25 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     const apiOrchestratorStore = orchestratorStore
     const apiStore = store
     const apiFeed = feed
+    // servePassword serves BOTH roles: when the env pin is set, it is the
+    // operator-provided password; after ensureServe bootstraps, the in-memory
+    // serveAuthHeader carries the generated credential for the transports.
+    const orchestratorServePassword = (): string => {
+      const envPassword = servePassword()
+      if (envPassword) return envPassword
+      // Memory-only derived credential from the managed serve (never logged).
+      if (serveAuthHeader?.startsWith("Basic ")) {
+        try {
+          return Buffer.from(serveAuthHeader.slice(6), "base64").toString("utf8").split(":")[1] ?? ""
+        } catch {
+          return ""
+        }
+      }
+      return ""
+    }
     orchestratorApi = new OrchestratorApi({
       projectDir,
-      servePassword,
+      servePassword: orchestratorServePassword,
       serveModel: () => process.env["OPENCOMMS_ORCH_SERVE_MODEL"],
       servePort: () => servePort,
       withLock: (fn) => apiStore.withLock(fn),
@@ -253,9 +309,23 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     )
     const activeStoreRef = store
     const activeFeedRef = feed
+    // Same credential resolution as the initial wiring: env pin wins, else
+    // the in-memory serveAuthHeader from the managed bootstrap.
+    const projectServePassword = (): string => {
+      const envPassword = servePassword()
+      if (envPassword) return envPassword
+      if (serveAuthHeader?.startsWith("Basic ")) {
+        try {
+          return Buffer.from(serveAuthHeader.slice(6), "base64").toString("utf8").split(":")[1] ?? ""
+        } catch {
+          return ""
+        }
+      }
+      return ""
+    }
     orchestratorApi = new OrchestratorApi({
       projectDir: normalized,
-      servePassword,
+      servePassword: projectServePassword,
       serveModel: () => process.env["OPENCOMMS_ORCH_SERVE_MODEL"],
       servePort: () => servePort,
       withLock: (fn) => activeStoreRef.withLock(fn),
@@ -443,6 +513,25 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           return
         }
         if (method === "POST" && sub === "/agents/create") {
+          // Lazy serve bootstrap: the shared serve spawns on the FIRST create
+          // (Lead-approved ensureServe spec). Failure fails the create
+          // cleanly with a clear message — no half-spawned agent rows beyond
+          // what createAgent itself already marks failed.
+          const serveReady = await ensureServeRunning()
+          if (!serveReady.ok) {
+            json(res, 409, { ok: false, message: serveReady.message })
+            return
+          }
+          // Ledger assertion (M1 proof follow-up): the FIRST GUI-path create
+          // must never proceed with an unrecorded serve port — the bootstrap
+          // above guarantees it, and we fail loudly if it ever drifts.
+          if (!Number.isFinite(servePort) || servePort <= 0) {
+            recordError(
+              `serve bootstrap succeeded but servePort was not recorded (${servePort}); refusing agent create`,
+            )
+            json(res, 500, { ok: false, message: "Internal error: serve port was not recorded after bootstrap." })
+            return
+          }
           const body = await readBody(req)
           const result = await activeApi.createAgent(body)
           if (result.ok) broadcast("refresh", { reason: "orchestrator_agent_created" })
@@ -888,6 +977,16 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
             stopWatchers()
             for (const res of sseClients) res.end()
             sseClients.clear()
+            // Managed serve shutdown (ensureServe spec): SIGTERM the shared
+            // serve so no orphan survives the GUI process.
+            try {
+              if (serveChild && !serveChild.killed && serveChild.exitCode === null) {
+                serveChild.kill("SIGTERM")
+              }
+            } catch {
+              /* best effort; the child may have already exited */
+            }
+            serveChild = null
             server.close(() => resolveClose())
           }),
       })

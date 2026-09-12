@@ -10,6 +10,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { ChildProcess } from "node:child_process"
 import {
   OrchestratorStore,
   emptyOrchestratorState,
@@ -23,7 +24,7 @@ import {
 } from "../../../src/orchestrator/state.js"
 import { OrchestratorApi, agentWorktreeDir } from "../../../src/orchestrator/api.js"
 import { createOrchestratorFeed, listEvents } from "../../../src/orchestrator/events.js"
-import { listModelsCatalog } from "../../../src/orchestrator/runtimes/opencode.js"
+import { listModelsCatalog, ensureServe, resolveOpencodeBinary } from "../../../src/orchestrator/runtimes/opencode.js"
 import { execFileSync } from "node:child_process"
 import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runtime.js"
 import type { AgentRecord } from "../../../src/orchestrator/state.js"
@@ -418,6 +419,28 @@ test("opencode runtime detect: execFileSync import is available (catalog helper 
   assert.equal(typeof execFileSync, "function")
 })
 
+test("resolveOpencodeBinary: checked path == returned path (regression: checked != returned)", () => {
+  // Frontend-found bug class: existsSync checked
+  // base/node_modules/opencode-ai/bin/opencode.exe but the function returned
+  // base/opencode-ai/bin/opencode.exe (missing node_modules) -> ENOENT at
+  // spawn. The invariant under test: the resolved path EXISTS whenever the
+  // APPDATA npm layout is present.
+  const resolved = resolveOpencodeBinary({})
+  assert.ok(resolved.length > 0)
+  if (process.platform === "win32" && process.env["APPDATA"] && !resolved.startsWith("opencode")) {
+    assert.ok(
+      existsSync(resolved),
+      `resolved binary does not exist on disk: ${resolved} (checked-path != returned-path regression)`,
+    )
+    assert.ok(
+      resolved.includes(join("node_modules", "opencode-ai", "bin")),
+      `returned path misses node_modules segment: ${resolved}`,
+    )
+  }
+  // Override env always wins verbatim.
+  assert.equal(resolveOpencodeBinary({ OPENCOMMS_OPENCODE_BIN: "/custom/opencode" }), "/custom/opencode")
+})
+
 test("orchestrator api: agent worktree dir is created idempotently under .opencomms/agents", async () => {
   const dir = tmpProject()
   try {
@@ -431,6 +454,100 @@ test("orchestrator api: agent worktree dir is created idempotently under .openco
     const createdTwice = await api.createAgent({ name: "w2", host: "opencode", role: "Worker2", role_prompt: "p" })
     assert.ok(createdTwice.ok)
     assert.ok(existsSync(join(dir, ".opencomms", "agents")))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("ensureServe: fake serve child reports listening -> ok with port; no password in argv", async () => {
+  const dir = tmpProject()
+  try {
+    let captured: { cmd: string; args: string[]; env: NodeJS.ProcessEnv } | null = null
+    const fakeChild = {
+      stdout: {
+        on: (_: string, cb: (d: Buffer) => void) =>
+          setTimeout(() => cb(Buffer.from("opencode server listening on http://127.0.0.1:4923")), 20),
+        off: () => {},
+      },
+      stderr: { on: () => {}, off: () => {} },
+      off: () => {},
+      on: () => {},
+      kill: () => true,
+      killed: false,
+      exitCode: null,
+    } as unknown as ChildProcess
+    const result = await ensureServe({
+      projectDir: dir,
+      preferredPort: 4923,
+      env: {},
+      spawnFn: (cmd, args, spOpts) => {
+        captured = { cmd, args, env: spOpts.env }
+        return fakeChild
+      },
+    })
+    assert.ok(result.ok, result.detail)
+    assert.equal(result.port, 4923)
+    assert.ok(captured)
+    // Password travels in env ONLY — argv is the plain serve launch.
+    const args = (captured as { args: string[] }).args
+    assert.ok(!args.some((a) => a.includes("ocserve-")), "password leaked onto argv")
+    assert.deepEqual(args, ["serve", "--port", "4923", "--hostname", "127.0.0.1"])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("ensureServe: idempotent — a live existing child returns the same port without respawning", async () => {
+  const dir = tmpProject()
+  try {
+    const existing = { kill: () => true, killed: false, exitCode: null } as unknown as ChildProcess
+    let spawned = 0
+    const result = await ensureServe({
+      projectDir: dir,
+      preferredPort: 4924,
+      env: {},
+      existing,
+      existingPort: 4924,
+      spawnFn: () => {
+        spawned++
+        return {} as ChildProcess
+      },
+    })
+    assert.ok(result.ok)
+    assert.equal(result.port, 4924)
+    assert.equal(result.detail, "serve already running")
+    assert.equal(spawned, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("ensureServe: startup timeout kills the child and fails cleanly (no open-ended poll)", async () => {
+  const dir = tmpProject()
+  try {
+    let killed = false
+    const silentChild = {
+      stdout: { on: () => {}, off: () => {} },
+      stderr: { on: () => {}, off: () => {} },
+      off: () => {},
+      on: () => {},
+      kill: () => {
+        killed = true
+        return true
+      },
+      killed: false,
+      exitCode: null,
+    } as unknown as ChildProcess
+    const result = await ensureServe({
+      projectDir: dir,
+      preferredPort: 4925,
+      env: {},
+      readyTimeoutMs: 300,
+      spawnFn: () => silentChild,
+    })
+    assert.equal(result.ok, false)
+    assert.match(result.detail, /did not report listening within/)
+    assert.ok(killed, "timeout did not kill the child (orphan risk)")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
