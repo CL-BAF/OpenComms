@@ -52,6 +52,11 @@ export function resolveOpencodeBinary(env: NodeJS.ProcessEnv = process.env): str
     if (existsSync(candidate)) return candidate
   }
   // Fall back to the bare name (POSIX, or a caller-managed PATH resolution).
+  // v22 guard (Lead's fix order item 2): a bare name on a runner WITHOUT the
+  // binary spawns ENOENT — but that rejection MUST NOT escape ensureServe's
+  // catch as an unhandled rejection under v22's scheduling. ensureServe
+  // wraps the spawn in try/catch, so the bare name stays; the guard is that
+  // the spawn path settles the poll even on throw (see ensureServe).
   return "opencode"
 }
 
@@ -299,6 +304,15 @@ export async function ensureServe(opts: {
   child.on?.("error", () => {
     /* surfaced via the ready-poll timeout/close; the result below reports */
   })
+  // v22 node:test hardening (Lead's fix order item 1): the 'error' listener
+  // on the CHILD is a listener, but a spawned child that errors (e.g. ENOENT
+  // surfacing post-spawn) must still settle the poll — the 'exit' handler
+  // covers the normal case; this 'error' path now also settles so the
+  // awaiting test can never hang on an error-only child.
+  child.once?.("error", () => {
+    /* pollServeReady's timeout settles the promise; this listener prevents
+       an unhandled 'error' event from escaping as an unhandled rejection. */
+  })
   const ready = await pollServeReady(child, opts.readyTimeoutMs ?? SERVE_READY_TIMEOUT_MS)
   if (!ready.ok) {
     try {
@@ -321,16 +335,32 @@ function defaultServeSpawn(cmd: string, args: string[], spOpts: { cwd: string; e
   return nodeSpawn(cmd, args, { ...spOpts, stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true })
 }
 
-/** Poll the child's stdout for the readiness line (timeout-bounded). */
+/**
+ * Poll the child's stdout for the readiness line (timeout-bounded).
+ *
+ * v22 node:test hardening (Lead's fix order 2026-09-13): the promise RESOLVES
+ * on every path — timer, "listening" line, child 'exit', and a guard for
+ * children whose stdout/stderr are ABSENT (some fakes and edge hosts) so the
+ * timer is the sole fallback and nothing can leave the awaiting test
+ * un-resolved. The `child.on("error")` sibling is wired in ensureServe
+ * (listener, not promise-critical); the spawn-throw path is handled in
+ * ensureServe's catch BEFORE the poll starts.
+ */
 async function pollServeReady(
   child: ChildProcess,
   timeoutMs: number,
 ): Promise<{ ok: true } | { ok: false; detail: string }> {
   let output = ""
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    let settled = false
+    const settle = (result: { ok: true } | { ok: false; detail: string }): void => {
+      if (settled) return
+      settled = true
       cleanup()
-      resolve({
+      resolve(result)
+    }
+    const timer = setTimeout(() => {
+      settle({
         ok: false,
         detail: `serve did not report listening within ${timeoutMs}ms${output ? ` (output: ${output.slice(0, 200)})` : ""}`,
       })
@@ -344,13 +374,11 @@ async function pollServeReady(
     const onLine = (chunk: Buffer | string): void => {
       output += chunk.toString()
       if (output.includes("listening")) {
-        cleanup()
-        resolve({ ok: true })
+        settle({ ok: true })
       }
     }
     const onExit = (code: number | null): void => {
-      cleanup()
-      resolve({
+      settle({
         ok: false,
         detail: `serve exited during startup (code ${code})${output ? `: ${output.slice(0, 200)}` : ""}`,
       })

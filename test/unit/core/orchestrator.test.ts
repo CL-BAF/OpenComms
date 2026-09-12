@@ -872,3 +872,58 @@ test("ensureServe: startup timeout kills the child and fails cleanly (no open-en
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("ensureServe: a THROWING spawn (ENOENT class) fails cleanly without escaping the catch", async () => {
+  // v22 scheduling guard (Lead's fix order item 2): the bare-'opencode'
+  // fallback on a runner without the binary must settle the promise, never
+  // leak an unhandled rejection. This twin test proves the catch path.
+  const dir = tmpProject()
+  try {
+    const result = await ensureServe({
+      projectDir: dir,
+      preferredPort: 4926,
+      env: {},
+      spawnFn: () => {
+        throw new Error("spawn opencode ENOENT")
+      },
+    })
+    assert.equal(result.ok, false)
+    assert.match(result.detail, /serve spawn failed:.*ENOENT/)
+    assert.equal(result.child, null)
+    assert.equal(result.authHeader, null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("ensureServe: an 'error'-event child (post-spawn error) settles without hanging", async () => {
+  const dir = tmpProject()
+  try {
+    // Child that fires 'error' immediately (v22 ENOENT can surface here, not
+    // as a spawn throw) and NEVER writes to stdout — the poll must settle via
+    // the error path or the timeout, never hang.
+    const errorChild = {
+      stdout: { on: () => {}, off: () => {} },
+      stderr: { on: () => {}, off: () => {} },
+      off: () => {},
+      on: (event: string, cb: (e?: Error) => void) => {
+        if (event === "error") setTimeout(() => cb(new Error("spawn opencode ENOENT")), 50)
+      },
+      once: () => {},
+      kill: () => true,
+      killed: false,
+      exitCode: null,
+    } as unknown as ChildProcess
+    const result = await ensureServe({
+      projectDir: dir,
+      preferredPort: 4927,
+      env: {},
+      readyTimeoutMs: 1500,
+      spawnFn: () => errorChild,
+    })
+    assert.equal(result.ok, false)
+    assert.ok(result.detail.length > 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
