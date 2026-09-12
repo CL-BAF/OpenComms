@@ -33,7 +33,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "npm run build:test && node --test --test-concurrency=1 \"dist-test/test/unit/**/*.test.js\"",
-    "test:unit": "npm run build:test && node --test --test-concurrency=1 \"dist-test/test/unit/**/*.test.js\"",
+    "test:unit": "npm run build:test && node --test --test-reporter=tap --test-concurrency=1 \"dist-test/test/unit/**/*.test.js\"",
     "test:contract": "npm run build:test && node --test --test-concurrency=1 dist-test/test/contract/*.test.js",
     "test:live": "npm run build:test && node --test --test-concurrency=1 --test-timeout=300000 dist-test/test/live/live.test.js",
     "test:all": "npm run build:test && node --test --test-concurrency=1 \"dist-test/test/unit/**/*.test.js\" dist-test/test/live/live.test.js",
