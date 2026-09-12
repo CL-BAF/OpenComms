@@ -46,6 +46,10 @@ jobs:
           # internal/test_runner window plus the counter-neighborhood cover
           # both crash shapes.
           if [ -f ci-failure/combined.txt ]; then
+            # FINAL amendment: the 'not ok' line itself names the failing test.
+            grep -n "^not ok" ci-failure/combined.txt | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error failing-test::${line:0:400}"
+            done
             grep -n -B 3 "cancelled 0" ci-failure/combined.txt | head -n 20 | while IFS= read -r line; do
               [ -n "$line" ] && echo "::error precounters::${line:0:400}"
             done
