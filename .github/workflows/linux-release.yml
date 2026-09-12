@@ -41,6 +41,9 @@ jobs:
           npm run test:unit > ci-failure/test-unit.txt 2>&1 || true
           tail -c 20000 ci-failure/test-unit.txt >> ci-failure/combined.txt 2>&1 || true
           grep "^not ok" ci-failure/combined.txt | head -n 5 | while read -r l; do echo "::error::${l:0:300}"; done
+          grep -n -B 3 "cancelled 0" ci-failure/combined.txt | head -n 6 | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error precounters::${line:0:300}"
+          done
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4.6.2
