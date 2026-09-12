@@ -33,6 +33,14 @@ jobs:
         run: |
           npm run typecheck
           npm run test:unit
+      - name: Test summary on failure
+        if: failure()
+        run: |
+          echo "## Linux CI failure" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          npm run typecheck 2>&1 | tail -n 80 >> $GITHUB_STEP_SUMMARY || true
+          npm run test:unit 2>&1 | tail -n 120 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
       - name: Build Linux release tarball
         run: npm run build:release
       - name: Smoke-test Linux release
