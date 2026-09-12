@@ -33,39 +33,14 @@ jobs:
         run: |
           npm run typecheck
           npm run test:unit
-      - name: Test summary on failure
+      - name: Name the failing test
         if: failure()
         run: |
           mkdir -p ci-failure
           npm run typecheck > ci-failure/typecheck.txt 2>&1 || true
           npm run test:unit > ci-failure/test-unit.txt 2>&1 || true
-          tail -c 20000 ci-failure/typecheck.txt >> ci-failure/combined.txt 2>&1 || true
           tail -c 20000 ci-failure/test-unit.txt >> ci-failure/combined.txt 2>&1 || true
-          # FINAL surgical amendment (Platform): the lines just BEFORE the
-          # counters are where node --test prints its final error — and the
-          # internal/test_runner window plus the counter-neighborhood cover
-          # both crash shapes.
-          if [ -f ci-failure/combined.txt ]; then
-            # GUARANTEED amendment (Platform): awk anchored AT the 'not ok'
-            # line — prints exactly 19 lines starting there (test name + error
-            # + stack head). Cannot miss: fail 1 means a 'not ok' line exists,
-            # and the detail block above the counters is where it lives.
-            awk '/^not ok/{found=NR} {lines[NR]=$0} END{if(found)for(i=found;i<=found+18&&i<=NR;i++)print lines[i]}' ci-failure/combined.txt | while read -r l; do
-              [ -n "$l" ] && echo "::error failing-test::${l:0:380}"
-            done
-            grep -n -B 3 "cancelled 0" ci-failure/combined.txt | head -n 20 | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error precounters::${line:0:400}"
-            done
-            grep -n -B 20 -A 8 "internal/test_runner" ci-failure/combined.txt | head -n 40 | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::${line:0:400}"
-            done
-            grep -n -A 12 -E "^not ok|# cancelled|ERR_TEST_FAILURE|AssertionError|Cannot find|SyntaxError|^Error" ci-failure/combined.txt | tail -n 60 | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::${line:0:400}"
-            done
-            head -n 40 ci-failure/combined.txt | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error head::${line:0:400}"
-            done
-          fi
+          grep "^not ok" ci-failure/combined.txt | head -n 5 | while read -r l; do echo "::error::${l:0:300}"; done
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4.6.2
