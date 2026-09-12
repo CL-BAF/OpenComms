@@ -7,35 +7,36 @@
 
 ## 1. Survey — what exists today that orchestration builds on
 
-| Surface | Location | What it already provides | What it lacks for orchestration |
-|---|---|---|---|
-| Spawn-push delivery | `src/hosts/spawn-delivery.ts` | argv-array, no-shell child spawn; env-based binary overrides (`OPENCOMMS_CLAUDE_BIN`/`OPENCOMMS_CODEX_BIN`); Windows argv budget (~30k win32); two-phase drain→commit; FIFO requeue on failure | It RESUMES an existing session to hand it mail; it cannot create sessions, and has no stop/status/restart, no process handle retention, no supervision |
-| Member/timer model | `src/core/engine.ts` (`makeMember`, `ChannelTimer`, `drainQueue`, `commitDelivery`, `sweepInFlight`) | session-id-keyed routing, chess-clock per member, staleness, two-phase delivery, budget caps | No concept of "who started this session", no process handle, no lifecycle beyond stale/live |
-| MCP shared tools | `src/mcp/opencomms-tools.ts` + `src/mcp/identity.ts` | pinned per-member identity (`pins/<member_id>.json`, `OPENCOMMS_MEMBER_ID`), `authorizeMember` against live roster, kick revocation | Identity is per-MCP-server-process; a spawned agent is a different process shape (its identity should derive from the agent record, not an installer pin) |
-| Plugin glue | `src/plugin.ts` (tools, hooks, `system.transform`, slash dispatch) | `session.idle`/`session.deleted` hooks, owner-side delivery controller (`src/hosts/opencode/delivery.ts`), fs-watch wake | Tied to OpenCode plugin host; orchestrator needs the same semantics for hosts that have no plugin surface (serve-managed sessions) |
-| Operator/GUI surface | `src/gui/server.ts` (loopback `/api/*`), `createSessionAsOperator`/`removeMemberAsOperator` engine fns | operator-scoped mutations already exist as a pattern; SSE `refresh` broadcast; `memberState()` honest-status mapping (Working/Idle/Offline) | No agent/node entities, no spawn endpoints, no event feed beyond channel refresh |
-| Host capability profiles | `src/hosts/profiles.ts` | honest per-host capability declarations incl. `sessionResume`, `promptDelivery`, `idleDetection` | No spawn/lifecycle entries (profiles describe delivery, not agent creation) |
-| Host-neutral adapter contract | `src/hosts/contract.ts` (`OpenCommsHostAdapter`) | fail-closed identity verification model, `verifySession` null = fail closed | Same: delivery-shaped, not lifecycle-shaped |
+| Surface                       | Location                                                                                               | What it already provides                                                                                                                                                                       | What it lacks for orchestration                                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spawn-push delivery           | `src/hosts/spawn-delivery.ts`                                                                          | argv-array, no-shell child spawn; env-based binary overrides (`OPENCOMMS_CLAUDE_BIN`/`OPENCOMMS_CODEX_BIN`); Windows argv budget (~30k win32); two-phase drain→commit; FIFO requeue on failure | It RESUMES an existing session to hand it mail; it cannot create sessions, and has no stop/status/restart, no process handle retention, no supervision    |
+| Member/timer model            | `src/core/engine.ts` (`makeMember`, `ChannelTimer`, `drainQueue`, `commitDelivery`, `sweepInFlight`)   | session-id-keyed routing, chess-clock per member, staleness, two-phase delivery, budget caps                                                                                                   | No concept of "who started this session", no process handle, no lifecycle beyond stale/live                                                               |
+| MCP shared tools              | `src/mcp/opencomms-tools.ts` + `src/mcp/identity.ts`                                                   | pinned per-member identity (`pins/<member_id>.json`, `OPENCOMMS_MEMBER_ID`), `authorizeMember` against live roster, kick revocation                                                            | Identity is per-MCP-server-process; a spawned agent is a different process shape (its identity should derive from the agent record, not an installer pin) |
+| Plugin glue                   | `src/plugin.ts` (tools, hooks, `system.transform`, slash dispatch)                                     | `session.idle`/`session.deleted` hooks, owner-side delivery controller (`src/hosts/opencode/delivery.ts`), fs-watch wake                                                                       | Tied to OpenCode plugin host; orchestrator needs the same semantics for hosts that have no plugin surface (serve-managed sessions)                        |
+| Operator/GUI surface          | `src/gui/server.ts` (loopback `/api/*`), `createSessionAsOperator`/`removeMemberAsOperator` engine fns | operator-scoped mutations already exist as a pattern; SSE `refresh` broadcast; `memberState()` honest-status mapping (Working/Idle/Offline)                                                    | No agent/node entities, no spawn endpoints, no event feed beyond channel refresh                                                                          |
+| Host capability profiles      | `src/hosts/profiles.ts`                                                                                | honest per-host capability declarations incl. `sessionResume`, `promptDelivery`, `idleDetection`                                                                                               | No spawn/lifecycle entries (profiles describe delivery, not agent creation)                                                                               |
+| Host-neutral adapter contract | `src/hosts/contract.ts` (`OpenCommsHostAdapter`)                                                       | fail-closed identity verification model, `verifySession` null = fail closed                                                                                                                    | Same: delivery-shaped, not lifecycle-shaped                                                                                                               |
 
 Ground truth proven by the spike (`docs/spike-spawn-opencode.md`): the OpenCode serve
-+ HTTP/SDK path supports create → prompt → promptAsync → abort → kill with
-OpenComms-compatible `ses_*` ids, SSE event stream, env-only auth, argv-discipline
-launch. The `AgentRuntime` below is a direct generalization of that proven sequence.
+
+- HTTP/SDK path supports create → prompt → promptAsync → abort → kill with
+  OpenComms-compatible `ses_*` ids, SSE event stream, env-only auth, argv-discipline
+  launch. The `AgentRuntime` below is a direct generalization of that proven sequence.
 
 ## 2. Node model (contract v0.1 §1)
 
 ```ts
 // persisted in orchestrator state (§4)
 interface NodeRecord {
-  id: string                    // node_<hex>; local node has a FIXED well-known id
-  name: string                  // operator-facing label
+  id: string // node_<hex>; local node has a FIXED well-known id
+  name: string // operator-facing label
   kind: "local" | "remote"
-  platform: string              // process.platform of the node ("win32", "linux", ...)
+  platform: string // process.platform of the node ("win32", "linux", ...)
   status: "online" | "offline" | "pending_approval"
   capabilities: { max_agents: number; runtimes: string[]; headless: boolean }
-  approved_at: number | null    // null while pending_approval; owner-only set
+  approved_at: number | null // null while pending_approval; owner-only set
   approved_by: "owner" | null
-  worktree_root: string | null  // optional per-node scratch root for agent worktrees (remote, M3)
+  worktree_root: string | null // optional per-node scratch root for agent worktrees (remote, M3)
 }
 ```
 
@@ -54,6 +55,7 @@ interface NodeRecord {
 ### Worktree rule (policy, per Lead decision 2026-09-11)
 
 One git worktree per spawned agent. At agent create the orchestrator:
+
 1. Computes/creates the agent worktree (local node: `git worktree add <path> <base>`
    inside the project repo; M1 default path: `<project>/.opencomms/agents/<agt_id>/worktree`
    or an operator-configured scratch root — never inside another agent's worktree).
@@ -70,17 +72,17 @@ One git worktree per spawned agent. At agent create the orchestrator:
 type AgentRuntimeStatus = "starting" | "running" | "idle" | "stale" | "stopped" | "failed"
 
 interface SpawnRequest {
-  agent_id: string            // agt_* (OpenComms-generated, primary key — Decision 2026-09-11(3))
+  agent_id: string // agt_* (OpenComms-generated, primary key — Decision 2026-09-11(3))
   name: string
-  role: string                // open-vocab role label (same validation as channels)
+  role: string // open-vocab role label (same validation as channels)
   role_prompt: string
-  worktree: string            // resolved by worktree rule (§2)
-  model?: string              // "provider/model"; runtime-verified before spawn (spike finding)
+  worktree: string // resolved by worktree rule (§2)
+  model?: string // "provider/model"; runtime-verified before spawn (spike finding)
   provider_config?: Record<string, unknown> // runtime-specific; secrets handled via env only
 }
 
 interface AgentRuntime {
-  readonly runtime: string    // "opencode" | "claude-code" | "codex" | ...
+  readonly runtime: string // "opencode" | "claude-code" | "codex" | ...
   /** Discover what this machine can run. Also backs the runtimes listing endpoint. */
   detect(): { available: boolean; version?: string; detail?: string }
   /** Create + start the agent. Idempotent per agent_id. Returns the runtime-native handle. */
@@ -102,19 +104,20 @@ interface AgentHandle {
   stop(force?: boolean): Promise<void>
 }
 
-interface AgentRecord {           // persisted (§4); NOT the same object as the handle
-  id: string                      // agt_* (primary key)
+interface AgentRecord {
+  // persisted (§4); NOT the same object as the handle
+  id: string // agt_* (primary key)
   name: string
-  host: string                    // host family label (matches Member.host vocabulary)
+  host: string // host family label (matches Member.host vocabulary)
   role: string
   role_prompt: string
-  runtime: string                 // AgentRuntime id
-  node_id: string                 // node_* (local node id for M1)
-  worktree: string                // per-agent worktree (§2 rule)
+  runtime: string // AgentRuntime id
+  node_id: string // node_* (local node id for M1)
+  worktree: string // per-agent worktree (§2 rule)
   status: AgentRuntimeStatus
-  host_session_id: string | null  // ses_* captured at create (attribute, never a key)
-  spawn_cmd_redacted: string      // argv with password/secret tokens removed
-  designated: "lead" | null       // contract v0.3 §9; exactly ONE per project, immutable
+  host_session_id: string | null // ses_* captured at create (attribute, never a key)
+  spawn_cmd_redacted: string // argv with password/secret tokens removed
+  designated: "lead" | null // contract v0.3 §9; exactly ONE per project, immutable
   channel_ids: string[]
   last_heartbeat: number | null
   created_at: number
@@ -261,7 +264,7 @@ rebuild with recorded error. Schema versioning from day one (`orchestrator_schem
 - **Agent-facing tools cannot mutate trust.** The orchestrator API is served from the
   GUI/operator process; agent sessions interact only through the channel engine
   (`opencomms_send` etc.), which cannot reach orchestrator routes (different process
-  + tool surface). This is the same boundary shape the current MCP pin model uses.
+  - tool surface). This is the same boundary shape the current MCP pin model uses.
 
 ## 7. Identity, reconnect & resume
 
@@ -312,7 +315,7 @@ rebuild with recorded error. Schema versioning from day one (`orchestrator_schem
 
 ## 9. Milestone mapping (what M1 implements from this note)
 
-- `src/orchestrator/` skeleton: `state.ts` (orchestrator.json store + lock), 
+- `src/orchestrator/` skeleton: `state.ts` (orchestrator.json store + lock),
   `runtime.ts` (AgentRuntime/AgentHandle/registry), `runtimes/opencode.ts` (spike
   code, promoted and hardened), `api.ts` (route handlers for §5), `events.ts` (SSE
   topics).
@@ -326,5 +329,97 @@ rebuild with recorded error. Schema versioning from day one (`orchestrator_schem
   `{provider, models[]}` groups, and GET /nodes/{id}/runtimes serves the full
   catalog with the configured serve pin surfaced FIRST. Unblocks the Team
   create-dialog model picker.
-- Out of M1 (M2+): permissionsDrain UX, task assignment, restart policies, remote
-  nodes, per-tier isolation.
+- **M1 closure:** ensureServe (managed shared-serve bootstrap: one child per
+  project, argv-only launch, env-only crypto password, stdout-listening
+  readiness with timeout-kill, idempotent reuse, SIGTERM on server close,
+  serve.port recorded on the local node + ledger assertion on GUI-path
+  create); resolveOpencodeBinary checked==returned fix. Live spawn→join
+  proof PASSED (Reviewer-reproduced); M1 exit approved.
+
+## 9b. M2 — Supervision & tasking (Backend lane; design addendum BEFORE code)
+
+Lead tasking 2026-09-12. Deliverable order: (1)+(2) supervision core, (3) tasks,
+(4) permissionsDrain. Review priorities pre-queued: orphan prevention on stop,
+restart vs duplicate identities, task trust boundaries, permissionsDrain surface.
+
+### 1. Real stop/restart (replaces the M1 restart stub)
+
+- **stop(agent_id, force?)** — REAL termination path per runtime:
+  1. Resolve the runtime handle (resume from the persisted record).
+  2. `handle.abort()` first (graceful turn interruption), then the runtime's
+     process-level stop: for the shared serve this is a SESSION stop (abort +
+     session row marked stopped) — the serve process itself is NEVER killed
+     per-agent (it hosts ALL agents; kill = node-level operation only, see
+     shutdownNode). `force=true` escalates: abort + immediate stopped marking
+     without waiting for turn completion.
+  3. Orphan prevention (Review priority): stop MUST verify no lingering child
+     references — the orchestrator holds only the SHARED serve child; agent
+     stop never touches it. Assertion: after stop, `agent.status === "stopped"`
+     AND the serve child is still alive AND `session.abort` was called exactly
+     once (per-member serialization guard, same pattern as spawn-delivery).
+  4. Designated lead stays un-stoppable (M1 rule preserved).
+- **restart(agent_id)** — adopts or re-creates the host session:
+  1. Session ids persist across serve restarts (spike §7 finding: global
+     namespace, rows survive). Restart therefore FIRST attempts
+     `resume({ host_session_id })`; the resumed handle is the SAME identity —
+     `restart_count += 1`, status `starting → running`, host_session_id
+     UNCHANGED (restart vs duplicate identities (Review priority): a restart
+     NEVER allocates a second session unless resume fails).
+  2. If resume fails (session row gone / host purged it): re-create via
+     `create()` with the ORIGINAL spawn request fields (name/role/role_prompt/
+     model persisted in the record) and PERSIST THE NEW host_session_id, with
+     a `agent_restarted` event noting the identity change. The agent record's
+     channel memberships are re-joinable by the runtime composing the join
+     prompt again (the old session's membership dies with the old session id;
+     engine state marks the old session stale via the existing machinery).
+  3. restart_count is already persisted (M1); it goes live here.
+
+### 2. Stale/crash detection + restart policy
+
+- **Serve-disconnect detection:** the SSE tap (`event.subscribe`) is the
+  liveness oracle (spike rule). On stream end / `server.instance.disposed` /
+  repeated reconnect failure, the orchestrator marks ALL agents on that node
+  `stale` (event-driven, never GET /session/status polling). M1's
+  `last_heartbeat` (last SSE event seen per session) feeds the same threshold
+  as the channel `stale_event_ms` policy — no new timing knob.
+- **Restart policy = OPERATOR-CONTROLLED in M2 (binding):** no auto-respawn.
+  Agents that crash/serve-die are marked stale/failed and surfaced; the
+  operator (GUI restart button / CLI verb) decides. The restart policy hook
+  exists (`restart_policy: "manual" | "auto"` on the node record, default
+  "manual") so M3 can flip it per-node without a migration.
+- **Crash recovery on orchestrator start** (from M1 design §7, now
+  implemented): reconcile agent rows against reality — serve alive? (port
+  probe), session alive? (SSE/session list) — unexplained rows → stale,
+  never deleted.
+
+### 3. Task assignment via channels
+
+- **POST /tasks/assign** `{ agent_id, task: { title, body, channel } }` —
+  rides the EXISTING message engine: the orchestrator composes a
+  `review_request`-semantics envelope (trust boundary (Review priority):
+  the task body is UNTRUSTED content — framed identically to peer mail; the
+  orchestrator is just another sender on the channel, never a privileged
+  injection path. It sends AS the operator session via engine sendMessage —
+  no new message type, no new delivery path).
+- **Task identity:** `tsk_*` id generated at assign; the envelope's
+  `correlation_id` records the task link (additive `task_id` on the event,
+  contract §9). **GET /tasks** derives status from channel state (acked =
+  agent replied in the same correlation chain; completed = terminal event)
+  — honest derivation, no separate task store in M2.
+- **Events:** lifecycle events (`task_assigned`, `task_acked`,
+  `task_completed`) carry `task_id` in the orchestration feed.
+
+### 4. permissionsDrain (opencode first)
+
+- The host exposes `POST /session/:id/permissions/:permissionID` (research
+  report §1A). The opencode AgentHandle implements `permissionsDrain()`:
+  list pending permission prompts (GET) + respond (POST response/remember).
+- Surface: orchestrator API `GET /agents/{id}/permissions` +
+  `POST /agents/{id}/permissions/{permissionID}` with `{ response }`. Trust
+  boundary (Review priority): permission RESPONSES are operator actions —
+  the orchestrator API is operator-only (loopback + browser-surface guard);
+  agent-facing tools never reach it. Least-privilege default from M1 stands:
+  deny-by-default allowlists at spawn; the drain surface only answers prompts
+  for capabilities the spawn config gated.
+- `AgentHandle.permissionsDrain` returns null for runtimes without the host
+  API (interface already optional).
