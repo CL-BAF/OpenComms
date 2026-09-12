@@ -46,9 +46,12 @@ jobs:
           # internal/test_runner window plus the counter-neighborhood cover
           # both crash shapes.
           if [ -f ci-failure/combined.txt ]; then
-            # FINAL amendment: the 'not ok' line itself names the failing test.
-            grep -n "^not ok" ci-failure/combined.txt | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error failing-test::${line:0:400}"
+            # GUARANTEED amendment (Platform): awk anchored AT the 'not ok'
+            # line — prints exactly 19 lines starting there (test name + error
+            # + stack head). Cannot miss: fail 1 means a 'not ok' line exists,
+            # and the detail block above the counters is where it lives.
+            awk '/^not ok/{found=NR} {lines[NR]=$0} END{if(found)for(i=found;i<=found+18&&i<=NR;i++)print lines[i]}' ci-failure/combined.txt | while read -r l; do
+              [ -n "$l" ] && echo "::error failing-test::${l:0:380}"
             done
             grep -n -B 3 "cancelled 0" ci-failure/combined.txt | head -n 20 | while IFS= read -r line; do
               [ -n "$line" ] && echo "::error precounters::${line:0:400}"
