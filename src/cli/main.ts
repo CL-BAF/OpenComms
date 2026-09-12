@@ -48,13 +48,31 @@ function projectDirFromFlag(tokens: string[], name: string): string | undefined 
   return value ? resolve(value) : undefined
 }
 
-function repoRootForCli(): string {
-  let dir: string = import.meta.dirname ?? process.cwd()
-  for (;;) {
-    if (existsSync(join(dir, "package.json"))) return dir
-    const parent = dirname(dir)
-    if (parent === dir) return process.cwd()
-    dir = parent
+/**
+ * SEA path architecture (docs/adr-sea-path-resolution.md): the five
+ * locations are separated by src/cli/paths.ts. The CLI is invoked either as
+ * the SEA exe (isSea) or under node with import.meta available; CWD is used
+ * ONLY as the default TARGET PROJECT dir, never for resources.
+ */
+import { opencodeInstallReport } from "./install-opencode.js"
+
+/** Module anchor for development resolution (import.meta works in ESM dist). */
+const moduleAnchor: string | null = (() => {
+  try {
+    // ESM dist (node dist/cli/main.js): import.meta.dirname exists.
+    const dir = import.meta.dirname
+    return dir ?? null
+  } catch {
+    // CJS SEA bundle: import.meta is unavailable — there IS no repo.
+    return null
+  }
+})()
+
+const seaMode = (): boolean => {
+  try {
+    return isSea()
+  } catch {
+    return false
   }
 }
 
@@ -202,13 +220,19 @@ function fmtDoctor(projectDir: string): CliResult {
 function runInstall(host: string | undefined, projectDir: string): CliResult {
   switch ((host ?? "").toLowerCase()) {
     case "opencode": {
-      // The existing installer is a standalone script; keep parity by invoking it.
-      try {
-        execFileSync(process.execPath, [join(repoRootForCli(), "install.mjs"), projectDir], { stdio: "inherit" })
-        return ok("OpenCode plugin installed (see install.mjs output).")
-      } catch (error) {
-        return fail(`OpenCode install failed: ${(error as Error).message}`)
-      }
+      // De-repo'd (SEA fix): bundled install logic, embedded plugin asset
+      // under the exe, dist bundle in development — never install.mjs, never
+      // CWD-relative resource resolution. A standalone exe without the asset
+      // fails with a CLEAR early message (gate-2 option b), never a
+      // wrong-path exec.
+      const report = opencodeInstallReport({
+        targetProject: projectDir,
+        sea: seaMode(),
+        execPath: process.execPath,
+        anchorDir: moduleAnchor,
+      })
+      if (report.ok) return ok(report.lines.join("\n"))
+      return fail(report.lines.join("\n"))
     }
     case "claude-code": {
       const report = installClaudeCode(projectDir)

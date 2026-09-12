@@ -18,6 +18,28 @@ const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(join(here, ".."))
 const outDir = resolve(join(repoRoot, process.argv[2]?.startsWith("--out") ? (process.argv[3] ?? "dist-opencomms") : "dist-opencomms"))
 
+/**
+ * SEA builds are only reproducible on the pinned build Node (package.json
+ * engines.buildNode). Enforce an EXACT version match and fail closed with a
+ * clear message instead of letting a wrong Node fail later (or silently
+ * produce an incompatible blob / EBADENGINE on a target machine).
+ */
+function enforceBuildNodePinned() {
+  const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
+  const required = packageJson.engines?.buildNode
+  if (!required) throw new Error("package.json engines.buildNode is missing — SEA builds must be pinned to an exact Node version.")
+  if (process.version !== `v${required}`) {
+    console.error(`[opencomms-exe] ERROR: SEA builds require Node ${required} exactly.`)
+    console.error(`  found:    ${process.version}`)
+    console.error(`  required: v${required} (set by package.json engines.buildNode)`)
+    console.error(`  fix:      nvm install ${required} && nvm use ${required}, or invoke the pinned binary directly.`)
+    process.exit(1)
+  }
+  console.log(`[opencomms-exe] Node pin OK: ${process.version} (engines.buildNode ${required})`)
+}
+
+enforceBuildNodePinned()
+
 function run(cmd, args) {
   console.log(`+ ${cmd} ${args.join(" ")}`)
   execFileSync(cmd, args, { cwd: repoRoot, stdio: "inherit" })
@@ -45,9 +67,27 @@ const bundle = join(repoRoot, "dist", "cli", "cli-bundle.cjs")
 run(process.execPath, [join(repoRoot, "scripts", "bundle.mjs"), "--entry", join(repoRoot, "dist", "cli", "main.js"), "--format", "cjs", "--outfile", bundle])
 if (!existsSync(bundle)) throw new Error("CLI bundle was not produced")
 
-// 3. SEA preparation blob.
+// 2b. SEA assets: the opencode plugin bundle is EMBEDDED (asset key
+// "opencode-plugin-bundle") so `opencomms install opencode` works from the
+// standalone exe with NO repo (docs/adr-sea-path-resolution.md).
+const pluginBundle = join(repoRoot, "dist", "plugin.bundled.js")
+if (!existsSync(pluginBundle)) throw new Error("dist/plugin.bundled.js missing — run npm run build first")
+
+// 3. SEA preparation blob (assets are declared in the sea-config).
 const seaConfig = join(repoRoot, "sea-config.json")
-writeFileSync(seaConfig, JSON.stringify({ main: "dist/cli/cli-bundle.cjs", output: "sea-prep.blob", disableExperimentalSEAWarning: true }, null, 2))
+writeFileSync(
+  seaConfig,
+  JSON.stringify(
+    {
+      main: "dist/cli/cli-bundle.cjs",
+      output: "sea-prep.blob",
+      disableExperimentalSEAWarning: true,
+      assets: { "opencode-plugin-bundle": "dist/plugin.bundled.js" },
+    },
+    null,
+    2,
+  ),
+)
 run(process.execPath, ["--experimental-sea-config", "sea-config.json"])
 const blob = join(repoRoot, "sea-prep.blob")
 if (!existsSync(blob)) throw new Error("SEA blob was not produced")

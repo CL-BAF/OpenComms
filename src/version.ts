@@ -1,23 +1,33 @@
-import { existsSync, readFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+/**
+ * Package version shared by CLI, GUI diagnostics, and release metadata.
+ *
+ * SEA path architecture (docs/adr-sea-path-resolution.md): resolution order
+ * is (1) OPENCOMMS_VERSION env stamp (release builds), (2) development repo
+ * package.json via the module anchor, (3) static fallback pinned to the
+ * package version at build time. CWD is NEVER consulted — `opencomms
+ * version` works identically from /, $HOME, /tmp, or a project dir.
+ */
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+import { findSourceRepoRoot } from "./cli/paths.js"
 
-/** Package version shared by CLI, GUI diagnostics, and release metadata. */
+/** Static fallback mirrors package.json; bumped only when package.json is. */
+const FALLBACK_VERSION = "1.1.0"
+
 export const VERSION: string = (() => {
+  const stamped = process.env["OPENCOMMS_VERSION"]?.trim()
+  if (stamped) return stamped
+  // ESM dist (node): import.meta.dirname is available; CJS SEA bundle: it
+  // is not — no repo lookup is attempted there (the exe is self-contained).
   try {
-    let dir = import.meta.dirname ?? process.cwd()
-    for (;;) {
-      const candidate = join(dir, "package.json")
-      if (existsSync(candidate)) {
-        const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { version?: unknown }
-        if (typeof parsed.version === "string" && parsed.version) return parsed.version
-      }
-      const parent = dirname(dir)
-      // SEA bundles do not ship package.json or import.meta.dirname. Keep a
-      // release-safe fallback so `opencomms version` never reports 0.0.0.
-      if (parent === dir) return "1.1.0"
-      dir = parent
+    const anchor = import.meta.dirname ?? null
+    const repo = findSourceRepoRoot(anchor)
+    if (repo) {
+      const parsed = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { version?: unknown }
+      if (typeof parsed.version === "string" && parsed.version) return parsed.version
     }
   } catch {
-    return "1.1.0"
+    /* fall through */
   }
+  return FALLBACK_VERSION
 })()
