@@ -46,9 +46,15 @@ jobs:
           # verified; artifacts + step summaries are auth-gated). Grep failure
           # signatures with context, not a tail: the failing test may sit well
           # before the final lines (Platform diagnosis after run 34691955898).
+          # AMENDMENT 3: load/import errors print at the TOP of the output
+          # (before any counters) and exit non-zero without any "not ok" —
+          # so also annotate the first 40 lines.
           if [ -f ci-failure/combined.txt ]; then
-            grep -n -A 12 -E "^not ok|# cancelled|ERR_TEST_FAILURE|AssertionError" ci-failure/combined.txt | tail -n 60 | while IFS= read -r line; do
+            grep -n -A 12 -E "^not ok|# cancelled|ERR_TEST_FAILURE|AssertionError|Cannot find|SyntaxError|^Error" ci-failure/combined.txt | tail -n 60 | while IFS= read -r line; do
               [ -n "$line" ] && echo "::error::${line:0:400}"
+            done
+            head -n 40 ci-failure/combined.txt | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error head::${line:0:400}"
             done
             grep -c "not ok" ci-failure/combined.txt > /dev/null 2>&1 || echo "::error::no 'not ok' lines in combined output (see uploaded artifact ci-failure-logs)"
           fi
