@@ -36,6 +36,7 @@ import { joinCommandFor } from "./join-command.js"
 import { WIZARD_PS1 } from "./wizard.js"
 import { iconIcoBytes } from "./icon-base64.js"
 import { updateCommand } from "./update.js"
+import { runAgentCommand } from "./agent.js"
 import { VERSION } from "../version.js"
 
 /** Package version, derived from package.json so the CLI can never drift. */
@@ -749,6 +750,9 @@ export function runCli(argv: string[]): CliResult {
       return runUninstallSelf()
     case "session":
       return fail('Session commands are async: await runSession(["save", "<name>"]) (CLI main handles this).')
+    case "agent":
+      // Async (loopback HTTP): handled on the async path below.
+      return fail("Agent commands are async: await runAgentCommand(...) (CLI main handles this).")
     case "join-command":
     case "join":
       return runJoinCommand(projectDir, positional, flagValue(tokens, "--host"))
@@ -778,6 +782,7 @@ export function runCli(argv: string[]): CliResult {
           "  opencomms uninstall-self             # remove PATH entry, shortcuts, and the install folder",
           "  opencomms join-command <session> [--host <opencode|claude-code|codex|claude-desktop|chatgpt>]",
           "  opencomms update [--check] [--json]  # self-update (Linux; Windows prints the installer pointer)",
+          "  opencomms agent <list|create|stop|restart|status> [...]  # orchestrator CLI (console must be running)",
           "  opencomms uninstall <host> [--project <dir>]",
           "  opencomms version",
         ].join("\n"),
@@ -812,6 +817,8 @@ if (isCliEntry) {
       execPath: process.execPath,
       env: process.env,
     }).then(emit)
+  } else if (argv[0] === "agent") {
+    void runAgentCommand(argv.slice(1), projectDirFromFlag(argv, "--project")).then(emit)
   } else {
     emit(runCli(argv))
   }
