@@ -548,13 +548,13 @@ function runVersion(binary: string): string | undefined {
  */
 const MODELS_TIMEOUT_MS = 30_000
 
-export function listModelsCatalog(binary: string, cwd: string): Array<{ provider: string; models: string[] }> {
-  let out: string
-  try {
-    out = execFileSync(binary, ["models"], { encoding: "utf8", timeout: MODELS_TIMEOUT_MS, cwd, windowsHide: true })
-  } catch {
-    return []
-  }
+/**
+ * Pure line parser for the `opencode models` output — exported so tests can
+ * drive it DIRECTLY (no exec, no exec-bit: the CI root cause was the exec
+ * fixture failing on noexec mounts, Platform/Lead diagnosis 2026-09-13).
+ * Production never parses anything else; this is the same code path.
+ */
+export function parseModelsOutput(out: string): Array<{ provider: string; models: string[] }> {
   const byProvider = new Map<string, Set<string>>()
   for (const rawLine of out.split(/\r?\n/)) {
     const line = rawLine.trim()
@@ -571,6 +571,16 @@ export function listModelsCatalog(binary: string, cwd: string): Array<{ provider
     set.add(model)
   }
   return [...byProvider.entries()].map(([provider, models]) => ({ provider, models: [...models].sort() }))
+}
+
+export function listModelsCatalog(binary: string, cwd: string): Array<{ provider: string; models: string[] }> {
+  let out: string
+  try {
+    out = execFileSync(binary, ["models"], { encoding: "utf8", timeout: MODELS_TIMEOUT_MS, cwd, windowsHide: true })
+  } catch {
+    return []
+  }
+  return parseModelsOutput(out)
 }
 
 function redact(exe: string, port: number): string {

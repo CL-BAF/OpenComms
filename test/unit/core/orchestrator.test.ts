@@ -24,7 +24,7 @@ import {
 } from "../../../src/orchestrator/state.js"
 import { OrchestratorApi, agentWorktreeDir } from "../../../src/orchestrator/api.js"
 import { createOrchestratorFeed, listEvents } from "../../../src/orchestrator/events.js"
-import { listModelsCatalog, ensureServe, resolveOpencodeBinary } from "../../../src/orchestrator/runtimes/opencode.js"
+import { parseModelsOutput, ensureServe, resolveOpencodeBinary } from "../../../src/orchestrator/runtimes/opencode.js"
 import { execFileSync } from "node:child_process"
 import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runtime.js"
 import type { AgentRecord, AgentRuntimeStatus } from "../../../src/orchestrator/state.js"
@@ -519,52 +519,36 @@ test("orchestrator feed: emit persists via locked mutate and broadcasts with seq
 })
 
 test("opencode models catalog: parses provider/model lines into grouped providers", () => {
-  // Pure parser test: listModelsCatalog execs the binary, so we drive it via
-  // the REAL node binary (always present in the test harness) with argv
-  // shims that print the fixture — a .cmd shim cannot be execFile-spawned on
-  // Windows (same EINVAL constraint the production code documents).
-  const dir = tmpProject()
-  try {
-    const fakeBinary = process.execPath
-    const script = join(dir, "print-models.mjs")
-    writeFileSync(
-      script,
-      `
-const lines = ["opencode/big-pickle", "opencode/ling-3.0-flash-fin-free", "opencode-go/glm-5.3", "opencode-go/glm-5.2", "opencode", "badline"]
-process.stdout.write(lines.join(process.platform === "win32" ? "\\r\\n" : "\\n") + "\\n")
-`,
-      "utf8",
-    )
-    // Wrap the real node binary: listModelsCatalog appends no extra args for
-    // `models`, so we need the script INSIDE the command. Use the env-free
-    // path: write a tiny launcher script and pass node + script via a shell
-    // shim ONLY on POSIX; on Windows, exec a .exe copy is impossible —
-    // instead call the exported parser through the real binary path by
-    // making `models` the FIRST fixture: the parser only reads stdout lines.
-    if (process.platform === "win32") {
-      // Windows: spawn node with the script via the `--eval`-style shim is
-      // not possible through execFileSync(binary, [args]) without a shell —
-      // so verify the parser on POSIX here and assert the Windows skip is
-      // honest (the real binary is execFile-able; this fixture is not).
-      assert.equal(process.platform === "win32", true)
-      return
-    }
-    chmodSync(script, 0o755)
-    const withShebang = `#!/usr/bin/env node${script.slice(script.indexOf("\n"))}`
-    writeFileSync(script, withShebang, "utf8")
-    chmodSync(script, 0o755)
-    const catalog = listModelsCatalog(script, dir)
-    const opencode = catalog.find((c) => c.provider === "opencode")
-    const go = catalog.find((c) => c.provider === "opencode-go")
-    assert.ok(opencode)
-    assert.ok(go)
-    assert.deepEqual(opencode.models.sort(), ["big-pickle", "ling-3.0-flash-fin-free"])
-    assert.deepEqual(go.models.sort(), ["glm-5.2", "glm-5.3"])
-    // "opencode" (no slash) and "badline" are skipped.
-    assert.equal(catalog.length, 2)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  // CI root cause closed (Platform WSL reproduction, Lead GO 2026-09-13):
+  // the OLD fixture exec'd a script and relied on exec-bit + shebang, which
+  // fails on noexec mounts (drvfs) -> empty output -> parser saw nothing.
+  // The parser is now a PURE exported function (parseModelsOutput) — the
+  // test drives it directly with fixture text; the exec path
+  // (listModelsCatalog) is unchanged production behavior, exercised by the
+  // real binary when present (detect()).
+  const catalog = parseModelsOutput(
+    [
+      "opencode/big-pickle",
+      "opencode/ling-3.0-flash-fin-free",
+      "opencode-go/glm-5.3",
+      "opencode-go/glm-5.2",
+      "opencode", // no slash -> skipped
+      "badline", // no slash -> skipped
+      "trailing/", // trailing slash -> skipped
+      "/leading", // leading slash -> skipped
+    ].join("\n"),
+  )
+  const opencode = catalog.find((c) => c.provider === "opencode")
+  const go = catalog.find((c) => c.provider === "opencode-go")
+  assert.ok(opencode)
+  assert.ok(go)
+  assert.deepEqual(opencode.models.sort(), ["big-pickle", "ling-3.0-flash-fin-free"])
+  assert.deepEqual(go.models.sort(), ["glm-5.2", "glm-5.3"])
+  assert.equal(catalog.length, 2)
+  // CRLF-split input parses identically (Windows CLI output shape).
+  const crlf = parseModelsOutput("opencode/big-pickle\r\nopencode-go/glm-5.3\r\n")
+  assert.equal(crlf.length, 2)
+  assert.deepEqual(crlf.find((c) => c.provider === "opencode")?.models.sort(), ["big-pickle"])
 })
 
 test("opencode runtime detect: execFileSync import is available (catalog helper wiring)", () => {
