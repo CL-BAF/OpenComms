@@ -46,7 +46,12 @@ const port = String(49400 + (process.pid % 500))
 let smokeProcess = null
 
 function check(condition, message) {
-  if (!condition) throw new Error(message)
+  if (!condition) {
+    // Emit the failed assertion as a GitHub ::error annotation so CI shows
+    // WHICH stage failed without needing the (auth-gated) job log.
+    console.log(`::error file=scripts/test-linux-release.mjs::${message.replaceAll("\n", " ").slice(0, 380)}`)
+    throw new Error(message)
+  }
 }
 
 function sha256(file) {
