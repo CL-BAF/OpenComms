@@ -33,7 +33,8 @@ const releaseDir = join(repoRoot, "dist-release")
 const tarball = readdirSync(releaseDir)
   .filter((name) => /^opencomms-linux-.*\.tar\.gz$/.test(name))
   .map((name) => join(releaseDir, name))[0]
-if (!tarball || !existsSync(tarball)) throw new Error("No opencomms-linux-*.tar.gz found in dist-release (run npm run build:release on Linux first).")
+if (!tarball || !existsSync(tarball))
+  throw annotated(new Error("No opencomms-linux-*.tar.gz found in dist-release (run npm run build:release on Linux first)."))
 
 const root = join(tmpdir(), `opencomms-linux-smoke-${process.pid}`)
 const extractDir = join(root, "extract")
@@ -54,6 +55,12 @@ function check(condition, message) {
   }
 }
 
+/** Wrap a thrown error so non-check() failure paths are observable too. */
+function annotated(error) {
+  console.log(`::error file=scripts/test-linux-release.mjs::${String(error.message ?? error).replaceAll("\n", " ").slice(0, 380)}`)
+  return error
+}
+
 function sha256(file) {
   return createHash("sha256").update(readFileSync(file)).digest("hex")
 }
@@ -71,7 +78,7 @@ async function waitForGui(url, timeoutMs = 30_000) {
     }
     await new Promise((done) => setTimeout(done, 250))
   }
-  throw new Error(`GUI did not answer at ${url}: ${lastError}`)
+  throw annotated(new Error(`GUI did not answer at ${url}: ${lastError}`))
 }
 
 function stopSmokeGui() {
