@@ -423,3 +423,115 @@ restart vs duplicate identities, task trust boundaries, permissionsDrain surface
   for capabilities the spawn config gated.
 - `AgentHandle.permissionsDrain` returns null for runtimes without the host
   API (interface already optional).
+
+## 9c. M3 — Multi-node opt-in (Backend lane; design BEFORE code, per discipline)
+
+Lead tasking 2026-09-14. Deliverable order: (1)+(2) trust core FIRST
+(everything gates on it), then (3)+(4) transport, (5) revoke throughout.
+Reviewer's 7 pre-queued M3 priorities are binding: pairing concrete before
+remote actions, cryptographic identity, revoke semantics, tier isolation,
+no self-approval, WSS floor, session-authority boundary on remote nodes.
+Design input: Researcher's M3 report (docs/research/research-m3.md —
+priority-1 delivered) + ADR-0001/0003.
+
+### 1. NodeRegistry (extends orchestrator.json; design §2 shape stands)
+
+- Remote node records enter via an EXPLICIT pairing flow, never
+  auto-discovery. New fields on NodeRecord (additive, backfilled):
+  - `fingerprint: string | null` — cert SPKI hash (node identity anchor)
+  - `enrolled_at: number | null` — when the pairing completed
+  - `last_seen: number | null` — last heartbeat received
+  - `trust_tier: "persistent" | "ephemeral"` — distinct tiers, not a
+    boolean (batch-1 §9 + research-m3 §3: window-based ephemerality beats
+    one-job JIT for long-lived agent conversations)
+  - `grants: string[]` — per-node grant set (e.g. "spawn", "tasks")
+  - `credential_expires_at: number | null` — short-lived cert expiry
+- **Pairing flow (concrete BEFORE any remote action — Review priority 1):**
+  1. The node daemon (Platform's surface) generates a keypair + CSR
+     locally; the private key NEVER leaves the node (ADR-0001).
+  2. The daemon presents a pairing request to the operator OUT-OF-BAND
+     (display code/QR on the node screen); the owner enters the short-lived
+     pairing code into the coordinator GUI/CLI. Network-discovered
+     requests are never accepted ("enrollment only after full sign-in"
+     analog — research-m3 §1).
+  3. Owner approves (confirm-token gate, §2 below) → the coordinator mints
+     a SHORT-LIVED node cert signed by the owner-rooted CA (§3) and the
+     node record flips pending_approval → online.
+  4. Re-enrollment after revoke/expiry ALWAYS requires fresh owner approval
+     — never silent re-add.
+- **Data-retention property (owner-visible, from research-m3 §2):** the
+  coordinator DOES queue messages for disconnected nodes (existing
+  store-and-forward). This is a documented, owner-visible property shown at
+  pairing time; ephemeral-tier nodes must be able to operate without
+  transcript retention (queued mail for ephemeral nodes is discarded after
+  the re-serve window, never persisted long-term).
+
+### 2. Trust gate (extends M1/M2 confirm-token model)
+
+- The M1 `owner_confirm_token` (random, per-project, never returned by read
+  APIs, surfaced to the human in GUI/CLI settings only) remains THE owner
+  gate. Contract v0.1 §0 binding + ADR-0003 stand: approve/revoke are
+  owner-only, server-enforced in the orchestrator core (NOT the GUI),
+  403 + audit event on wrong/absent token (M2 implementation reused).
+- **No self-approval (Review priority 5):** the acting principal on
+  approve/revoke is the token, not any agent session; Lead-role agents have
+  no path to the trust store (agent sessions interact only through the
+  channel engine — same boundary as M1). Remote-node approval requests
+  CANNOT originate from a node (only the daemon's pending request enters;
+  the HUMAN confirms).
+- Every remote action (spawn on remote node, task assign to remote agent,
+  permission respond) re-checks: node approved + credential valid (not
+  expired/revoked) + grant present. Failure = `403 trust_denied` + audit.
+
+### 3. Node authentication — owner-rooted CA + short-lived certs (SPIFFE pattern)
+
+- **Decision (from Researcher's sharpened REC, research-m3 §1):** owner-
+  rooted mTLS CA issuing short-lived node certs. Rationale: `node:tls`
+  gives mTLS with zero extra dependencies (no WASM Noise lib exists for
+  Node); revocation = cert expiry BY CONSTRUCTION + server-side revoke;
+  pairing code authorizes cert issuance; the cert IS the node identity.
+  Noise XX stays the documented alternative (identity hiding) if a non-TLS
+  transport is ever needed — not for v1.
+- Key material lives in `.opencomms/` per secret-storage tiers (research
+  batch-1 §6): CA private key in the OS keyring (DPAPI user-scope /
+  libsecret) with encrypted-file fallback; node private keys on THEIR
+  nodes, never on the coordinator.
+- Certs: hours-scale validity; renewal requires the pairing-grade auth
+  (short-lived renewal token over the existing WSS, re-approval only if
+  revoked); ephemeral nodes get shorter expiry by tier.
+- Fingerprint (SPKI hash) pinned at approval; a re-presented cert whose
+  fingerprint differs = new pairing, never silent re-identity.
+
+### 4. Remote transport — outbound-only WSS node→coordinator
+
+- **Floor (ADR-0001 + research batch-1 §2, unchanged by research-m3 §2):**
+  the NODE dials out; the coordinator opens no inbound ports. Bearer
+  credentials over `wss://` ONLY (never `ws://` cross-network; Codex rule);
+  message framing identical local vs remote (MessageEnvelope preserved —
+  single protocol surface, M0 ground rule).
+- Shape: Buildkite/Remote-Control model — register (with pairing/cert
+  credential) → poll/heartbeat → accept job → stream output → report
+  status. Reconnect semantics reuse our local machinery: per-recipient
+  sequence cursors ("everything after seq N", JetStream idea) + remote-ack
+  delivery (ack AFTER the remote node confirms receipt, replacing
+  prompt-success as the commit point cross-node) + bounded give-up
+  (~10 min, Remote Control precedent) with clean re-registration on return.
+- Session-authority boundary (Review priority 7): remote nodes host agent
+  WORKERS only; the coordinator owns session registry state; remote nodes
+  cannot mutate channels or approve anything — their only writes are
+  agent-runtime operations on their own node and message ACKs.
+- Tier isolation (Review priority 4): ephemeral nodes get the bounded
+  window + mandatory re-approval; persistent nodes get full grants; grant
+  sets are checked per action (not per node lifetime).
+
+### 5. Revoke semantics (ADR-0003, no orphans)
+
+- `POST /nodes/revoke` (owner + confirm token): (1) coordinator stops
+  issuing work to the node; (2) remote agents stop GRACEFULLY via the
+  node daemon's stop path (M2 semantics, remote-transported); (3) if the
+  node is unreachable: mark agents `lost` (status failed + reason), NEVER
+  silently delete; (4) cert not renewed at next rotation = automatic
+  lapse; (5) re-enrollment = fresh pairing + fresh owner approval.
+- Orphan prevention (M2 pattern, remote edition): revoke asserts no work
+  in flight to that node after the stop window; the audit event records
+  the agent states at revoke time.
