@@ -215,7 +215,78 @@ function fmtDoctor(projectDir: string): CliResult {
         : "Member pins: none - run install-member inside a host session",
     )
   }
+
+  // M3 node readiness (Platform): runtime discovery + node-mode detection.
+  // G5: PATH-convention discovery with the nvm/fnm-on-systemd-PATH warning.
+  lines.push("")
+  lines.push("Node readiness (M3 remote-node daemon):")
+  const nodeBinary = resolveDaemonRuntimeNode()
+  lines.push(
+    `  Node runtime: ${nodeBinary.found ? `found (${nodeBinary.source})` : "not found"}${
+      nodeBinary.warning ? ` | ${nodeBinary.warning}` : ""
+    }`,
+  )
+  const wslPresence = detectWsl()
+  lines.push(
+    `  WSL: ${wslPresence.available ? `available (${wslPresence.detail})` : "not available"} — a Linux environment for remote-node testing`,
+  )
+  lines.push(
+    `  Node identity: ${
+      existsSync(join(resolve(projectDir), ".opencomms", "node-identity", "node-keypair.json"))
+        ? "keypair present (enrolled or enrollable)"
+        : "no keypair — run `opencomms daemon enroll --code <CODE> --name <label>` to enroll as a remote node"
+    }`,
+  )
+  lines.push(
+    `  Daemon mode: systemd user unit ${existsSync(join(workspaceConfigDir(), "systemd", "user", "opencomms.service")) ? "installed" : "not installed"} (Type=notify + watchdog available on systemd >= 249; Debian 11 = v247 runs Type=simple)`,
+  )
   return ok(lines.join("\n"))
+}
+
+/**
+ * G5 Linux runtime discovery for the daemon: where does `node` resolve
+ * from, and is it a nvm/fnm-managed shim (which is NOT on a systemd unit's
+ * PATH unless explicitly added)? Honest about the discovery mechanism.
+ */
+function resolveDaemonRuntimeNode(): { found: boolean; source: string; warning?: string } {
+  const isWindows = process.platform === "win32"
+  const envPath = process.env["PATH"] ?? ""
+  for (const dir of envPath.split(isWindows ? ";" : ":")) {
+    if (!dir) continue
+    for (const name of isWindows ? ["node.exe"] : ["node"]) {
+      const candidate = join(dir, name)
+      try {
+        if (existsSync(candidate)) {
+          const normalized = dir.replaceAll("\\", "/")
+          if (normalized.includes("/.nvm/") || normalized.includes("/fnm_multishells/")) {
+            return {
+              found: true,
+              source: candidate,
+              warning:
+                "nvm/fnm-managed node — NOT on a systemd service's PATH by default; use a pinned install for the daemon",
+            }
+          }
+          return { found: true, source: candidate }
+        }
+      } catch {
+        /* skip unreadable PATH entries */
+      }
+    }
+  }
+  return { found: false, source: "not found on PATH" }
+}
+
+/** WSL presence probe (Windows hosts only; informative, never fatal). */
+function detectWsl(): { available: boolean; detail: string } {
+  if (process.platform !== "win32") {
+    return { available: process.platform === "linux", detail: process.platform === "linux" ? "native Linux" : "n/a" }
+  }
+  try {
+    execFileSync("wsl.exe", ["--status"], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] })
+    return { available: true, detail: "WSL2 installed" }
+  } catch {
+    return { available: false, detail: "not installed (wsl --install Ubuntu)" }
+  }
 }
 
 /** opencomms install <host> [project] */
