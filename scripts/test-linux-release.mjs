@@ -244,6 +244,10 @@ try {
       if (trimmed === "") return false
       // printf lines PRINT systemctl text — that is the approved design.
       if (/printf/.test(trimmed)) return false
+      // Availability/version PROBES execute nothing: `command -v systemctl`
+      // only checks the binary exists; `systemctl --version` reads the
+      // version for the Type=notify gate. Neither enables/starts anything.
+      if (/command\s+-v\s+systemctl/.test(trimmed) || /systemctl\s+--version/.test(trimmed)) return false
       return /systemctl|loginctl/.test(trimmed)
     })
   for (const line of executedLines) {
