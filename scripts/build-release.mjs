@@ -66,11 +66,20 @@ function buildLinuxTarball(node, repoRoot, outDir) {
     })
     .join("\n")
   writeFileSync(join(staging, "SHA256SUMS"), `${sums}\n`, "utf8")
+  // The smoke test and operators verify from the EXTRACTION dir — ship
+  // SHA256SUMS inside the payload (it cannot verify the tarball it is in,
+  // but the per-file hashes cover the payload; the tarball checksum lives
+  // beside the tarball as <name>.sha256 at the release root).
+  copyFileSync(join(staging, "SHA256SUMS"), join(payloadDir, "SHA256SUMS"))
 
   const tarball = join(outDir, `opencomms-linux-${version}.tar.gz`)
   execFileSync("tar", ["-czf", tarball, "-C", staging, "opencomms"], { cwd: repoRoot, stdio: "inherit" })
   const tarChecksum = createHash("sha256").update(readFileSync(tarball)).digest("hex")
-  writeFileSync(join(outDir, `${tarball.split(/[\\/]/).pop()}.sha256`), `${tarChecksum}  ${tarball.split(/[\\/]/).pop()}\n`, "utf8")
+  writeFileSync(
+    join(outDir, `${tarball.split(/[\\/]/).pop()}.sha256`),
+    `${tarChecksum}  ${tarball.split(/[\\/]/).pop()}\n`,
+    "utf8",
+  )
   console.log(`[opencomms-release] linux tarball: ${tarball}`)
 }
 

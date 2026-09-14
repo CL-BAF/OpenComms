@@ -122,7 +122,7 @@ try {
   const payloadDir = join(extractDir, "opencomms")
 
   // 2. Exact approved layout (Lead amendment 5 + install.sh decision).
-  const expected = ["opencomms", "opencomms.service", "install.sh", "README-linux.txt"]
+  const expected = ["opencomms", "opencomms.service", "install.sh", "README-linux.txt", "SHA256SUMS"]
   for (const name of expected) {
     check(existsSync(join(payloadDir, name)), `Tarball payload missing: opencomms/${name}`)
   }
@@ -139,7 +139,8 @@ try {
   // Reviewer P3: normalize each line (trim trailing whitespace/CR) before
   // splitting, so a trailing-space or CRLF-contaminated file fails the
   // hash/name checks loudly instead of producing undefined name parts.
-  const sums = readFileSync(join(extractDir, "SHA256SUMS"), "utf8")
+  // SHA256SUMS ships INSIDE the payload (builder copies it there).
+  const sums = readFileSync(join(payloadDir, "SHA256SUMS"), "utf8")
     .split("\n")
     .map((line) => line.replace(/\r$/, "").trim())
     .filter((line) => line !== "")
