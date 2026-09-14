@@ -26,7 +26,16 @@ import { OrchestratorApi, agentWorktreeDir } from "../../../src/orchestrator/api
 import { createOrchestratorFeed, listEvents } from "../../../src/orchestrator/events.js"
 import { parseModelsOutput, ensureServe, resolveOpencodeBinary } from "../../../src/orchestrator/runtimes/opencode.js"
 import { NodeCertificateAuthority, fingerprintForPublicKeyPem } from "../../../src/orchestrator/node-ca.js"
-import { generateKeyPairSync } from "node:crypto"
+import {
+  nodeBearerToken,
+  verifyNodeBearer,
+  newConnectionNonce,
+  pendingForNode,
+  advanceCursor,
+  nodeWssUrl,
+  NODE_GIVE_UP_MS,
+} from "../../../src/orchestrator/node-transport.js"
+import { generateKeyPairSync, createPrivateKey } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runtime.js"
 import type { AgentRecord, AgentRuntimeStatus } from "../../../src/orchestrator/state.js"
@@ -623,6 +632,75 @@ test("node-ca M3: issuance, verification, expiry, and LOAD-BEARING revocation (b
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("node-transport M3: bearer auth is nonce-bound, revocation-gated, and wss-only", () => {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519")
+  const nodePrivatePem = privateKey.export({ type: "pkcs8", format: "pem" }).toString()
+  const nodeCertPem = publicKey.export({ type: "spki", format: "pem" }).toString()
+  const nonce = newConnectionNonce()
+  const token = nodeBearerToken({
+    node_id: "node_remote_x",
+    caPublicKeyPem: "",
+    nodePrivateKeyPem: nodePrivatePem,
+    nonce,
+  })
+  assert.match(token, /^node-node_remote_x\./)
+  // Valid bearer verifies against THIS connection's nonce.
+  assert.deepEqual(verifyNodeBearer({ token, nonce, nodeCertPem, isRevoked: false }), {
+    ok: true,
+    node_id: "node_remote_x",
+  })
+  // Replay on a DIFFERENT connection (new nonce) fails.
+  const differentNonce = verifyNodeBearer({ token, nonce: newConnectionNonce(), nodeCertPem, isRevoked: false })
+  assert.equal(differentNonce.ok, false)
+  // Tampered token fails.
+  const tampered = verifyNodeBearer({
+    token: `node-node_remote_x.${Buffer.from("forged", "utf8").toString("base64")}`,
+    nonce,
+    nodeCertPem,
+    isRevoked: false,
+  })
+  assert.equal(tampered.ok, false)
+  // LOAD-BEARING (binding B at the transport): a valid signature from a
+  // REVOKED node is rejected outright.
+  const revoked = verifyNodeBearer({ token, nonce, nodeCertPem, isRevoked: true })
+  assert.equal(revoked.ok, false)
+  assert.match(revoked.reason, /revoked/)
+  // Malformed tokens fail.
+  assert.equal(verifyNodeBearer({ token: "garbage", nonce, nodeCertPem, isRevoked: false }).ok, false)
+  // WSS floor: ws:// is refused cross-network; wss:// builds.
+  assert.throws(() => nodeWssUrl("ws://relay.example/x", "n", "t"), /wss:\/\//)
+  assert.match(nodeWssUrl("wss://relay.example/x", "node_n", "t"), /node_id=node_n/)
+  // Bounded give-up constant (Remote Control ~10 min precedent).
+  assert.equal(NODE_GIVE_UP_MS, 10 * 60_000)
+  void createPrivateKey
+})
+
+test("node-transport M3: cursor+ack window (P3-2 composition: redelivery bounded, idempotent)", () => {
+  const envelopes = [
+    { seq: 1, node_id: "n", framed: "one", message_id: "m1" },
+    { seq: 2, node_id: "n", framed: "two", message_id: "m2" },
+    { seq: 3, node_id: "n", framed: "three", message_id: "m3" },
+  ]
+  // No cursor: everything is pending, in sequence order.
+  assert.deepEqual(
+    pendingForNode(envelopes, null).map((e) => e.seq),
+    [1, 2, 3],
+  )
+  // Cursor at 1: only 2+3 pending (redelivery of 1 would be a node-side no-op).
+  assert.deepEqual(
+    pendingForNode(envelopes, { acked_seq: 1 }).map((e) => e.seq),
+    [2, 3],
+  )
+  // Cursor at 3: nothing pending.
+  assert.equal(pendingForNode(envelopes, { acked_seq: 3 }).length, 0)
+  // Cursor advance is monotonic + idempotent (a stale ack cannot rewind).
+  let cursor = { acked_seq: 1, updated_at: 0 }
+  cursor = advanceCursor(cursor, 3, Date.now())
+  assert.equal(cursor.acked_seq, 3)
+  cursor = advanceCursor(cursor, 2, Date.now())
+  assert.equal(cursor.acked_seq, 3, "stale ack rewound the cursor")
 })
 
 test("orchestrator feed: emit persists via locked mutate and broadcasts with seq", async () => {
