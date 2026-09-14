@@ -25,7 +25,9 @@ import { fileURLToPath } from "node:url"
 import { createHash } from "node:crypto"
 
 if (process.platform !== "linux") {
-  throw new Error("The Linux release smoke test must run on Linux (scripts/test-windows-release.mjs is its Windows counterpart).")
+  throw new Error(
+    "The Linux release smoke test must run on Linux (scripts/test-windows-release.mjs is its Windows counterpart).",
+  )
 }
 
 const repoRoot = resolve(join(fileURLToPath(new URL("..", import.meta.url))))
@@ -34,7 +36,9 @@ const tarball = readdirSync(releaseDir)
   .filter((name) => /^opencomms-linux-.*\.tar\.gz$/.test(name))
   .map((name) => join(releaseDir, name))[0]
 if (!tarball || !existsSync(tarball))
-  throw annotated(new Error("No opencomms-linux-*.tar.gz found in dist-release (run npm run build:release on Linux first)."))
+  throw annotated(
+    new Error("No opencomms-linux-*.tar.gz found in dist-release (run npm run build:release on Linux first)."),
+  )
 
 const root = join(tmpdir(), `opencomms-linux-smoke-${process.pid}`)
 const extractDir = join(root, "extract")
@@ -57,7 +61,11 @@ function check(condition, message) {
 
 /** Wrap a thrown error so non-check() failure paths are observable too. */
 function annotated(error) {
-  console.log(`::error file=scripts/test-linux-release.mjs::${String(error.message ?? error).replaceAll("\n", " ").slice(0, 380)}`)
+  console.log(
+    `::error file=scripts/test-linux-release.mjs::${String(error.message ?? error)
+      .replaceAll("\n", " ")
+      .slice(0, 380)}`,
+  )
   return error
 }
 
@@ -172,7 +180,10 @@ try {
   check(existsSync(unitFile), "install.sh did not write the unit.")
   const unit = readFileSync(unitFile, "utf8")
   check(/^WorkingDirectory="[^"]+"$/m.test(unit), "Unit WorkingDirectory is not quoted (spaced paths would misparse).")
-  check(/^ExecStart="[^"]+" gui --project "[^"]+" --server --no-open$/m.test(unit), "Unit ExecStart is not the exact approved argv with quoted values.")
+  check(
+    /^ExecStart="[^"]+" gui --project "[^"]+" --server --no-open$/m.test(unit),
+    "Unit ExecStart is not the exact approved argv with quoted values.",
+  )
   check(/^AssertPathIsDirectory="[^"]+"$/m.test(unit), "Unit AssertPathIsDirectory is not quoted.")
   check(unit.includes(spacedProject), "Unit does not reference the spaced project path.")
   check(!/[@]BIN@|[@]PROJECT_DIR@/.test(unit), "Unit still contains unresolved placeholders.")
@@ -186,7 +197,10 @@ try {
   // line filter must skip heredoc CONTENT (usage() help text mentions
   // systemctl but is a printed string, not an executed command).
   const rawInstaller = readFileSync(join(payloadDir, "install.sh"), "utf8")
-  check(!rawInstaller.includes("\r"), "install.sh contains CR bytes (must be LF-only for Linux; CRLF breaks sh on some values and breaks this file's static analysis).")
+  check(
+    !rawInstaller.includes("\r"),
+    "install.sh contains CR bytes (must be LF-only for Linux; CRLF breaks sh on some values and breaks this file's static analysis).",
+  )
   const installerSource = rawInstaller.replace(/\r\n/g, "\n")
   const installerLines = installerSource.split("\n")
   const isHeredocRange = (() => {
@@ -297,10 +311,14 @@ try {
   })
   const binDirEntries = readdirSync(binDir)
   check(
-    binDirEntries.filter((name) => name.startsWith(".opencomms-new-") || name.startsWith(".opencomms-prev-")).length === 0,
+    binDirEntries.filter((name) => name.startsWith(".opencomms-new-") || name.startsWith(".opencomms-prev-")).length ===
+      0,
     `Installer left staging residue in the bin dir: ${binDirEntries.join(", ")}`,
   )
-  check(execFileSync(regExe, ["version"], { encoding: "utf8" }).includes("opencomms "), "Re-installed binary does not answer version (idempotency).")
+  check(
+    execFileSync(regExe, ["version"], { encoding: "utf8" }).includes("opencomms "),
+    "Re-installed binary does not answer version (idempotency).",
+  )
 
   // 9c. PATH no-dup: profile line appears EXACTLY once after two installs
   // that each request PATH handling.
@@ -310,14 +328,17 @@ try {
     env: { ...process.env, HOME: homeDir, XDG_CONFIG_HOME: configDir },
     stdio: "pipe",
   })
-  const firstCount = (readFileSync(profile, "utf8").split(binDir).length - 1)
+  const firstCount = readFileSync(profile, "utf8").split(binDir).length - 1
   check(firstCount === 1, `~/.profile has ${firstCount} PATH entries after first install, expected 1.`)
   execFileSync(join(payloadDir, "install.sh"), ["--exe", exe, "--bin-dir", binDir], {
     env: { ...process.env, HOME: homeDir, XDG_CONFIG_HOME: configDir },
     stdio: "pipe",
   })
-  const secondCount = (readFileSync(profile, "utf8").split(binDir).length - 1)
-  check(secondCount === 1, `~/.profile has ${secondCount} PATH entries after second install, expected 1 (no duplicate appends).`)
+  const secondCount = readFileSync(profile, "utf8").split(binDir).length - 1
+  check(
+    secondCount === 1,
+    `~/.profile has ${secondCount} PATH entries after second install, expected 1 (no duplicate appends).`,
+  )
 
   // 9d. Rollback: a DEFECTIVE staged binary must be refused before install.
   // (execute-before-install) — simulate by passing a non-executable file.
@@ -334,7 +355,10 @@ try {
     rollbackCaught = true
   }
   check(rollbackCaught, "Installer ACCEPTED a defective binary (execute-before-install must refuse it).")
-  check(execFileSync(regExe, ["version"], { encoding: "utf8" }).includes("opencomms "), "GOOD binary was clobbered by the defective one (atomic replace/rollback failed).")
+  check(
+    execFileSync(regExe, ["version"], { encoding: "utf8" }).includes("opencomms "),
+    "GOOD binary was clobbered by the defective one (atomic replace/rollback failed).",
+  )
   rmSync(defective, { force: true })
 
   // 9e. State preservation: update-path re-install never touched project state.
@@ -347,7 +371,18 @@ try {
   })
   check(!existsSync(regExe), "Uninstall (post-regression) left the binary behind.")
 
-  console.log("[opencomms-linux-release] extraction, checksums, exe smoke, unit quoting, headless GUI, SIGTERM, installer regressions, and uninstall passed")
+  console.log(
+    "[opencomms-linux-release] extraction, checksums, exe smoke, unit quoting, headless GUI, SIGTERM, installer regressions, and uninstall passed",
+  )
+} catch (error) {
+  // Any non-check() failure (execFileSync exit, fs error) is annotated too —
+  // every failure path in this smoke test must be observable anonymously.
+  console.log(
+    `::error file=scripts/test-linux-release.mjs::${String(error.message ?? error)
+      .replaceAll("\n", " ")
+      .slice(0, 380)}`,
+  )
+  throw error
 } finally {
   stopSmokeGui()
   try {
