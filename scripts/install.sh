@@ -34,7 +34,7 @@ RELEASES_BASE="https://github.com/${REPO}/releases/download"
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--version vX.Y.Z] [--bin-dir <dir>] [--exe <path>] [--project <dir>] [--service] [--uninstall] [--no-path-edit]
+Usage: install.sh [--version vX.Y.Z] [--bin-dir <dir>] [--exe <path>] [--project <dir>] [--service] [--node-daemon <wss-base>] [--uninstall] [--no-path-edit]
 
   (no flags)          Download the LATEST release, verify, and install to ~/.local/bin
   --version vX.Y.Z    Install a specific release instead of latest
@@ -42,6 +42,12 @@ Usage: install.sh [--version vX.Y.Z] [--bin-dir <dir>] [--exe <path>] [--project
   --exe <path>        Install an ALREADY-BUILT binary (skips download; repo/dev mode)
   --project <dir>     Project directory for the systemd unit (required with --service)
   --service           Also install the systemd user unit (binary-only default)
+  --node-daemon <wss-base>
+                      Also install the node daemon unit (opencomms-node.service;
+                      requires systemd >= 249 — version-detected, refuses with
+                      the Type=simple fallback instructions otherwise).
+                      <wss-base> is the coordinator's wss:// URL — the
+                      `opencomms daemon enroll` output prints it.
   --uninstall         Remove the binary and unit (prints systemctl instructions first)
   --no-path-edit      Do not offer/perform the ~/.profile PATH line
 
@@ -117,6 +123,8 @@ bin_dir_override=""
 exe_override=""
 project_dir_arg=""
 do_service=0
+node_wss_base=""
+do_node_daemon=0
 do_uninstall=0
 no_path_edit=0
 
@@ -127,6 +135,7 @@ while [ $# -gt 0 ]; do
     --exe) exe_override="${2:-}"; shift 2 ;;
     --project) project_dir_arg="${2:-}"; shift 2 ;;
     --service) do_service=1; shift ;;
+    --node-daemon) node_wss_base="${2:-}"; do_node_daemon=1; shift 2 ;;
     --uninstall) do_uninstall=1; shift ;;
     --no-path-edit) no_path_edit=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -345,6 +354,62 @@ if [ "$do_service" -eq 1 ]; then
   fi
   info "unit written: $unit_file"
   printf 'Enable it with:\n  systemctl --user daemon-reload\n  systemctl --user enable --now opencomms\n'
+  printf 'Pre-login (headless) operation, optional: loginctl enable-linger %s\n' "${SUDO_USER:-$(id -un)}"
+fi
+
+# ---------- optional node daemon unit (M3; systemd >= 249 only) ----------
+if [ "$do_node_daemon" -eq 1 ]; then
+  if [ -z "$project_dir_arg" ]; then
+    fail "--project <dir> is required with --node-daemon (the unit anchors WorkingDirectory there)"
+  fi
+  if [ -z "$node_wss_base" ]; then
+    fail "--node-daemon requires the coordinator's wss:// URL (the 'opencomms daemon enroll' output prints it; pass it via --node-daemon \"wss://...\")"
+  fi
+  case "$node_wss_base" in
+    wss://*) ;;
+    *) fail "--node-daemon URL must be wss:// (ws:// is refused cross-network)." ;;
+  esac
+  # Version gate: Type=notify + WatchdogSec + NotifyAccess need >= 249
+  # (Debian 11 = v247 rejects them). Honest refusal + fallback, never a
+  # unit the runner would fail to load.
+  if ! command -v systemctl >/dev/null 2>&1; then
+    fail "systemd not found on this system — --node-daemon requires systemd >= 249 (Type=notify + watchdog)."
+  fi
+  systemd_version=$(systemctl --version 2>/dev/null | sed -n 's/^systemd \([0-9]*\).*/\1/p')
+  case "$systemd_version" in
+    ''|*[!0-9]*) fail "could not determine the systemd version (systemctl --version). --node-daemon needs >= 249." ;;
+  esac
+  if [ "$systemd_version" -lt 249 ]; then
+    fail "systemd v$systemd_version is too old for --node-daemon (needs >= 249 for Type=notify + WatchdogSec). Fallback: run the daemon under a Type=simple unit or a terminal: $target daemon run --wss $node_wss_base"
+  fi
+  project_dir=$(CDPATH= cd -- "$project_dir_arg" && pwd -P)
+  template=""
+  for candidate in "$script_dir/opencomms-node.service" "$script_dir/../installer/linux/opencomms-node.service"; do
+    if [ -f "$candidate" ]; then
+      template=$candidate
+      break
+    fi
+  done
+  if [ -z "$template" ]; then
+    fail "node daemon template opencomms-node.service not found next to install.sh or at ../installer/linux/. Use --node-daemon from a checkout or the extracted tarball, not the curl-piped form."
+  fi
+  unit_dir="${XDG_CONFIG_HOME:-"$real_home/.config"}/systemd/user"
+  node_unit_file="$unit_dir/opencomms-node.service"
+  if [ -f "$node_unit_file" ]; then
+    had_node_unit=1
+  else
+    had_node_unit=0
+  fi
+  mkdir -p "$unit_dir"
+  bin_esc=$(esc_sed "$target")
+  project_esc=$(esc_sed "$project_dir")
+  wss_esc=$(esc_sed "$node_wss_base")
+  sed -e "s|@BIN@|$bin_esc|g" -e "s|@PROJECT_DIR@|$project_esc|g" -e "s|@WSS_BASE@|$wss_esc|g" -- "$template" > "$node_unit_file"
+  if [ "$had_node_unit" -eq 1 ]; then
+    systemctl --user daemon-reload 2>/dev/null || true
+  fi
+  info "node daemon unit written: $node_unit_file (systemd v$systemd_version, Type=notify + watchdog)"
+  printf 'Enable it with:\n  systemctl --user daemon-reload\n  systemctl --user enable --now opencomms-node\n'
   printf 'Pre-login (headless) operation, optional: loginctl enable-linger %s\n' "${SUDO_USER:-$(id -un)}"
 fi
 

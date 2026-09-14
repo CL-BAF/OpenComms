@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenComms node daemon (outbound-only remote runner)
+Wants=network-online.target
+After=network-online.target
+AssertPathIsDirectory="@PROJECT_DIR@"
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=30s
+ExecStart="@BIN@" daemon run --wss "@WSS_BASE@"
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
