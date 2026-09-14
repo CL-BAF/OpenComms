@@ -22,10 +22,14 @@
 
 import { mkdirSync, existsSync } from "node:fs"
 import { join } from "node:path"
-import { randomBytes } from "node:crypto"
+import { randomBytes, createHash } from "node:crypto"
 import {
   localNodeIdFor,
   newAgentId,
+  newConfirmToken,
+  newNodeId,
+  newPairingCode,
+  PAIRING_CODE_TTL_MS,
   pushEvent,
   validateOrchestratorState,
   type AgentRecord,
@@ -647,6 +651,140 @@ export class OrchestratorApi {
       node_id: nodeId,
     })
     return pass(`Node ${nodeId} ${action}d.`)
+  }
+
+  /**
+   * M3 trust core (design §9c-1): generate a one-time pairing code. The
+   * RAW code is returned EXACTLY ONCE (shown to the operator on the
+   * coordinator GUI/CLI, entered on the node out-of-band); the store keeps
+   * only the hash. The confirm token is required (owner action).
+   */
+  async createPairingCode(body: Record<string, unknown>): Promise<ApiResult> {
+    const token = typeof body["confirm_token"] === "string" ? body["confirm_token"] : ""
+    const nodeName = typeof body["node_name"] === "string" ? body["node_name"].trim() : ""
+    const tier = body["trust_tier"] === "ephemeral" ? "ephemeral" : "persistent"
+    const state0 = this.deps.loadOrchestrator()
+    if (!token || token !== state0.trust.owner_confirm_token) {
+      await this.deps.withLock(() => {
+        const state = this.deps.loadOrchestrator()
+        pushEvent(state, {
+          kind: "orchestration",
+          type: "trust_denied",
+          message: "Pairing-code creation denied (owner confirm token missing or wrong).",
+          agent_id: null,
+          node_id: null,
+          task_id: null,
+        })
+        this.deps.saveOrchestrator(state)
+        return 0
+      })
+      return { ok: false, message: "Owner approval required (confirm token missing or wrong)." }
+    }
+    if (!nodeName) return fail("node_name is required (operator-facing label for the pairing).")
+    const { raw, hash } = newPairingCode()
+    const expiresAt = Date.now() + PAIRING_CODE_TTL_MS
+    await this.deps.withLock(() => {
+      const state = this.deps.loadOrchestrator()
+      // Cap the live code set (operator hygiene).
+      const codes = (state.trust as unknown as Record<string, unknown>)["pairing_codes"] as Array<{
+        code_hash: string
+        node_name: string
+        expires_at: number
+        used_at: number | null
+      }>
+      codes.push({ code_hash: hash, node_name: nodeName, expires_at: expiresAt, used_at: null })
+      const kept = codes.filter((c) => c.used_at === null && c.expires_at > Date.now())
+      ;(state.trust as unknown as Record<string, unknown>)["pairing_codes"] = kept.slice(-8)
+      pushEvent(state, {
+        kind: "orchestration",
+        type: "pairing_code_created",
+        message: `Pairing code issued for node "${nodeName}" (tier ${tier}); expires in ${Math.round(PAIRING_CODE_TTL_MS / 60_000)} min. Raw code shown once.`,
+        agent_id: null,
+        node_id: null,
+        task_id: null,
+      })
+      this.deps.saveOrchestrator(state)
+      return 0
+    })
+    return pass(`Pairing code issued for "${nodeName}". Enter it on the node within 10 minutes.`, {
+      code: raw,
+      node_name: nodeName,
+      trust_tier: tier,
+      expires_at: expiresAt,
+    })
+  }
+
+  /**
+   * M3 §9c-1 step 2: the node daemon presents the code + its CSR-derived
+   * fingerprint. A VALID, UNEXPIRED, UNUSED code creates the pending node
+   * row (pending_approval); approval still requires the owner's
+   * approve/revoke call. The raw code is never stored; codes are one-time.
+   */
+  async claimPairingCode(body: Record<string, unknown>): Promise<ApiResult> {
+    const code = typeof body["pairing_code"] === "string" ? body["pairing_code"].trim().toUpperCase() : ""
+    const platform = typeof body["platform"] === "string" ? body["platform"].trim() : process.platform
+    if (!code) return fail("pairing_code is required.")
+    const claimed = await this.deps.withLock(() => {
+      const state = this.deps.loadOrchestrator()
+      const hash = createHash("sha256").update(code).digest("hex")
+      const codes = (state.trust as unknown as Record<string, unknown>)["pairing_codes"] as Array<{
+        code_hash: string
+        node_name: string
+        expires_at: number
+        used_at: number | null
+      }>
+      const match = codes.find((c) => c.code_hash === hash)
+      if (!match || match.used_at !== null || match.expires_at <= Date.now()) {
+        pushEvent(state, {
+          kind: "orchestration",
+          type: "trust_denied",
+          message: "Pairing claim denied (code unknown, already used, or expired).",
+          agent_id: null,
+          node_id: null,
+          task_id: null,
+        })
+        this.deps.saveOrchestrator(state)
+        return { ok: false as const, message: "Pairing code unknown, already used, or expired." }
+      }
+      match.used_at = Date.now()
+      const nodeName = match.node_name
+      const existing = state.nodes.find((n) => n.name === nodeName && n.kind === "remote")
+      const node = existing ?? {
+        id: newNodeId(),
+        name: nodeName,
+        kind: "remote" as const,
+        platform,
+        status: "pending_approval" as const,
+        capabilities: { max_agents: 4, runtimes: [], headless: false },
+        approved_at: null,
+        approved_by: null,
+        restart_policy: "manual" as const,
+        fingerprint: null,
+        enrolled_at: null,
+        last_seen: null,
+        trust_tier: "persistent" as const,
+        grants: [] as string[],
+        credential_expires_at: null,
+      }
+      if (!existing) state.nodes.push(node)
+      state.trust.pending_pairing_requests = state.trust.pending_pairing_requests.filter((r) => r.node_id !== node.id)
+      state.trust.pending_pairing_requests.push({ node_id: node.id, requested_at: Date.now() })
+      pushEvent(state, {
+        kind: "orchestration",
+        type: "node_added",
+        message: `Node "${nodeName}" claimed a pairing code and is pending owner approval (${node.id}).`,
+        agent_id: null,
+        node_id: node.id,
+        task_id: null,
+      })
+      this.deps.saveOrchestrator(state)
+      return { ok: true as const, node_id: node.id, name: nodeName }
+    })
+    if (!claimed.ok) return fail(claimed.message)
+    return pass(`Pairing claim accepted: node ${claimed.name} (${claimed.node_id}) is pending owner approval.`, {
+      node_id: claimed.node_id,
+      status: "pending_approval",
+    })
   }
 
   /**

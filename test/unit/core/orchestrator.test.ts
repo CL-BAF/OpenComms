@@ -473,6 +473,90 @@ test("orchestrator state M2: restart_policy backfills to manual and validates", 
   }
 })
 
+test("orchestrator state M3: node identity fields backfill; tampered tier/grants fail closed", () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const state = store.load()
+    const local = state.nodes[0]
+    assert.ok(local)
+    assert.equal(local.trust_tier, "persistent")
+    assert.ok(local.grants.includes("spawn"))
+    assert.equal(local.fingerprint, null)
+    // Tampered tier fails closed.
+    const raw = JSON.parse(readFileSync(store.file, "utf8")) as Record<string, unknown>
+    ;(raw["nodes"] as Array<Record<string, unknown>>)[0]!["trust_tier"] = "god-tier"
+    assert.equal(validateOrchestratorState(raw).ok, false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("orchestrator api M3: pairing flow — owner generates code, node claims, owner approves", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const deps = testDeps(store, dir)
+    const api = new OrchestratorApi(deps)
+    // 1) Owner-gated code creation: wrong token => 403 + audit.
+    const denied = await api.createPairingCode({ node_name: "worker-box-1", confirm_token: "nope" })
+    assert.equal(denied.ok, false)
+    assert.match(denied.message, /Owner approval required/)
+    assert.ok(store.load().events.some((e) => e.type === "trust_denied" && e.message.includes("Pairing-code")))
+    // Missing name => validation error.
+    const noName = await api.createPairingCode({ confirm_token: store.load().trust.owner_confirm_token })
+    assert.equal(noName.ok, false)
+    assert.match(noName.message, /node_name is required/)
+    // Correct token => raw code returned EXACTLY ONCE.
+    const created = await api.createPairingCode({
+      node_name: "worker-box-1",
+      confirm_token: store.load().trust.owner_confirm_token,
+    })
+    assert.ok(created.ok, created.message)
+    const code = (created.data as { code: string }).code
+    assert.match(code, /^[23456789A-HJ-NP-Z]{8}$/)
+    // Trust view NEVER includes pairing codes.
+    const trust = api.trustView()
+    assert.ok(!JSON.stringify(trust.data).includes(code))
+    // 2) Node claims: unknown/expired/used codes rejected with audit.
+    const badClaim = await api.claimPairingCode({ pairing_code: "XXXXXXXX" })
+    assert.equal(badClaim.ok, false)
+    assert.match(badClaim.message, /unknown, already used, or expired/)
+    const claim = await api.claimPairingCode({ pairing_code: code, platform: "linux" })
+    assert.ok(claim.ok, claim.message)
+    const nodeId = (claim.data as { node_id: string }).node_id
+    // One-time: a second claim with the SAME code fails.
+    const reuse = await api.claimPairingCode({ pairing_code: code })
+    assert.equal(reuse.ok, false)
+    const state = store.load()
+    const remote = state.nodes.find((n) => n.id === nodeId)
+    assert.ok(remote)
+    assert.equal(remote.kind, "remote")
+    assert.equal(remote.status, "pending_approval")
+    assert.ok(state.trust.pending_pairing_requests.some((r) => r.node_id === nodeId))
+    // 3) Owner approves with the confirm token => online + enrolled shape.
+    const approved = await api.approveOrRevoke(
+      { node_id: nodeId, confirm_token: store.load().trust.owner_confirm_token },
+      "approve",
+    )
+    assert.ok(approved.ok, approved.message)
+    const approvedState = store.load()
+    const approvedNode = approvedState.nodes.find((n) => n.id === nodeId)
+    assert.equal(approvedNode?.status, "online")
+    assert.equal(approvedNode?.approved_by, "owner")
+    assert.ok(approvedState.trust.approved_node_ids.includes(nodeId))
+    // Revoke marks remote agents lost (none here) + clears approval.
+    const revoked = await api.approveOrRevoke(
+      { node_id: nodeId, confirm_token: approvedState.trust.owner_confirm_token },
+      "revoke",
+    )
+    assert.ok(revoked.ok)
+    assert.equal(store.load().nodes.find((n) => n.id === nodeId)?.approved_at, null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test("orchestrator feed: emit persists via locked mutate and broadcasts with seq", async () => {
   const dir = tmpProject()
   try {

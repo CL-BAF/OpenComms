@@ -595,6 +595,18 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           json(res, result.ok ? 200 : result.message.startsWith("Owner approval") ? 403 : 400, result)
           return
         }
+        if (method === "POST" && sub === "/nodes/pairing-code") {
+          const body = await readBody(req)
+          const result = await activeApi.createPairingCode(body)
+          json(res, result.ok ? 200 : result.message.startsWith("Owner approval") ? 403 : 400, result)
+          return
+        }
+        if (method === "POST" && sub === "/nodes/claim-pairing") {
+          const body = await readBody(req)
+          const result = await activeApi.claimPairingCode(body)
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
         const permListMatch = sub.match(/^\/agents\/([^/]+)\/permissions$/)
         if (method === "GET" && permListMatch) {
           const result = await activeApi.listPermissions(decodeURIComponent(permListMatch[1] ?? ""))
