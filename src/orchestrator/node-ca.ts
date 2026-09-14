@@ -134,7 +134,12 @@ export class NodeCertificateAuthority {
     const ca = this.ensure()
     const fingerprint = fingerprintForPublicKeyPem(input.nodePublicKeyPem)
     const issued_at = Date.now()
-    const validity = input.trust_tier === "ephemeral" ? Math.floor(NODE_CERT_VALIDITY_MS / 6) : NODE_CERT_VALIDITY_MS
+    // Lead decision 2026-09-14: the exported EPHEMERAL constant is
+    // AUTHORITATIVE (1h) — a distinctly short ephemeral window keeps the
+    // tier meaningfully short-lived (design §9c-1 bounded-window) and the
+    // enrollment copy honest ("60-minute certificate"). A tier-validity
+    // mapping test asserts the exact hours for both tiers.
+    const validity = input.trust_tier === "ephemeral" ? EPHEMERAL_NODE_CERT_VALIDITY_MS : NODE_CERT_VALIDITY_MS
     const expires_at = issued_at + validity
     const tbs = certTbs({ node_id: input.node_id, fingerprint, issued_at, expires_at, trust_tier: input.trust_tier })
     const ca_signature = sign(null, Buffer.from(tbs, "utf8"), createPrivateKey(ca.privateKeyPem)).toString("base64")

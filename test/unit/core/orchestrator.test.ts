@@ -25,7 +25,12 @@ import {
 import { OrchestratorApi, agentWorktreeDir } from "../../../src/orchestrator/api.js"
 import { createOrchestratorFeed, listEvents } from "../../../src/orchestrator/events.js"
 import { parseModelsOutput, ensureServe, resolveOpencodeBinary } from "../../../src/orchestrator/runtimes/opencode.js"
-import { NodeCertificateAuthority, fingerprintForPublicKeyPem } from "../../../src/orchestrator/node-ca.js"
+import {
+  NodeCertificateAuthority,
+  fingerprintForPublicKeyPem,
+  NODE_CERT_VALIDITY_MS,
+  EPHEMERAL_NODE_CERT_VALIDITY_MS,
+} from "../../../src/orchestrator/node-ca.js"
 import {
   nodeBearerToken,
   verifyNodeBearer,
@@ -669,6 +674,23 @@ test("node-ca M3: issuance, verification, expiry, and LOAD-BEARING revocation (b
     })
     assert.equal(cert.fingerprint, fingerprintForPublicKeyPem(nodePublicPem))
     assert.ok(cert.expires_at > Date.now())
+    // Tier-validity mapping (Lead decision 2026-09-14): persistent = 12h,
+    // ephemeral = 1h (the exported constant is authoritative). Assert the
+    // EXACT hours so the enrollment copy never encodes a stale number.
+    const persistentValidity = NODE_CERT_VALIDITY_MS
+    assert.ok(Math.abs(cert.expires_at - cert.issued_at - persistentValidity) < 5_000, "persistent cert must be 12h")
+    const ephemeralCert = ca.issue({
+      node_id: "node_ephemeral_test",
+      node_name: "e",
+      nodePublicKeyPem: nodePublicPem,
+      trust_tier: "ephemeral",
+    })
+    assert.ok(Math.abs(ephemeralCert.expires_at - ephemeralCert.issued_at - EPHEMERAL_NODE_CERT_VALIDITY_MS) < 5_000)
+    assert.equal(
+      Math.round((ephemeralCert.expires_at - ephemeralCert.issued_at) / 60_000),
+      60,
+      "ephemeral cert must be exactly 60 minutes",
+    )
     // Fresh cert verifies.
     assert.deepEqual(ca.verify(cert), { ok: true })
     // A forged cert (different node_id under the same signature) FAILS.
