@@ -170,6 +170,10 @@ try {
   const spacedProject = join(root, "My Projects", "demo repo")
   mkdirSync(join(spacedProject, ".opencomms"), { recursive: true })
   mkdirSync(configDir, { recursive: true })
+  // The preserved-state file lives under projectDir (stage 7/8 assertions);
+  // its parent dirs must exist before the write (Windows counterpart does
+  // the same at its try{} head — this test does it here, next to the write).
+  mkdirSync(join(projectDir, ".opencomms"), { recursive: true })
   writeFileSync(projectState, preservedState, "utf8")
   const binDir = join(homeDir, ".local", "bin")
   execFileSync(
