@@ -587,6 +587,65 @@ test("orchestrator api M3: pairing flow — owner generates code, node claims, o
     assert.equal(revokedNode?.approved_at, null)
     assert.equal(revokedNode?.fingerprint, null)
     assert.equal(revokedNode?.credential_expires_at, null)
+    assert.deepEqual(revokedNode?.grants, [])
+    assert.ok(revokedState.events.some((e) => e.type === "revoke_agents_marked" && e.node_id === nodeId))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("orchestrator api M3: revoke marks remote agents failed (never deleted) with audit evidence", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const deps = testDeps(store, dir)
+    const api = new OrchestratorApi(deps)
+    const created = await api.createAgent({ name: "remote-worker", host: "opencode", role: "Worker", role_prompt: "p" })
+    assert.ok(created.ok)
+    const data = created.data as { id: string }
+    // Repoint the agent to a remote node (simulating remote placement).
+    await store.withLock(() => {
+      const state = store.load()
+      const remote: import("../../../src/orchestrator/state.js").NodeRecord = {
+        id: "node_remote_m3",
+        name: "worker-box-9",
+        kind: "remote",
+        platform: "linux",
+        status: "online",
+        capabilities: { max_agents: 4, runtimes: ["opencode"], headless: false },
+        approved_at: Date.now(),
+        approved_by: "owner",
+        restart_policy: "manual",
+        fingerprint: "deadbeef",
+        enrolled_at: Date.now(),
+        last_seen: Date.now(),
+        trust_tier: "persistent",
+        grants: ["spawn", "tasks"],
+        credential_expires_at: Date.now() + 3_600_000,
+      }
+      state.nodes.push(remote)
+      state.trust.approved_node_ids.push(remote.id)
+      const agent = state.agents.find((a) => a.id === data.id)
+      if (agent) agent.node_id = remote.id
+      store.save(state)
+      return 0
+    })
+    const revoked = await api.approveOrRevoke(
+      { node_id: "node_remote_m3", confirm_token: store.load().trust.owner_confirm_token },
+      "revoke",
+    )
+    assert.ok(revoked.ok, revoked.message)
+    const after = store.load()
+    // The AGENT survives (never deleted) but is marked failed.
+    const agent = after.agents.find((a) => a.id === data.id)
+    assert.ok(agent, "revoked node's agent was deleted (orphan-prevention violation)")
+    assert.equal(agent.status, "failed")
+    // Audit evidence: agent states at revoke time recorded.
+    assert.ok(
+      after.events.some(
+        (e) => e.type === "revoke_agents_marked" && e.node_id === "node_remote_m3" && e.message.includes(data.id),
+      ),
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

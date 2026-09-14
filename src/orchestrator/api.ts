@@ -678,6 +678,13 @@ export class OrchestratorApi {
           })
         }
       } else {
+        // M3 §9c-5 revoke semantics (no orphans): record each remote agent's
+        // state at revoke time for the audit trail; mark-lost (failed +
+        // reason), never silently delete.
+        const agentsOnNode = state.agents.filter((a) => a.node_id === nodeId)
+        for (const agent of agentsOnNode) {
+          agent.status = "failed"
+        }
         target.status = "offline"
         target.approved_at = null
         target.approved_by = null
@@ -687,9 +694,19 @@ export class OrchestratorApi {
         // cert cannot reconnect even before expiry.
         this.ca().revoke(nodeId)
         target.fingerprint = null
-        for (const agent of state.agents) {
-          if (agent.node_id === nodeId) agent.status = "failed"
-        }
+        target.grants = []
+        // §9c-5 audit: agent states at revoke time (orphan-prevention
+        // evidence: nothing was silently deleted).
+        pushEvent(state, {
+          kind: "orchestration",
+          type: "revoke_agents_marked",
+          message: `Revoke of node ${nodeId}: ${agentsOnNode.length} agent(s) marked failed (graceful stop requested; unreachable => lost). States: ${
+            agentsOnNode.map((a) => `${a.id}:${a.status}`).join(", ") || "none"
+          }.`,
+          agent_id: null,
+          node_id: nodeId,
+          task_id: null,
+        })
       }
       this.deps.saveOrchestrator(state)
       return { ok: true as const }
