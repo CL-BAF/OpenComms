@@ -40,6 +40,15 @@ import {
   nodeWssUrl,
   NODE_GIVE_UP_MS,
 } from "../../../src/orchestrator/node-transport.js"
+import {
+  createInMemoryNodeTransportServer,
+  WatchdogSpeaker,
+  watchdogIntervalFromUsec,
+  enrollmentOutput,
+  connectionAuthHeaders,
+  newHandshakeNonce,
+  sentBatches,
+} from "../../../src/orchestrator/node-server.js"
 import { generateKeyPairSync, createPrivateKey } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runtime.js"
@@ -782,6 +791,65 @@ test("node-transport M3: cursor+ack window (P3-2 composition: redelivery bounded
   assert.equal(cursor.acked_seq, 3)
   cursor = advanceCursor(cursor, 2, Date.now())
   assert.equal(cursor.acked_seq, 3, "stale ack rewound the cursor")
+})
+
+test("node-server M3.5: NodeTransportServer contract — auth gate, deliver, ack routing", async () => {
+  const server = createInMemoryNodeTransportServer({
+    verifyClient: () => ({ ok: false, reason: "unused (admit drives auth)" }),
+  })
+  const authenticated: string[] = []
+  const acks: Array<{ node_id: string; seq: number }> = []
+  server.onAuthenticated((nodeId) => authenticated.push(nodeId))
+  server.onAck((nodeId, seq) => acks.push({ node_id: nodeId, seq }))
+  await server.start()
+  // Admit (post-auth) fires onAuthenticated exactly once.
+  const session = server.admit("node_remote_s")
+  assert.deepEqual(authenticated, ["node_remote_s"])
+  // deliver() routes through the session's send (captured in sentBatches).
+  const outcome = await server.deliver("node_remote_s", "<framed>", 7)
+  assert.equal(outcome, "sent")
+  const batch = sentBatches.find((b) => b.node_id === "node_remote_s" && b.seq === 7)
+  assert.ok(batch, "delivered batch did not reach the session send")
+  // Deliver to an unknown node fails honestly.
+  assert.equal(await server.deliver("node_unknown", "x", 1), "failed")
+  // Ack routing reaches the registered handler.
+  server.emitAck("node_remote_s", 7)
+  assert.deepEqual(acks, [{ node_id: "node_remote_s", seq: 7 }])
+  // Close clears sessions; deliver then fails.
+  await server.close()
+  assert.equal(await server.deliver("node_remote_s", "x", 8), "failed")
+  void session
+})
+
+test("node-server M3.5: watchdog speaker — READY after dial+heartbeat, derived cadence, no hardcoding", () => {
+  const notified: string[] = []
+  const speaker = new WatchdogSpeaker({
+    notifySocketPath: "unix:/run/notify.sock",
+    watchdogUsec: 30_000_000, // Platform's WatchdogSec=30s
+    notify: (m) => notified.push(m),
+  })
+  // READY only after the dial+heartbeat (never auto-fired).
+  assert.deepEqual(notified, [])
+  speaker.notifyReady()
+  assert.equal(notified[0], "READY=1")
+  // Derived interval = WATCHDOG_USEC/2 = 15s (never hardcoded).
+  assert.equal(watchdogIntervalFromUsec(30_000_000), 15_000)
+  // Absent watchdog (non-systemd) => default heartbeat cadence, no unit coupling.
+  assert.equal(watchdogIntervalFromUsec(undefined), 15_000)
+  // 1s floor: a 1s watchdog (1e6 usec) → 500ms derived → floored to 1s.
+  assert.equal(watchdogIntervalFromUsec(1_000_000), 1_000)
+  assert.equal(watchdogIntervalFromUsec(1_000), 1_000)
+  speaker.stop()
+})
+
+test("node-server M3.5: enrollment output + auth headers contract", () => {
+  const out = enrollmentOutput("wss://relay.example/node", "node_abc")
+  assert.match(out, /node_abc/)
+  assert.match(out, /wss:\/\/relay\.example\/node/)
+  const headers = connectionAuthHeaders({ nodeId: "node_abc", bearer: "tok" })
+  assert.equal(headers["x-opencomms-node"], "node_abc")
+  assert.equal(headers["authorization"], "Bearer tok")
+  assert.equal(newHandshakeNonce().length, 32)
 })
 
 test("orchestrator feed: emit persists via locked mutate and broadcasts with seq", async () => {
