@@ -25,6 +25,8 @@ import {
 import { OrchestratorApi, agentWorktreeDir } from "../../../src/orchestrator/api.js"
 import { createOrchestratorFeed, listEvents } from "../../../src/orchestrator/events.js"
 import { parseModelsOutput, ensureServe, resolveOpencodeBinary } from "../../../src/orchestrator/runtimes/opencode.js"
+import { NodeCertificateAuthority, fingerprintForPublicKeyPem } from "../../../src/orchestrator/node-ca.js"
+import { generateKeyPairSync } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runtime.js"
 import type { AgentRecord, AgentRuntimeStatus } from "../../../src/orchestrator/state.js"
@@ -519,22 +521,34 @@ test("orchestrator api M3: pairing flow — owner generates code, node claims, o
     const trust = api.trustView()
     assert.ok(!JSON.stringify(trust.data).includes(code))
     // 2) Node claims: unknown/expired/used codes rejected with audit.
-    const badClaim = await api.claimPairingCode({ pairing_code: "XXXXXXXX" })
+    const badClaim = await api.claimPairingCode({ pairing_code: "XXXXXXXX", node_public_key_pem: "BOGUS" })
     assert.equal(badClaim.ok, false)
     assert.match(badClaim.message, /unknown, already used, or expired/)
-    const claim = await api.claimPairingCode({ pairing_code: code, platform: "linux" })
+    // Missing public key => validation error (private key never leaves the node).
+    const noKey = await api.claimPairingCode({ pairing_code: code })
+    assert.equal(noKey.ok, false)
+    assert.match(noKey.message, /node_public_key_pem is required/)
+    // The daemon generates its keypair locally; only the PUBLIC key travels.
+    const { publicKey } = generateKeyPairSync("ed25519")
+    const nodePublicPem = publicKey.export({ type: "spki", format: "pem" }).toString()
+    const claim = await api.claimPairingCode({
+      pairing_code: code,
+      platform: "linux",
+      node_public_key_pem: nodePublicPem,
+    })
     assert.ok(claim.ok, claim.message)
     const nodeId = (claim.data as { node_id: string }).node_id
-    // One-time: a second claim with the SAME code fails.
-    const reuse = await api.claimPairingCode({ pairing_code: code })
+    // One-time: a second claim with the SAME code fails (even with a key).
+    const reuse = await api.claimPairingCode({ pairing_code: code, node_public_key_pem: nodePublicPem })
     assert.equal(reuse.ok, false)
+    assert.match(reuse.message, /unknown, already used, or expired/)
     const state = store.load()
     const remote = state.nodes.find((n) => n.id === nodeId)
     assert.ok(remote)
     assert.equal(remote.kind, "remote")
     assert.equal(remote.status, "pending_approval")
     assert.ok(state.trust.pending_pairing_requests.some((r) => r.node_id === nodeId))
-    // 3) Owner approves with the confirm token => online + enrolled shape.
+    // 3) Owner approves with the confirm token => online + enrolled + CERT ISSUED.
     const approved = await api.approveOrRevoke(
       { node_id: nodeId, confirm_token: store.load().trust.owner_confirm_token },
       "approve",
@@ -545,13 +559,67 @@ test("orchestrator api M3: pairing flow — owner generates code, node claims, o
     assert.equal(approvedNode?.status, "online")
     assert.equal(approvedNode?.approved_by, "owner")
     assert.ok(approvedState.trust.approved_node_ids.includes(nodeId))
-    // Revoke marks remote agents lost (none here) + clears approval.
+    // Cert issued bound to approval: fingerprint pinned + expiry stamped.
+    const expectedFingerprint = fingerprintForPublicKeyPem(nodePublicPem)
+    assert.equal(approvedNode?.fingerprint, expectedFingerprint)
+    assert.ok(
+      typeof approvedNode?.credential_expires_at === "number" && approvedNode.credential_expires_at > Date.now(),
+    )
+    assert.ok(approvedState.events.some((e) => e.type === "cert_issued" && e.node_id === nodeId))
+    // Revoke marks remote agents lost (none here) + clears approval
+    // + REVOKES THE CERT immediately (binding B, load-bearing).
     const revoked = await api.approveOrRevoke(
       { node_id: nodeId, confirm_token: approvedState.trust.owner_confirm_token },
       "revoke",
     )
     assert.ok(revoked.ok)
-    assert.equal(store.load().nodes.find((n) => n.id === nodeId)?.approved_at, null)
+    const revokedState = store.load()
+    const revokedNode = revokedState.nodes.find((n) => n.id === nodeId)
+    assert.equal(revokedNode?.approved_at, null)
+    assert.equal(revokedNode?.fingerprint, null)
+    assert.equal(revokedNode?.credential_expires_at, null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("node-ca M3: issuance, verification, expiry, and LOAD-BEARING revocation (binding B)", () => {
+  const dir = tmpProject()
+  try {
+    const ca = new NodeCertificateAuthority(dir)
+    // CA generation is idempotent.
+    const fp1 = ca.caFingerprint()
+    assert.equal(ca.caFingerprint(), fp1)
+    // The node generates its keypair; only the public key reaches the CA.
+    const { publicKey } = generateKeyPairSync("ed25519")
+    const nodePublicPem = publicKey.export({ type: "spki", format: "pem" }).toString()
+    const cert = ca.issue({
+      node_id: "node_remote_test",
+      node_name: "w",
+      nodePublicKeyPem: nodePublicPem,
+      trust_tier: "persistent",
+    })
+    assert.equal(cert.fingerprint, fingerprintForPublicKeyPem(nodePublicPem))
+    assert.ok(cert.expires_at > Date.now())
+    // Fresh cert verifies.
+    assert.deepEqual(ca.verify(cert), { ok: true })
+    // A forged cert (different node_id under the same signature) FAILS.
+    const forged = { ...cert, node_id: "node_other" }
+    assert.equal(ca.verify(forged).ok, false)
+    // Expiry: a stale cert is rejected.
+    const expired = { ...cert, issued_at: Date.now() - 20_000, expires_at: Date.now() - 10_000 }
+    assert.equal(ca.verify(expired).ok, false)
+    // LOAD-BEARING REVOCATION (binding B): revoked BEFORE expiry = DEAD.
+    assert.equal(ca.isRevoked(cert.node_id), false)
+    ca.revoke(cert.node_id)
+    assert.equal(ca.isRevoked(cert.node_id), true)
+    // Even with valid signature + unexpired window, the revoked flag is the
+    // transport's auth gate: the node CANNOT reconnect (verify still passes
+    // cryptographically, so transport auth MUST also check isRevoked).
+    assert.deepEqual(ca.verify(cert), { ok: true })
+    assert.equal(ca.isRevoked(cert.node_id), true)
+    // Persistence across instances (revoke list survives restarts).
+    assert.equal(new NodeCertificateAuthority(dir).isRevoked(cert.node_id), true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

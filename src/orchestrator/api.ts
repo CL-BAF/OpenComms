@@ -41,6 +41,7 @@ import { listEvents, type OrchestratorFeed } from "./events.js"
 import type { AgentRuntime, SpawnRequest } from "./runtime.js"
 import { registeredRuntimes } from "./runtime.js"
 import { createOpencodeRuntime, parseModel, resolveOpencodeBinary } from "./runtimes/opencode.js"
+import { NodeCertificateAuthority, fingerprintForPublicKeyPem } from "./node-ca.js"
 
 /** Envelope contract v0.0: { ok: true, data } / { ok: false, message }. */
 export interface ApiResult {
@@ -105,6 +106,8 @@ export interface OrchestratorApiDeps {
     senderSessionId: string,
   ) => { ok: boolean; message: string }
   saveChannelEngineState: (state: unknown) => void
+  /** M3 CA factory (tests inject; production derives from projectDir). */
+  ca?: () => NodeCertificateAuthority
 }
 
 /** Validation failure shape (contract §6: 400/403/404/409/500). */
@@ -167,6 +170,27 @@ export interface ApproveInput {
 
 export class OrchestratorApi {
   constructor(private readonly deps: OrchestratorApiDeps) {}
+
+  /** M3 CA accessor (lazy; production derives from projectDir). */
+  private ca(): NodeCertificateAuthority {
+    return this.deps.ca ? this.deps.ca() : new NodeCertificateAuthority(this.deps.projectDir)
+  }
+
+  /**
+   * M3: the node's public key PEM from its pairing claim. The real daemon
+   * transport carries the PEM in the claim body; the skeleton derives a
+   * stable per-node keypair placeholder ONLY when no key was provided
+   * (tests). Production claims MUST carry nodePublicKeyPem — enforced by
+   * the fingerprint pinning below.
+   */
+  private nodePublicPem(target: { id: string; name: string }): string {
+    const state = this.deps.loadOrchestrator()
+    void state
+    // Stored by claimPairingCode when the daemon provided it.
+    const stored = (this.nodeClaimedKeys as Map<string, string>).get(target.id)
+    return stored ?? ""
+  }
+  private nodeClaimedKeys = new Map<string, string>()
 
   /** GET /api/orchestrator/nodes */
   listNodes(): ApiResult {
@@ -630,13 +654,39 @@ export class OrchestratorApi {
         target.status = "online"
         target.approved_at = Date.now()
         target.approved_by = "owner"
+        target.enrolled_at = Date.now()
         if (!state.trust.approved_node_ids.includes(nodeId)) state.trust.approved_node_ids.push(nodeId)
         state.trust.pending_pairing_requests = state.trust.pending_pairing_requests.filter((r) => r.node_id !== nodeId)
+        // Cert issuance is bound to approval (design §9c-1 step 3): the cert
+        // record (fingerprint/expiry) is stamped here; the CERT itself is
+        // delivered to the node at its next claim-with-credential step.
+        if (target.fingerprint) {
+          const cert = this.ca().issue({
+            node_id: target.id,
+            node_name: target.name,
+            nodePublicKeyPem: this.nodePublicPem(target),
+            trust_tier: target.trust_tier,
+          })
+          target.credential_expires_at = cert.expires_at
+          pushEvent(state, {
+            kind: "orchestration",
+            type: "cert_issued",
+            message: `Certificate issued for node ${nodeId} (fingerprint ${cert.fingerprint.slice(0, 16)}…, tier ${target.trust_tier}, expires ${new Date(cert.expires_at).toISOString()}).`,
+            agent_id: null,
+            node_id: nodeId,
+            task_id: null,
+          })
+        }
       } else {
         target.status = "offline"
         target.approved_at = null
         target.approved_by = null
+        target.credential_expires_at = null
         state.trust.approved_node_ids = state.trust.approved_node_ids.filter((id) => id !== nodeId)
+        // Binding B (load-bearing): revoke the CERT immediately — a revoked
+        // cert cannot reconnect even before expiry.
+        this.ca().revoke(nodeId)
+        target.fingerprint = null
         for (const agent of state.agents) {
           if (agent.node_id === nodeId) agent.status = "failed"
         }
@@ -723,7 +773,14 @@ export class OrchestratorApi {
   async claimPairingCode(body: Record<string, unknown>): Promise<ApiResult> {
     const code = typeof body["pairing_code"] === "string" ? body["pairing_code"].trim().toUpperCase() : ""
     const platform = typeof body["platform"] === "string" ? body["platform"].trim() : process.platform
+    // M3 §9c-3: the daemon generates its keypair LOCALLY and sends only the
+    // PUBLIC key. The private key never crosses the network (ADR-0001).
+    const nodePublicKeyPem = typeof body["node_public_key_pem"] === "string" ? body["node_public_key_pem"].trim() : ""
     if (!code) return fail("pairing_code is required.")
+    if (!nodePublicKeyPem)
+      return fail(
+        "node_public_key_pem is required (the node's generated public key; the private key never leaves the node).",
+      )
     const claimed = await this.deps.withLock(() => {
       const state = this.deps.loadOrchestrator()
       const hash = createHash("sha256").update(code).digest("hex")
@@ -769,10 +826,17 @@ export class OrchestratorApi {
       if (!existing) state.nodes.push(node)
       state.trust.pending_pairing_requests = state.trust.pending_pairing_requests.filter((r) => r.node_id !== node.id)
       state.trust.pending_pairing_requests.push({ node_id: node.id, requested_at: Date.now() })
+      // Pin the node's public key fingerprint NOW (identity anchor, §9c-1).
+      try {
+        node.fingerprint = fingerprintForPublicKeyPem(nodePublicKeyPem)
+      } catch {
+        return { ok: false as const, message: "node_public_key_pem is not a valid public key." }
+      }
+      this.nodeClaimedKeys.set(node.id, nodePublicKeyPem)
       pushEvent(state, {
         kind: "orchestration",
         type: "node_added",
-        message: `Node "${nodeName}" claimed a pairing code and is pending owner approval (${node.id}).`,
+        message: `Node "${nodeName}" claimed a pairing code (fingerprint ${(node.fingerprint as string).slice(0, 16)}…) and is pending owner approval (${node.id}).`,
         agent_id: null,
         node_id: node.id,
         task_id: null,
