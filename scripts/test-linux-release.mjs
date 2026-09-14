@@ -122,6 +122,8 @@ try {
   const payloadDir = join(extractDir, "opencomms")
 
   // 2. Exact approved layout (Lead amendment 5 + install.sh decision).
+  // SHA256SUMS ships in the payload; it cannot list itself (self-hash
+  // recursion), so the layout has 5 files but the checksum list has 4.
   const expected = ["opencomms", "opencomms.service", "install.sh", "README-linux.txt", "SHA256SUMS"]
   for (const name of expected) {
     check(existsSync(join(payloadDir, name)), `Tarball payload missing: opencomms/${name}`)
@@ -139,18 +141,21 @@ try {
   // Reviewer P3: normalize each line (trim trailing whitespace/CR) before
   // splitting, so a trailing-space or CRLF-contaminated file fails the
   // hash/name checks loudly instead of producing undefined name parts.
-  // SHA256SUMS ships INSIDE the payload (builder copies it there).
+  // SHA256SUMS ships INSIDE the payload (builder copies it there); it
+  // lists the 4 payload files, not itself.
   const sums = readFileSync(join(payloadDir, "SHA256SUMS"), "utf8")
     .split("\n")
     .map((line) => line.replace(/\r$/, "").trim())
     .filter((line) => line !== "")
-  check(sums.length === expected.length, `SHA256SUMS has ${sums.length} entries, expected ${expected.length}.`)
+  const checksummed = expected.filter((name) => name !== "SHA256SUMS")
+  check(sums.length === checksummed.length, `SHA256SUMS has ${sums.length} entries, expected ${checksummed.length}.`)
   for (const line of sums) {
     const parts = line.split(/ {2}/).map((part) => part.trim())
     check(parts.length === 2, `SHA256SUMS entry is malformed (expected "hash  name"): ${line}`)
     const [hash, name] = parts
     check(/^[0-9a-f]{64}$/.test(hash), `SHA256SUMS hash is malformed: ${hash}`)
     check(/^opencomms\//.test(name), `SHA256SUMS entry escapes payload dir: ${name}`)
+    check(existsSync(join(extractDir, name)), `SHA256SUMS references a file the tarball does not contain: ${name}`)
     const actual = sha256(join(extractDir, name))
     check(actual === hash, `SHA256 mismatch for ${name}.`)
   }

@@ -65,6 +65,8 @@ function buildLinuxTarball(node, repoRoot, outDir) {
       return `${createHash("sha256").update(readFileSync(file)).digest("hex")}  opencomms/${base}`
     })
     .join("\n")
+  // SHA256SUMS ships INSIDE the payload; it cannot list itself (self-hash
+  // recursion), so the file carries exactly the four payload entries.
   writeFileSync(join(staging, "SHA256SUMS"), `${sums}\n`, "utf8")
   // The smoke test and operators verify from the EXTRACTION dir — ship
   // SHA256SUMS inside the payload (it cannot verify the tarball it is in,
