@@ -535,3 +535,48 @@ priority-1 delivered) + ADR-0001/0003.
 - Orphan prevention (M2 pattern, remote edition): revoke asserts no work
   in flight to that node after the stop window; the audit event records
   the agent states at revoke time.
+
+### 6. M4 — Remote-spawn wiring + condition C enforcement (design addendum)
+
+Lead M4 tasking 2026-09-15. The FIRST remote action surfaces (spawn-on-
+remote, task-to-remote) land WITH condition C's server-side grant check
+— the carried binding closes here.
+
+- **The grant check (one enforcement point, reused by every remote
+  action):** `assertRemoteActionAllowed(state, { node_id, action })` —
+  pure, in the orchestrator layer (M1 pattern: server-side, never
+  GUI-side). Checks IN ORDER, each failure returning 403 + audit event
+  naming the failed check as the reason:
+  1. `node approved` — the node row exists, is remote, approved_at is set
+     (and not revoked), and `trust.approved_node_ids` contains the id.
+  2. `credential-valid` — `credential_expires_at` is set and in the
+     future (a revoked/expired credential is the CA's isRevoked gate +
+     this timestamp check together).
+  3. `grant-present` — `node.grants` contains the action's grant label
+     ("spawn" for agent-create, "tasks" for task-assign).
+  Four deny cases are test-asserted (unapproved / expired-credential /
+  revoked / ungranted) plus the pass case.
+- **Spawn-on-remote:** createAgent with a REMOTE node_id passes the grant
+  check, then dispatches to that node's daemon over the M3 transport
+  (session.create on the remote node's serve via the daemon's relay). The
+  agent record is identical in shape (same agt_* key, host_session_id
+  from the remote serve) with node_id = the remote node; channel joining
+  is unchanged (the engine never learns where the session runs).
+- **Task-to-remote:** tasks/assign to an agent whose node is remote
+  passes the grant check with the "tasks" grant, then rides the existing
+  message engine unchanged (the envelope routes to the agent's session
+  id regardless of node — the transport layer handles the relay).
+- **No engine changes:** the channel engine stays node-blind (invariant —
+  nodes are an orchestrator concern, not a channel concern).
+
+### 7. M4 — Daemon-mode finalization
+
+- `opencomms gui --server` is the CANONICAL headless form (loopback HTTP
+  orchestrator + API, no browser launch); Platform's `serve` alias maps
+  to the same code path (one implementation, two names — contract v0.1
+  §0 transport rule holds).
+- The daemon (`opencomms daemon run`) consumes the M3 transport client
+  contract; enrollment output prints the resolved WSS base (§9c-1).
+- Headless parity checklist (ADR-0005): every orchestrator API verb
+  reachable via CLI; GUI-only surfaces degrade gracefully; nothing
+  desktop-only required for core operation.
