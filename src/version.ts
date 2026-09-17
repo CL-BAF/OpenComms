@@ -10,9 +10,7 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { findSourceRepoRoot } from "./cli/paths.js"
-
-/** Static fallback mirrors package.json; bumped only when package.json is. */
-const FALLBACK_VERSION = "1.1.0"
+import { FALLBACK_VERSION } from "./version-constants.js"
 
 export const VERSION: string = (() => {
   const stamped = process.env["OPENCOMMS_VERSION"]?.trim()

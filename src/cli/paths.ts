@@ -25,6 +25,9 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
+// Single-source-of-truth fallback version (shared with src/version.ts —
+// Reviewer P3: never hand-sync two static copies).
+import { FALLBACK_VERSION } from "../version-constants.js"
 
 export type RuntimeMode = "sea-exe" | "node-source" | "unknown"
 
@@ -140,7 +143,9 @@ export function resolveVersion(opts: {
   } catch {
     /* fall through */
   }
-  return "1.1.0"
+  // Single source of truth for the static fallback (Reviewer P3: two
+  // hand-synced copies was the drift class that bit the 1.2.0 bump).
+  return FALLBACK_VERSION
 }
 
 /**
