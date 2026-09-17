@@ -50,6 +50,7 @@ import {
   newHandshakeNonce,
   sentBatches,
 } from "../../../src/orchestrator/node-server.js"
+import { verifyCoordinatorAuth, createProductionVerifyClient } from "../../../src/orchestrator/node-wire.js"
 import { generateKeyPairSync, createPrivateKey } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runtime.js"
@@ -885,6 +886,65 @@ test("node-server M3.5: enrollment output + auth headers contract", () => {
   assert.equal(headers["x-opencomms-node"], "node_abc")
   assert.equal(headers["authorization"], "Bearer tok")
   assert.equal(newHandshakeNonce().length, 32)
+})
+
+test("node-wire M3.5: COMPOSED auth chain at admission — revoked node rejected AT THE SERVER (binding B)", () => {
+  const dir = tmpProject()
+  try {
+    const ca = new NodeCertificateAuthority(dir)
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519")
+    const nodePublicPem = publicKey.export({ type: "spki", format: "pem" }).toString()
+    const nodePrivatePem = privateKey.export({ type: "pkcs8", format: "pem" }).toString()
+    const cert = ca.issue({
+      node_id: "node_revoked",
+      node_name: "w",
+      nodePublicKeyPem: nodePublicPem,
+      trust_tier: "persistent",
+    })
+    const nonce = newConnectionNonce()
+    const token = nodeBearerToken({
+      node_id: "node_revoked",
+      caPublicKeyPem: "",
+      nodePrivateKeyPem: nodePrivatePem,
+      nonce,
+    })
+    // (a) The three checks compose IN ORDER: cert → bearer → revocation.
+    // Fresh (non-revoked) cert: the chain passes end-to-end.
+    const fresh = verifyCoordinatorAuth({ cert, certPem: nodePublicPem, token, nonce, ca })
+    assert.deepEqual(fresh, { ok: true, node_id: "node_revoked" })
+    // (b) INTEGRATION: revoke, then run admission through the PRODUCTION
+    // verifyClient — the revoked node is rejected AT THE ADMISSION POINT
+    // (before onAuthenticated could ever fire).
+    ca.revoke("node_revoked")
+    const verifyClient = createProductionVerifyClient({
+      ca,
+      certsByNodeId: new Map([["node_revoked", { ...cert, pem: nodePublicPem }]]),
+    })
+    const admission = verifyClient({
+      reqHeaders: {
+        "x-opencomms-node": "node_revoked",
+        "x-opencomms-nonce": nonce,
+        authorization: `Bearer ${token}`,
+      },
+      url: new URL("wss://relay.example/node"),
+    })
+    assert.equal(admission.ok, false)
+    assert.match(admission.reason, /revoked/)
+    // A revoked node whose cert is ALSO expired is still rejected with the
+    // cert reason first (order proven: cert → bearer → revocation).
+    const expired = { ...cert, issued_at: Date.now() - 20_000, expires_at: Date.now() - 10_000 }
+    const certReason = verifyCoordinatorAuth({ cert: expired, certPem: nodePublicPem, token, nonce, ca })
+    assert.equal(certReason.ok, false)
+    assert.match(certReason.reason, /expired/)
+    // (c) STRUCTURAL no-gate-skipping: verifyCoordinatorAuth's body is the
+    // composed chain — every rejection names WHICH check fired (audit
+    // evidence), and a missing header can never reach admission.
+    const missing = verifyClient({ reqHeaders: {}, url: new URL("wss://relay.example/node") })
+    assert.equal(missing.ok, false)
+    assert.match(missing.reason, /missing auth headers/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test("orchestrator feed: emit persists via locked mutate and broadcasts with seq", async () => {
