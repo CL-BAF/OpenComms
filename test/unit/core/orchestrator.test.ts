@@ -37,6 +37,7 @@ import {
   newConnectionNonce,
   pendingForNode,
   advanceCursor,
+  dedupeForNode,
   nodeWssUrl,
   NODE_GIVE_UP_MS,
 } from "../../../src/orchestrator/node-transport.js"
@@ -52,6 +53,7 @@ import {
 import { generateKeyPairSync, createPrivateKey } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runtime.js"
+import type { RemoteEnvelope } from "../../../src/orchestrator/node-transport.js"
 import type { AgentRecord, AgentRuntimeStatus } from "../../../src/orchestrator/state.js"
 
 /** Fake runtime for API tests: no live serve needed; deterministic ids. */
@@ -791,6 +793,39 @@ test("node-transport M3: cursor+ack window (P3-2 composition: redelivery bounded
   assert.equal(cursor.acked_seq, 3)
   cursor = advanceCursor(cursor, 2, Date.now())
   assert.equal(cursor.acked_seq, 3, "stale ack rewound the cursor")
+})
+
+test("node-transport M3.5: dedupeForNode — node-side dedup (P2-A single implementation point)", () => {
+  const envelopes = [
+    { seq: 1, node_id: "n", framed: "one", message_id: "m1" },
+    { seq: 2, node_id: "n", framed: "two", message_id: "m2" },
+    { seq: 3, node_id: "n", framed: "three", message_id: "m3" },
+  ]
+  // Node has acked through 2: seq 1 and 2 are dropped (already processed),
+  // seq 3 survives — idempotent redelivery is a no-op.
+  assert.deepEqual(
+    dedupeForNode(envelopes, 2).map((e) => e.seq),
+    [3],
+  )
+  // Fresh node (acked 0): everything executes, in sequence order.
+  assert.deepEqual(
+    dedupeForNode(envelopes, 0).map((e) => e.seq),
+    [1, 2, 3],
+  )
+  // Fully-caught-up node: nothing executes.
+  assert.equal(dedupeForNode(envelopes, 3).length, 0)
+  // Out-of-order input is normalized to sequence order.
+  const shuffled: RemoteEnvelope[] = [envelopes[2]!, envelopes[0]!, envelopes[1]!]
+  assert.deepEqual(
+    dedupeForNode(shuffled, 0).map((e) => e.seq),
+    [1, 2, 3],
+  )
+  // Idempotent: running the dedup twice changes nothing.
+  const once = dedupeForNode(envelopes, 1)
+  assert.deepEqual(
+    dedupeForNode(once, 1).map((e) => e.seq),
+    [2, 3],
+  )
 })
 
 test("node-server M3.5: NodeTransportServer contract — auth gate, deliver, ack routing", async () => {

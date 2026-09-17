@@ -133,6 +133,19 @@ export function advanceCursor(
 }
 
 /**
+ * NODE-side dedup (P2-A single implementation point, Lead-owned seam): the
+ * NODE drops envelopes at or below its own acked cursor — idempotent
+ * redelivery is a no-op, out-of-order/stale envelopes are dropped before
+ * execution. Platform's run loop CALLS this at the top of every batch; it
+ * never re-implements the logic (cursor semantics live in exactly one
+ * place per side: advanceCursor here for the coordinator, dedupeForNode
+ * here for the node).
+ */
+export function dedupeForNode(envelopes: RemoteEnvelope[], nodeAckedSeq: number): RemoteEnvelope[] {
+  return envelopes.filter((e) => e.seq > nodeAckedSeq).sort((a, b) => a.seq - b.seq)
+}
+
+/**
  * Bounded give-up (design §9c-4, Remote Control precedent ~10 min): a node
  * unreachable for longer than GIVE_UP_MS is marked offline by the
  * supervisor; re-registration on return is a fresh handshake (never silent
