@@ -69,6 +69,65 @@ Windows: download `OpenComms-Setup-<version>.exe` from
 `opencomms update` on Windows prints the installer pointer (self-replace of a
 running exe is refused by design).
 
+## Desktop GUI (Tauri, native)
+
+**Windows (v1.3.1-gui-native and later):** download the
+`OpenComms Tauri Desktop GUI` NSIS installer from
+[GitHub Releases](https://github.com/CL-BAF/OpenComms/releases) — per-user,
+no admin required. The installer bundles the Node coordinator sidecar beside
+the desktop app; launch from the Start Menu and the native window opens with
+the bundled console UI (no browser, no URL bar). Verify via Settings →
+Diagnostics (healthy) — the coordinator is live. Uninstall removes the app +
+sidecar; project `.opencomms` state is NEVER removed.
+
+**Linux**: deb/AppImage bundle targets are configured (built by the Linux CI
+on tag pushes); install the bundle for your distro.
+
+Two installer artifacts exist, clearly named:
+- **OpenComms Tauri Desktop GUI installer** — the native desktop app
+  (Windows NSIS / Linux deb or AppImage) with the coordinator sidecar inside.
+- **OpenComms CLI installer** (Inno Setup on Windows / install.sh on Linux) —
+  the CLI/headless-only build (no desktop GUI).
+
+## Release verification checklist
+
+**Windows desktop GUI (Tauri NSIS installer)**
+1. Download the `OpenComms Tauri Desktop GUI` NSIS installer from the
+   release.
+2. Run the installer (per-user, no admin). Verify: install dir contains
+   `opencomms-coordinator.exe` (the Node coordinator sidecar) beside the
+   desktop app.
+3. Launch "OpenComms Tauri Desktop GUI" from the Start Menu. Expected: the
+   native window opens with the bundled console UI (no browser, no URL bar).
+4. Verify the coordinator is live: Settings → Diagnostics shows healthy.
+5. Uninstall (Start Menu → Uninstall OpenComms) removes the app + sidecar;
+   project `.opencomms` state is NEVER removed.
+
+**CLI / headless (server Linux)**
+1. One-command install (curl|bash above) — verifies SHA256 checksums +
+   executes the binary BEFORE installing (verify-then-install), atomic
+   replace with rollback.
+2. `opencomms version && opencomms doctor` — doctor includes the Node
+   readiness section (runtime discovery, WSL, node identity, daemon unit).
+3. Headless daemon: `opencomms serve --project /path --server --no-open`
+   (or the systemd user unit via `install.sh --service`).
+4. `opencomms update` (or `--check`) — verify-then-extract with rollback.
+5. Remote-node enrollment: `opencomms daemon enroll --code <CODE> --name
+   <label>` — prints the retention + blast-radius disclosure, claims, polls
+   for approval.
+
+**CLI parity with the GUI**
+`opencomms agent list|create|stop|restart|status`, `opencomms task
+list|assign`, `opencomms members remove`, `opencomms serve` — every GUI
+surface has a CLI verb ([docs/gui-cli-parity.md](docs/gui-cli-parity.md));
+`session create` is the declared honest PARTIAL (no loopback route in M4;
+GUI/API cover it).
+
+**Update safety**
+`opencomms update --check` (read-only) / `opencomms update` (verify-then-
+extract, atomic replace, rollback; Linux-only self-update — Windows uses
+the installer).
+
 ## Supported hosts
 
 | Host | Setup | Status | How members receive messages |
