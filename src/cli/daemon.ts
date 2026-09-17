@@ -31,7 +31,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "
 import { join, resolve } from "node:path"
 import { randomBytes } from "node:crypto"
 import { fingerprintForPublicKeyPem } from "../orchestrator/node-ca.js"
-import { NODE_GIVE_UP_MS, nodeBearerToken, nodeWssUrl } from "../orchestrator/node-transport.js"
+import {
+  NODE_GIVE_UP_MS,
+  nodeBearerToken,
+  nodeWssUrl,
+  dedupeForNode,
+  type RemoteEnvelope,
+} from "../orchestrator/node-transport.js"
 import { WatchdogSpeaker, type NodeDaemonClient } from "../orchestrator/node-server.js"
 
 export interface DaemonCliResult {
@@ -272,12 +278,31 @@ export async function runDaemon(argv: string[], deps: DaemonRunDeps): Promise<Da
     await client.connect()
     await client.heartbeat()
     watchdog.notifyReady()
-    let cursor = 0
+    // P3-2 cursor dedup: envelopes at or below the ACKed cursor are
+    // redelivery no-ops — Backend's dedupeForNode (node-transport.ts) is
+    // the single implementation point; the loop consults the local acked
+    // cursor for the accept→ack gate and advances it ONLY after the ack.
+    let ackedSeq = 0
     let running = true
+    const stop = (): void => {
+      running = false
+    }
+    deps.stopHook?.(stop)
+    // Real signals set the same flag (production); SIGTERM/POSIX-only.
+    const signalHandler = (): void => {
+      running = false
+    }
+    process.on("SIGTERM", signalHandler)
+    process.on("SIGINT", signalHandler)
     client.onDeliver((framed, seq) => {
-      // P3-2 composition: accept → ack. The cursor makes redelivery a no-op.
-      void framed
-      client.ack(seq)
+      // P3-2 composition: Backend's dedupeForNode is the single dedup
+      // implementation point — the loop builds the one-envelope batch,
+      // dedupes against the local acked cursor, and acks only survivors
+      // (monotonic cursor advance after the ack).
+      const accepted = dedupeForNode([{ seq, node_id: identity.node_id, framed, message_id: `seq-${seq}` }], ackedSeq)
+      if (accepted.length === 0) return
+      ackedSeq = Math.max(ackedSeq, accepted[0]!.seq)
+      client.ack(accepted[0]!.seq)
     })
     const heartbeatTimer = setInterval(() => {
       void client.heartbeat()
@@ -286,6 +311,8 @@ export async function runDaemon(argv: string[], deps: DaemonRunDeps): Promise<Da
     while (running) {
       await new Promise((r) => setTimeout(r, 1_000))
     }
+    process.removeListener("SIGTERM", signalHandler)
+    process.removeListener("SIGINT", signalHandler)
     clearInterval(heartbeatTimer)
     return ok("daemon loop ended")
   } catch (error) {
@@ -300,6 +327,8 @@ export interface DaemonRunDeps {
   /** Injected WSS client (NodeDaemonClient contract, node-server.ts). */
   createClient?: () => NodeDaemonClient
   heartbeatIntervalMs?: number
+  /** Test hook: called once with the stop() function after dial. */
+  stopHook?: (stop: () => void) => void
 }
 
 /**
