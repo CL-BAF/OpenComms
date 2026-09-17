@@ -1,7 +1,7 @@
 {
   "$schema": "..\\gen\\schemas\\capabilities.json",
-  "identifier": "spike-capabilities",
-  "description": "SPIKE (M0): deny-by-default IPC; the ONLY grant is spawning the bundled coordinator sidecar with a fixed arg validator. No broad shell access.",
+  "identifier": "default-capabilities",
+  "description": "Deny-by-default IPC for the OpenComms Tauri Desktop GUI: the ONLY grant is spawning the bundled OpenComms coordinator sidecar with fixed argument validators (gui --port N --server --project <dir>). No broad shell, filesystem, or network access.",
   "windows": ["main"],
   "permissions": [
     {

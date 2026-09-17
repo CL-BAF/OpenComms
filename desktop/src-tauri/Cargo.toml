@@ -1,7 +1,7 @@
 [package]
 name = "opencomms-desktop"
-version = "0.0.1"
-description = "SPIKE (M0, disposable): Tauri v2 shell wrapping the existing OpenComms loopback GUI server. Owns no business logic."
+version = "1.1.0"
+description = "OpenComms Tauri Desktop GUI - the owner-facing desktop shell. Owns no business logic; consumes the Orchestrator API (contract v0.3) over loopback."
 edition = "2021"
 
 [build-dependencies]

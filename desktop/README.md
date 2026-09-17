@@ -1,31 +1,44 @@
-# OpenComms Desktop — SPIKE (M0, disposable)
+# OpenComms Tauri Desktop GUI
 
-**Status:** spike, clearly marked per working rule 4. Not production code. Expect
-replacement by the real sidecar/packaging decision after M0 review.
+The desktop application for OpenComms: a Tauri v2 shell (Windows + Linux)
+hosting the orchestrator console. This is **not** a web GUI — the loopback
+HTML console served by `opencomms gui` remains the documented CLI/headless
+fallback surface; the Tauri app is the owner-facing desktop GUI.
 
-## What this proves
+## What it does
 
-A minimal Tauri v2 shell (`desktop/src-tauri`) that:
-
-1. Spawns the **existing** loopback GUI server as a child process
-   (`node dist/cli/main.js gui --port 1455 --server --project <repo root>`).
+1. Spawns the **existing** OpenComms coordinator server as a child process
+   (`node dist/cli/main.js gui --port 1455 --server --project <repo root>`
+   in dev; the real per-triple Node coordinator sidecar in release builds).
    The child is killed on shell exit via `Drop`.
-2. Opens a webview pointed at `http://127.0.0.1:1455/` (see
-   `src-tauri/tauri.conf.json`), so the **existing** console UI
-   (Sessions / Saved / Integrations / Diagnostics / Settings) renders
-   unmodified inside the desktop shell.
-3. Owns **no business logic** — the shell only wraps the server, per the
+2. Opens a webview pointed at `http://127.0.0.1:1455/`, rendering the full
+   seven-route console: **Overview / Sessions / Team / Tasks / Nodes /
+   Activity / Settings** — live orchestrator surfaces (docs/gui-ia.md).
+3. Owns **no business logic** — the shell only wraps the server and consumes
+   the Orchestrator API (docs/orchestrator-api.md contract v0.3), per the
    Decision Log in `docs/OVERHAUL_PLAN.md`.
+
+## Security posture
+
+- Real CSP pinned to the loopback origin (`default-src`/`connect-src`
+  `'self' http://127.0.0.1:1455`, `script-src 'self'`, no `unsafe-eval`).
+- Deny-by-default capabilities: the ONLY grant is `shell:allow-spawn` for
+  the bundled coordinator sidecar with fixed arg validators.
+- Updater wired from M0 (`createUpdaterArtifacts: true`,
+  `windows.installMode: "passive"`); signing happens in CI — no key
+  material ever lives in this repo.
 
 ## Prerequisites (Windows-first)
 
-- Repo built: `npm run build` at the repo root (spike loads `dist/cli/main.js`).
+- Repo built: `npm run build` at the repo root (the shell loads
+  `dist/cli/main.js` in dev).
 - Node.js available on PATH (`node.exe`).
 - Rust toolchain (stable) + Tauri v2 prerequisites:
   - Windows: WebView2 (preinstalled on Win11) + Visual Studio Build Tools (C++).
-  - Linux (stubbed here, verified later): `libwebkit2gtk-4.1-dev`, `build-essential`, `curl`, `wget`, `libssl-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`.
+  - Linux: `libwebkit2gtk-4.1-dev`, `build-essential`, `curl`, `wget`,
+    `libssl-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`.
 
-## Run the spike
+## Run (dev)
 
 ```powershell
 cd desktop
@@ -33,34 +46,28 @@ npm install
 npm run tauri dev
 ```
 
-The window titled "OpenComms" should open and render the existing console.
-Diagnostics page will show `Loopback port 1455` when the server is up.
+The window titled "OpenComms" opens and renders the full orchestrator
+console. Diagnostics (under Settings) shows the loopback port when the
+server is up.
 
-## What is intentionally NOT here yet
+## Release-readiness state (owner directive)
 
-- Bundling (`bundle.active = false`) — installer work is M5 / Platform's lane.
-- Sidecar packaging of the Node runtime (spike assumes system `node`;
-  `binaries/*.exe` is a marked stand-in so `externalBin` validates — gitignored).
-- Any Orchestrator API consumption (contract v0 endpoints land with Backend in M1).
+- [x] Shell wraps the live server; 7 routes render real endpoints.
+- [x] CSP + capabilities + updater config (no key material in repo).
+- [x] Node/trust-gate token-entry flows (Reviewer-approved posture).
+- [x] Real Node coordinator sidecar: `binaries/opencomms-coordinator-<triple>.exe`
+      built from the pinned 22.14.0 toolchain (Platform artifact, per-triple
+      named; verified serving the full console + orchestrator API standalone).
+- [ ] CI-signed release artifacts (tag naming: **OpenComms Tauri Desktop
+      GUI**; Reviewer gates the artifact + naming).
 
-## Reviewer M0 conditions (both closed)
+## Linux
 
-1. **`desktop/.gitignore`** added before any `desktop/` commit: `target/`,
-   `gen/schemas/`, `dist-shell/`, `node_modules/`, `binaries/*.exe` are
-   ignored; `binaries/README.md` + `Cargo.lock` stay tracked. Verified via
-   `git status --porcelain --untracked-files=all desktop` (12 source files).
-2. **CSP set** in `tauri.conf.json` — `default-src`/`connect-src` pinned to
-   `'self' http://127.0.0.1:1455`, `script-src 'self'`, no `unsafe-eval`.
-   The webview talks ONLY to the loopback server; no other origins.
+Prereqs above; config exists in-tree. Bundling verification is scheduled
+with the release gates (Platform co-verification).
 
-## Linux (stubbed, verified later with Platform)
+## Never-stage list (desktop/)
 
-Prereqs: `libwebkit2gtk-4.1-dev build-essential curl wget libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev`.
-Config exists; verification is pending a Linux toolchain.
-
-## Spike teardown checklist (post-M0)
-
-- [ ] Reviewer/Lead verdict on shell-hosts-server approach (sidecar vs managed child)
-- [ ] Replace `spawn_gui_server()` heuristic (CARGO_MANIFEST_DIR walk) with real sidecar resolution
-- [ ] Decide port strategy (fixed 1455 vs negotiated free port passed to webview)
-- [ ] Then, and only then, begin the real IA build-out (docs/gui-ia.md)
+`src-tauri/target/`, `src-tauri/gen/schemas/`, `dist-shell/`,
+`node_modules/`, `binaries/*.exe` are gitignored; `binaries/README.md` and
+`Cargo.lock` stay tracked.
