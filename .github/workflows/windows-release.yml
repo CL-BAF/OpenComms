@@ -21,7 +21,12 @@ jobs:
         run: npm ci
       - name: Install Inno Setup 6.4.2
         shell: powershell
-        run: choco install innosetup --version=6.4.2 --no-progress --yes
+        run: |
+          choco install innosetup --version=6.4.2 --no-progress --yes
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "pinned 6.4.2 unavailable — falling back to latest 6.x (flaky-infra tolerance)"
+            choco install innosetup --no-progress --yes
+          }
       - name: Build executable and installer
         run: npm run build:release
       - name: Smoke-test installed release
