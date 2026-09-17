@@ -52,6 +52,14 @@ import {
   sentBatches,
 } from "../../../src/orchestrator/node-server.js"
 import { verifyCoordinatorAuth, createProductionVerifyClient } from "../../../src/orchestrator/node-wire.js"
+import {
+  handshakeAnnouncement,
+  runBridge,
+  BRIDGE_IDENTITY,
+  BRIDGE_PROTOCOL,
+  BRIDGE_COMMANDS,
+  type BridgeDeps,
+} from "../../../src/orchestrator/bridge.js"
 import { generateKeyPairSync, createPrivateKey } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import type { AgentRuntime, SpawnRequest } from "../../../src/orchestrator/runtime.js"
@@ -1524,6 +1532,90 @@ test("ensureServe: an 'error'-event child (post-spawn error) settles without han
     })
     assert.equal(result.ok, false)
     assert.ok(result.detail.length > 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("bridge M4.5: handshake announcement + section-2 surface completeness", () => {
+  const announcement = JSON.parse(handshakeAnnouncement())
+  assert.equal(announcement.hello, BRIDGE_IDENTITY)
+  assert.equal(announcement.protocol, BRIDGE_PROTOCOL)
+  assert.ok(announcement.version.length > 0)
+  assert.equal(BRIDGE_COMMANDS.length, 24)
+  for (const cmd of [
+    "nodes_list",
+    "agents_list",
+    "tasks_list",
+    "events_list",
+    "trust_view",
+    "agent_create",
+    "node_approve",
+    "node_revoke",
+  ]) {
+    assert.ok((announcement.api as string[]).includes(cmd), `handshake missing ${cmd}`)
+  }
+  assert.ok(!BRIDGE_COMMANDS.some((c) => c.includes("token") || c.includes("secret")))
+})
+
+test("bridge M4.5: run loop - handshake FIRST, pre-ack stdin ignored, one-line-per-request", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const deps = testDeps(store, dir)
+    const written: string[] = []
+    const errors: string[] = []
+    const bridgeDeps: BridgeDeps = {
+      api: new OrchestratorApi(deps),
+      guiReads: {
+        sessions: () => ({ ok: true, message: "ok", data: { sessions: [] } }),
+        sessionMembers: () => ({ ok: true, message: "ok", data: { agents: [] } }),
+        workspaceState: () => ({ ok: true, message: "ok", data: {} }),
+        integrationsList: () => ({ ok: true, message: "ok", data: [] }),
+        diagnostics: () => ({ ok: true, message: "ok", data: {} }),
+      },
+      guiWrites: {
+        sessionCreate: () => Promise.resolve({ ok: true, message: "created" }),
+        sessionSave: () => Promise.resolve({ ok: true, message: "saved" }),
+        sessionResume: () => Promise.resolve({ ok: true, message: "resumed" }),
+        sessionDelete: () => Promise.resolve({ ok: true, message: "deleted" }),
+        setSessionPaused: () => Promise.resolve({ ok: true, message: "paused" }),
+        memberRemove: () => Promise.resolve({ ok: true, message: "removed" }),
+        workspaceSelect: () => Promise.resolve({ ok: true, message: "selected" }),
+      },
+      write: (line) => written.push(line),
+      error: (m) => errors.push(m),
+    }
+    const { Readable } = await import("node:stream")
+    const stdin = new Readable({ read() {} })
+    const done = runBridge(bridgeDeps, stdin)
+    // FIRST output line is the handshake (spoken before any input).
+    await new Promise((r) => setTimeout(r, 50))
+    assert.equal(written.length, 1)
+    assert.equal(JSON.parse(written[0]!).hello, BRIDGE_IDENTITY)
+    // Pre-ack input is IGNORED (gate A: no partial execution).
+    stdin.push('{"id":"1","cmd":"agents_list","args":{}}\n')
+    await new Promise((r) => setTimeout(r, 50))
+    assert.equal(written.length, 1, "command executed before handshake ack")
+    // Host acks the handshake.
+    stdin.push('{"hello_ok":true}\n')
+    await new Promise((r) => setTimeout(r, 50))
+    // Commands now dispatch: agents_list via OrchestratorApi.
+    stdin.push('{"id":"r1","cmd":"agents_list","args":{}}\n')
+    await new Promise((r) => setTimeout(r, 50))
+    assert.ok(written.length >= 2)
+    const response = JSON.parse(written[written.length - 1]!)
+    assert.equal(response.id, "r1")
+    assert.equal(response.ok, true)
+    // Unknown command => typed error (gate C).
+    stdin.push('{"id":"r2","cmd":"exec_shell","args":{}}\n')
+    await new Promise((r) => setTimeout(r, 50))
+    const unknown = JSON.parse(written[written.length - 1]!)
+    assert.equal(unknown.id, "r2")
+    assert.equal(unknown.ok, false)
+    assert.match(unknown.message, /unknown command/)
+    stdin.push(null)
+    await done
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
