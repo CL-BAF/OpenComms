@@ -37,6 +37,7 @@ import { WIZARD_PS1 } from "./wizard.js"
 import { iconIcoBytes } from "./icon-base64.js"
 import { updateCommand } from "./update.js"
 import { runAgentCommand } from "./agent.js"
+import { taskList, taskAssign, membersRemove, sessionCreate } from "./tasks.js"
 import { VERSION } from "../version.js"
 
 /** Package version, derived from package.json so the CLI can never drift. */
@@ -824,6 +825,11 @@ export function runCli(argv: string[]): CliResult {
     case "agent":
       // Async (loopback HTTP): handled on the async path below.
       return fail("Agent commands are async: await runAgentCommand(...) (CLI main handles this).")
+    case "task":
+    case "members":
+    case "serve":
+      // Async (loopback HTTP / thin alias): handled on the async path below.
+      return fail("Task/member/serve commands are async: see the async dispatch in the CLI entry (main handles this).")
     case "join-command":
     case "join":
       return runJoinCommand(projectDir, positional, flagValue(tokens, "--host"))
@@ -890,6 +896,24 @@ if (isCliEntry) {
     }).then(emit)
   } else if (argv[0] === "agent") {
     void runAgentCommand(argv.slice(1), projectDirFromFlag(argv, "--project")).then(emit)
+  } else if (argv[0] === "task") {
+    const sub = (argv[1] ?? "").toLowerCase()
+    if (sub === "list") {
+      void taskList(argv.slice(2)).then(emit)
+    } else if (sub === "assign") {
+      void taskAssign(argv.slice(2)).then(emit)
+    } else {
+      emit({ code: 2, output: "Usage: opencomms task <list|assign> [--json] [...]" })
+    }
+  } else if (argv[0] === "members" && argv[1] === "remove") {
+    void membersRemove(argv.slice(2)).then(emit)
+  } else if (argv[0] === "session" && argv[1] === "create") {
+    void sessionCreate(argv.slice(2)).then(emit)
+  } else if (argv[0] === "serve") {
+    // Thin alias (M0 decision): systemd-friendly name for the daemon mode.
+    argv[0] = "gui"
+    const guiResult = runCli(argv)
+    if (guiResult.output) process.stdout.write(guiResult.output + "\n")
   } else {
     emit(runCli(argv))
   }
