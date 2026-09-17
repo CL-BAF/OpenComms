@@ -12,6 +12,8 @@ on:
       - "package-lock.json"
       - "install.mjs"
       - ".github/workflows/linux-release.yml"
+    tags:
+      - "v*"
   pull_request:
     branches: ["main"]
 
