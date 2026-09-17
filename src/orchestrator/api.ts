@@ -114,6 +114,59 @@ export interface OrchestratorApiDeps {
 const fail = (message: string): ApiResult => ({ ok: false, message })
 const pass = <T>(message: string, data?: T): ApiResult => ({ ok: true, message, data })
 
+/**
+ * M4 §9c-6 / condition C — the ONE server-side enforcement point for
+ * remote actions (M1 pattern: server-side, never GUI-side).
+ *
+ * Ordered checks, each failure naming WHICH check failed (audit evidence):
+ *   1. node-approved  — remote, approval set, not revoked, in approved list
+ *   2. credential-valid — expiry stamped AND in the future (composed with
+ *      the CA isRevoked gate, which the transport also enforces)
+ *   3. grant-present — node.grants contains the action's grant label
+ *
+ * Design: docs/orchestrator-design.md §9c-6; Reviewer's four deny cases
+ * (unapproved / expired / revoked / ungranted) + pass case are test-
+ * asserted. The channel engine stays node-blind — this gate lives only in
+ * the orchestrator layer.
+ */
+export type RemoteAction = "spawn" | "tasks"
+
+export function assertRemoteActionAllowed(
+  state: OrchestratorState,
+  input: { node_id: string; action: RemoteAction },
+  deps: { ca?: NodeCertificateAuthority; projectDir?: string } = {},
+): { ok: true } | { ok: false; reason: string } {
+  const grantLabel = input.action === "spawn" ? "spawn" : "tasks"
+  const node = state.nodes.find((n) => n.id === input.node_id)
+  // 1. node-approved
+  if (!node || node.kind !== "remote") return { ok: false, reason: "node not approved (unknown or not a remote node)" }
+  if (node.approved_at === null || node.approved_by !== "owner") {
+    return { ok: false, reason: "node not approved (owner approval missing or revoked)" }
+  }
+  if (!state.trust.approved_node_ids.includes(node.id)) {
+    return { ok: false, reason: "node not approved (not in the approved list)" }
+  }
+  if (node.status === "offline") return { ok: false, reason: "node not approved (node offline/revoked)" }
+  // 2. credential-valid — BOTH layers compose (Reviewer code-gate): the
+  //    timestamp check here AND the CA's load-bearing isRevoked gate. The
+  //    CA is injected when the caller has it (api paths always do); a
+  //    caller without the CA gets the timestamp layer only.
+  if (typeof node.credential_expires_at !== "number") {
+    return { ok: false, reason: "credential invalid (no issued certificate)" }
+  }
+  if (node.credential_expires_at <= Date.now()) {
+    return { ok: false, reason: "credential invalid (certificate expired)" }
+  }
+  if (deps.ca && deps.ca.isRevoked(node.id)) {
+    return { ok: false, reason: "credential invalid (certificate revoked)" }
+  }
+  // 3. grant-present
+  if (!node.grants.includes(grantLabel)) {
+    return { ok: false, reason: `grant missing ("${grantLabel}" not in node grants)` }
+  }
+  return { ok: true }
+}
+
 function redactValue(text: string, secrets: string[]): string {
   let out = text
   for (const secret of secrets) {
@@ -294,8 +347,31 @@ export class OrchestratorApi {
     const node = state0.nodes.find(
       (n) => n.id === (typeof body["node_id"] === "string" ? body["node_id"] : state0.local_node_id),
     )
-    if (!node || node.kind !== "local") {
-      return fail("M1 spawns on the local node only; remote nodes are explicit opt-in (M3).")
+    if (!node) return fail(`Unknown node "${String(body["node_id"] ?? "")}".`)
+    // M4 §9c-6 / condition C: a REMOTE spawn passes the server-side grant
+    // check BEFORE any dispatch (ordered checks, 403 + audit on failure).
+    if (node.kind === "remote") {
+      const grantCheck = assertRemoteActionAllowed(
+        state0,
+        { node_id: node.id, action: "spawn" },
+        { ca: this.ca(), projectDir: this.deps.projectDir },
+      )
+      if (!grantCheck.ok) {
+        await this.deps.withLock(() => {
+          const state = this.deps.loadOrchestrator()
+          pushEvent(state, {
+            kind: "orchestration",
+            type: "trust_denied",
+            message: `Remote spawn denied for node ${node.id}: ${grantCheck.reason}`,
+            agent_id: null,
+            node_id: node.id,
+            task_id: null,
+          })
+          this.deps.saveOrchestrator(state)
+          return 0
+        })
+        return { ok: false, message: `Remote spawn denied (${grantCheck.reason}).` }
+      }
     }
     // Contract v0.3 §9: exactly ONE designated lead per project, immutable.
     const existingLead = designatedLead(state0)
@@ -977,6 +1053,32 @@ export class OrchestratorApi {
     const state = this.deps.loadOrchestrator()
     const agent = state.agents.find((a) => a.id === agentId)
     if (!agent) return fail(`Unknown agent "${agentId}".`)
+    // M4 §9c-6 / condition C: a task to an agent on a REMOTE node passes
+    // the server-side grant check BEFORE any dispatch.
+    const agentNode = state.nodes.find((n) => n.id === agent.node_id)
+    if (agentNode && agentNode.kind === "remote") {
+      const grantCheck = assertRemoteActionAllowed(
+        state,
+        { node_id: agentNode.id, action: "tasks" },
+        { ca: this.ca(), projectDir: this.deps.projectDir },
+      )
+      if (!grantCheck.ok) {
+        await this.deps.withLock(() => {
+          const fresh = this.deps.loadOrchestrator()
+          pushEvent(fresh, {
+            kind: "orchestration",
+            type: "trust_denied",
+            message: `Remote task assignment denied for node ${agentNode.id}: ${grantCheck.reason}`,
+            agent_id: agent.id,
+            node_id: agentNode.id,
+            task_id: null,
+          })
+          this.deps.saveOrchestrator(fresh)
+          return 0
+        })
+        return { ok: false, message: `Remote task assignment denied (${grantCheck.reason}).` }
+      }
+    }
     if (agent.status !== "running" && agent.status !== "idle") {
       return fail(`Agent ${agent.name} is ${agent.status}; only running/idle agents can be assigned tasks.`)
     }

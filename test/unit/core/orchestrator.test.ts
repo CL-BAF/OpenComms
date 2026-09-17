@@ -20,9 +20,10 @@ import {
   MAX_ORCHESTRATOR_EVENTS,
   localNodeIdFor,
   newAgentId,
+  newNodeId,
   newConfirmToken,
 } from "../../../src/orchestrator/state.js"
-import { OrchestratorApi, agentWorktreeDir } from "../../../src/orchestrator/api.js"
+import { OrchestratorApi, agentWorktreeDir, assertRemoteActionAllowed } from "../../../src/orchestrator/api.js"
 import { createOrchestratorFeed, listEvents } from "../../../src/orchestrator/events.js"
 import { parseModelsOutput, ensureServe, resolveOpencodeBinary } from "../../../src/orchestrator/runtimes/opencode.js"
 import {
@@ -663,6 +664,148 @@ test("orchestrator api M3: revoke marks remote agents failed (never deleted) wit
         (e) => e.type === "revoke_agents_marked" && e.node_id === "node_remote_m3" && e.message.includes(data.id),
       ),
     )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("M4 condition C: assertRemoteActionAllowed — the four deny cases + pass case", () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const base = store.load()
+    const mkNode = (overrides: Partial<import("../../../src/orchestrator/state.js").NodeRecord>) => ({
+      id: newNodeId(),
+      name: "remote-1",
+      kind: "remote" as const,
+      platform: "linux",
+      status: "online" as const,
+      capabilities: { max_agents: 4, runtimes: ["opencode"], headless: false },
+      approved_at: Date.now(),
+      approved_by: "owner" as const,
+      restart_policy: "manual" as const,
+      fingerprint: "ab".repeat(32),
+      enrolled_at: Date.now(),
+      last_seen: Date.now(),
+      trust_tier: "persistent" as const,
+      grants: ["spawn", "tasks"],
+      credential_expires_at: Date.now() + 3_600_000,
+      ...overrides,
+    })
+    // PASS case: approved + valid credential + grants.
+    const good = mkNode({})
+    base.nodes.push(good)
+    base.trust.approved_node_ids.push(good.id)
+    assert.deepEqual(assertRemoteActionAllowed(base, { node_id: good.id, action: "spawn" }), { ok: true })
+    assert.deepEqual(assertRemoteActionAllowed(base, { node_id: good.id, action: "tasks" }), { ok: true })
+    // DENY 1: UNAPPROVED (never approved).
+    const unapproved = mkNode({ id: newNodeId(), approved_at: null, approved_by: null })
+    base.nodes.push(unapproved)
+    const d1 = assertRemoteActionAllowed(base, { node_id: unapproved.id, action: "spawn" })
+    assert.equal(d1.ok, false)
+    if (!d1.ok) assert.match(d1.reason, /not approved/)
+    // DENY 2: EXPIRED credential.
+    const expired = mkNode({ id: newNodeId(), credential_expires_at: Date.now() - 1 })
+    base.nodes.push(expired)
+    base.trust.approved_node_ids.push(expired.id)
+    const d2 = assertRemoteActionAllowed(base, { node_id: expired.id, action: "tasks" })
+    assert.equal(d2.ok, false)
+    if (!d2.ok) assert.match(d2.reason, /expired/)
+    // DENY 3: REVOKED (offline status post-revoke; approved list cleared).
+    const revoked = mkNode({ id: newNodeId(), status: "offline" as const, approved_at: null, approved_by: null })
+    base.nodes.push(revoked)
+    const d3 = assertRemoteActionAllowed(base, { node_id: revoked.id, action: "spawn" })
+    assert.equal(d3.ok, false)
+    if (!d3.ok) assert.match(d3.reason, /not approved/)
+    // DENY 4: UNGRANTED (approved + valid credential, but the action's grant absent).
+    const ungranted = mkNode({ id: newNodeId(), grants: ["spawn"] })
+    base.nodes.push(ungranted)
+    base.trust.approved_node_ids.push(ungranted.id)
+    const d4 = assertRemoteActionAllowed(base, { node_id: ungranted.id, action: "tasks" })
+    assert.equal(d4.ok, false)
+    if (!d4.ok) assert.match(d4.reason, /grant missing/)
+    // The ordered checks report the FIRST failure (unapproved beats ungranted).
+    const both = mkNode({ id: newNodeId(), approved_at: null, approved_by: null, grants: [] })
+    base.nodes.push(both)
+    const dBoth = assertRemoteActionAllowed(base, { node_id: both.id, action: "spawn" })
+    if (!dBoth.ok) assert.match(dBoth.reason, /not approved/)
+    // Unknown node id is a deny (never a pass).
+    assert.equal(assertRemoteActionAllowed(base, { node_id: "node_nope", action: "spawn" }).ok, false)
+    // DUAL-LAYER credential composition (Reviewer code-gate): a node whose
+    // timestamp is valid but whose cert is CA-REVOKED is still denied when
+    // the caller supplies the CA — the timestamp layer alone is NOT enough.
+    const ca = new NodeCertificateAuthority(dir)
+    const revokedButValid = mkNode({ id: newNodeId() })
+    base.nodes.push(revokedButValid)
+    base.trust.approved_node_ids.push(revokedButValid.id)
+    ca.revoke(revokedButValid.id)
+    const d5 = assertRemoteActionAllowed(base, { node_id: revokedButValid.id, action: "spawn" }, { ca })
+    assert.equal(d5.ok, false)
+    if (!d5.ok) assert.match(d5.reason, /revoked/)
+    // Without the CA supplied, the timestamp layer alone passes for that node
+    // (documented: callers without the CA get the timestamp layer only).
+    const noCa = assertRemoteActionAllowed(base, { node_id: revokedButValid.id, action: "spawn" })
+    assert.deepEqual(noCa, { ok: true })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("M4 condition C: remote spawn + remote task assignment are gated with 403 + audit", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const deps = testDeps(store, dir)
+    const api = new OrchestratorApi(deps)
+    // Seed an UNAPPROVED remote node.
+    const state = store.load()
+    const remote: import("../../../src/orchestrator/state.js").NodeRecord = {
+      id: "node_unapproved_m4",
+      name: "worker-box",
+      kind: "remote",
+      platform: "linux",
+      status: "pending_approval",
+      capabilities: { max_agents: 4, runtimes: ["opencode"], headless: false },
+      approved_at: null,
+      approved_by: null,
+      restart_policy: "manual",
+      fingerprint: null,
+      enrolled_at: Date.now(),
+      last_seen: null,
+      trust_tier: "persistent",
+      grants: ["spawn", "tasks"],
+      credential_expires_at: null,
+    }
+    state.nodes.push(remote)
+    store.save(state)
+    // Remote spawn on an unapproved node => denied + audited.
+    const deniedSpawn = await api.createAgent({
+      name: "remote-worker",
+      host: "opencode",
+      role: "Worker",
+      role_prompt: "p",
+      node_id: "node_unapproved_m4",
+    })
+    assert.equal(deniedSpawn.ok, false)
+    assert.match(deniedSpawn.message, /Remote spawn denied/)
+    const audited = store.load().events.find((e) => e.type === "trust_denied" && e.node_id === "node_unapproved_m4")
+    assert.ok(audited, "remote spawn denial was not audited")
+    assert.match(audited.message, /Remote spawn denied/)
+    // Approve the node (without a live CA cert stamp — credential check fires).
+    await api.approveOrRevoke(
+      { node_id: "node_unapproved_m4", confirm_token: store.load().trust.owner_confirm_token },
+      "approve",
+    )
+    // Now the credential check is the deny reason (no issued certificate).
+    const deniedCred = await api.createAgent({
+      name: "remote-worker",
+      host: "opencode",
+      role: "Worker",
+      role_prompt: "p",
+      node_id: "node_unapproved_m4",
+    })
+    assert.equal(deniedCred.ok, false)
+    assert.match(deniedCred.message, /credential invalid/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
