@@ -11,23 +11,22 @@
       {
         "title": "OpenComms Tauri Desktop GUI",
         "width": 1280,
-        "height": 800,
-        "url": "http://127.0.0.1:1455/"
+        "height": 800
       }
     ],
     "security": {
       "csp": {
-        "default-src": "'self' http://127.0.0.1:1455",
-        "connect-src": "'self' http://127.0.0.1:1455",
+        "default-src": "'none'",
+        "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' data:",
-        "script-src": "'self'"
+        "connect-src": "'self' ipc: http://ipc.localhost"
       }
     }
   },
   "bundle": {
-    "active": false,
-    "targets": ["deb", "appimage"],
+    "active": true,
+    "targets": ["nsis", "deb", "appimage"],
     "linux": {
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
