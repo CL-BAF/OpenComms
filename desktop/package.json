@@ -1,6 +1,6 @@
 {
   "name": "opencomms-desktop",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "OpenComms Tauri Desktop GUI - the owner-facing desktop shell for the orchestrator console. Owns no business logic.",
   "type": "module",
