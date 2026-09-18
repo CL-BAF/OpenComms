@@ -4,7 +4,8 @@
   "version": "1.2.0",
   "identifier": "dev.opencomms.desktop",
   "build": {
-    "frontendDist": "../dist-shell"
+    "frontendDist": "../dist-shell",
+    "beforeBuildCommand": "node ../scripts/build-shell-asset.mjs"
   },
   "app": {
     "windows": [
@@ -20,7 +21,7 @@
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' data:",
-        "connect-src": "'self' ipc: http://ipc.localhost"
+        "connect-src": "'self' ipc: http://ipc.localhost http://127.0.0.1:1455"
       }
     }
   },
