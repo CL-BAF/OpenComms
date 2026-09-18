@@ -1581,7 +1581,7 @@ test("bridge M4.5: handshake announcement + section-2 surface completeness", () 
   assert.equal(announcement.hello, BRIDGE_IDENTITY)
   assert.equal(announcement.protocol, BRIDGE_PROTOCOL)
   assert.ok(announcement.version.length > 0)
-  assert.equal(BRIDGE_COMMANDS.length, 25)
+  assert.equal(BRIDGE_COMMANDS.length, 26)
   for (const cmd of [
     "nodes_list",
     "agents_list",
@@ -1589,6 +1589,7 @@ test("bridge M4.5: handshake announcement + section-2 surface completeness", () 
     "events_list",
     "trust_view",
     "audit_log",
+    "runtimes_list",
     "agent_create",
     "node_approve",
     "node_revoke",

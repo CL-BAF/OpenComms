@@ -38,6 +38,7 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "workspace_state",
     "integrations_list",
     "diagnostics",
+    "runtimes_list",
     "audit_log",
     // mutations
     "session_create",

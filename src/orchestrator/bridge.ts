@@ -50,6 +50,7 @@ export const BRIDGE_COMMANDS = [
   "workspace_state",
   "integrations_list",
   "diagnostics",
+  "runtimes_list",
   "audit_log",
   // Mutating (owner/operator actions)
   "session_create",
@@ -131,6 +132,7 @@ const COMMAND_TABLE: Record<string, "none" | "body" | "nameArg"> = {
   workspace_state: "none",
   integrations_list: "none",
   diagnostics: "none",
+  runtimes_list: "body", // { node_id }
   audit_log: "body", // { confirm_token, since? } — owner-only; token never logged
   session_create: "body",
   session_save: "body",
@@ -218,6 +220,11 @@ export async function dispatchBridgeCommand(deps: BridgeDeps, req: BridgeRequest
       return deps.guiReads.integrationsList()
     case "diagnostics":
       return deps.guiReads.diagnostics()
+    case "runtimes_list": {
+      const nodeId = typeof req.args["node_id"] === "string" ? req.args["node_id"] : ""
+      if (!nodeId) return { ok: false, message: "runtimes_list requires args.node_id" }
+      return api.listRuntimes(nodeId)
+    }
     // ---- mutating ----
     case "session_create":
       return deps.guiWrites.sessionCreate(req.args)
