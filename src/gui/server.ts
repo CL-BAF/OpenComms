@@ -578,6 +578,12 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           json(res, 200, activeApi.trustView())
           return
         }
+        if (method === "POST" && sub === "/audit") {
+          const body = await readBody(req)
+          const result = activeApi.auditLog(body)
+          json(res, result.ok ? 200 : result.message.startsWith("Owner approval") ? 403 : 400, result)
+          return
+        }
         if (method === "GET" && sub === "/tasks") {
           json(res, 200, activeApi.listTasks())
           return

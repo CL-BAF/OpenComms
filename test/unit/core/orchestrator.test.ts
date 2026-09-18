@@ -364,6 +364,45 @@ test("orchestrator api: trust approve/revoke require the owner confirm token (40
   }
 })
 
+test("M5 audit log: owner-only, append-only, secret-free, cursor-paginated", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const deps = testDeps(store, dir)
+    const api = new OrchestratorApi(deps)
+    // Generate a few audit-worthy events.
+    await api.approveOrRevoke({ node_id: "node_x", confirm_token: "wrong" }, "approve")
+    const token = store.load().trust.owner_confirm_token
+    await api.createPairingCode({ node_name: "audit-box", confirm_token: token })
+    // Token-gated: wrong/absent token => denied.
+    const denied = api.auditLog({ confirm_token: "nope" })
+    assert.equal(denied.ok, false)
+    assert.match(denied.message, /Owner approval required/)
+    // Correct token: events + cursor + append_only marker.
+    const audit = api.auditLog({ confirm_token: token })
+    assert.ok(audit.ok, audit.message)
+    const payload = audit.data as {
+      audit: Array<{ type: string; message: string; seq: number }>
+      cursor: number
+      total: number
+      append_only: boolean
+    }
+    assert.equal(payload.append_only, true)
+    assert.ok(payload.audit.length >= 2)
+    assert.ok(payload.audit.some((e) => e.type === "trust_denied"))
+    assert.ok(payload.audit.some((e) => e.type === "pairing_code_created"))
+    // SECRET-FREE: the confirm token appears in NO audit entry.
+    assert.ok(!JSON.stringify(payload.audit).includes(token))
+    // Cursor pagination: a mid-ring cursor returns only newer events.
+    const midCursor = payload.audit[0]?.seq ?? 0
+    const page2 = api.auditLog({ confirm_token: token, since: midCursor })
+    const payload2 = page2.data as { audit: Array<{ seq: number }>; cursor: number }
+    assert.ok(payload2.audit.every((e) => e.seq > midCursor))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test("orchestrator events: ring cap + cursor pagination", () => {
   const dir = tmpProject()
   const state = emptyOrchestratorState(dir)

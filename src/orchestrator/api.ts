@@ -797,6 +797,32 @@ export class OrchestratorApi {
   }
 
   /**
+   * M5 (1): the append-only AUDIT LOG — the orchestration events ring
+   * exposed as an owner-only surface (confirm-token gated). Covers trust
+   * events (approve/revoke/denials), spawn/stop/restart, task assignment,
+   * cert issuance, and the condition-C deny cases. The ring is capped
+   * (MAX_ORCHESTRATOR_EVENTS); entries are never mutated after append —
+   * append-only by construction. Secrets never appear: redaction was
+   * enforced at write time (spawn_cmd_redacted, hash-only pairing codes,
+   * trust token never stored in events).
+   */
+  auditLog(body: Record<string, unknown>): ApiResult {
+    const token = typeof body["confirm_token"] === "string" ? body["confirm_token"] : ""
+    const state = this.deps.loadOrchestrator()
+    if (!token || token !== state.trust.owner_confirm_token) {
+      return { ok: false, message: "Owner approval required (confirm token missing or wrong)." }
+    }
+    const since = Number(body["since"] ?? "0")
+    const page = listEvents(state, Number.isFinite(since) ? since : 0)
+    return pass("ok", {
+      audit: page.events,
+      cursor: page.cursor,
+      total: state.events.length,
+      append_only: true,
+    })
+  }
+
+  /**
    * M3 trust core (design §9c-1): generate a one-time pairing code. The
    * RAW code is returned EXACTLY ONCE (shown to the operator on the
    * coordinator GUI/CLI, entered on the node out-of-band); the store keeps
