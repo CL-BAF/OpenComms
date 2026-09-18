@@ -104,13 +104,19 @@ export interface BridgeDeps {
     memberRemove: (body: Record<string, unknown>) => Promise<ApiResult>
     workspaceSelect: (body: Record<string, unknown>) => Promise<ApiResult>
   }
-  /** Test seam: write one response line (production: process.stdout). */
+  /** Test seam / production: write one response line (process.stdout). */
   write: (line: string) => void
   /** Handshake timeout (gate A): ms the sidecar waits before its first line. */
   handshakeTimeoutMs?: number
   /** Injected error sink (production: process.stderr; tests: collector). */
   error: (message: string) => void
 }
+
+/**
+ * The core-half of BridgeDeps that the GUI server provides (api + closures);
+ * the CLI's `bridge` dispatch supplies write/error (stdout/stderr).
+ */
+export type BridgeCoreDeps = Omit<BridgeDeps, "write" | "error" | "handshakeTimeoutMs">
 
 /** Command name -> arg-shape validator (whitelist; unknown => typed error). */
 const COMMAND_TABLE: Record<string, "none" | "body" | "nameArg"> = {
