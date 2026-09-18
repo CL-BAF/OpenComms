@@ -205,3 +205,68 @@ What exists instead, honestly: `stale` (offline proxy, host-verified), `delivery
 - Stale marking: `session.deleted` â†’ `markStale` sets `member.stale=true`; `session.idle`/`statusâ†’idle` â†’ `clearStale` resets it. Sends targeting a stale sole-peer/stale explicit target are rejected; broadcast silently skips stale recipients.
 - Multi-channel membership is supported: delivery provenance resolves each envelope's own channel (`drainForDelivery`) and `system.transform` injects ONE labeled prompt section PER membership (`memberInfosFor`) â€” first-match ambiguity was fixed in R1.
 - Slash parsing consumes ONLY recognized keys (Channel/As/RolePrompt/Action/LimitMs/LimitRole/To/Broadcast/Target); unknown `x=y` survives in free-form prompt text. Subcommand matching strips `_`/`-` and lowercases, so `UpdateRole` â‰¡ `update_role`.
+
+---
+
+## Orchestrator Layer (M1-M5: `src/orchestrator/`)
+
+The orchestration overhaul added a project-local orchestrator beside the
+channel engine: the same `.opencomms/` data directory, a separate
+`orchestrator.json` store (own schema, own lock discipline, fail-closed
+validation), and the `AgentRuntime` abstraction for spawning/supervising
+agents on the local machine and (opt-in, owner-approved) remote nodes.
+
+- **State** (`state.ts`): agents (`agt_*`), nodes (`node_*`; exactly one
+  implicit local node), owner trust store (confirm token never returned
+  by read APIs), pairing codes (hash-only, one-time, TTL), and a capped
+  append-only event ring (the audit log).
+- **Runtimes** (`runtime.ts`, `runtimes/opencode.ts`): per-host adapters;
+  opencode first (one shared `opencode serve` per project, argv-only
+  launch, env-only auth, pinned models via the catalog cache, SSE as the
+  status oracle). `ensureServe` manages the serve lifecycle (readiness =
+  stdout "listening" with a kill-on-timeout; idempotent reuse; SIGTERM on
+  server close).
+- **API** (`api.ts`): the orchestrator surface the GUI/CLI/bridge call —
+  agents (create/stop/restart with session-identity adoption), nodes
+  (pairing → owner approval → cert issuance), tasks (riding the channel
+  engine as review_request semantics), permissions drain, runtimes
+  listing, audit log. Remote actions pass `assertRemoteActionAllowed`
+  (condition C: approved → credential-valid → grant-present, ordered,
+  per-failure audit).
+- **Node identity** (`node-ca.ts`): per-project owner-rooted ed25519 CA
+  signs SHORT-LIVED node certs (persistent 12h / ephemeral 60-min,
+  mapping-test-locked). Revocation is LOAD-BEARING at both layers (CA
+  `isRevoked` + the transport bearer gate). Private keys never leave the
+  node (ADR-0001).
+- **Transport** (`node-transport.ts`, `node-server.ts`, `node-wire.ts`):
+  outbound-only WSS node→coordinator (nonce-bound bearer, revocation-gated
+  at admission — the composed cert→bearer→revocation chain is proven at
+  the server admission point), per-recipient cursors + remote-ack
+  delivery, coordinator-side `dedupeForNode` for the daemon run loop.
+- **Bridge** (`bridge.ts`, M4.5): the native Tauri GUI's data layer —
+  line-based JSON-RPC over sidecar stdio (ADR-0006 supersedes ADR-0004's
+  loopback-shell design). Handshake first (sidecar announces identity/
+  protocol/commands; Rust validates, then acks); 24-command IPC allowlist
+  (deny-by-default, nothing returning the confirm token); sequential
+  dispatch (ordered responses under backpressure); oversized-line and
+  partial-line hardening. Trust enforcement stays in the TS core — the
+  Rust relay is shape + routing only.
+
+### Budgets & audit
+
+- Channel budgets (runtime + delivered-message) are engine-enforced on
+  every send (`budgetRefusal`) and compose with the orchestrator surfaces:
+  a budget-exhausted channel refuses task assignment verbatim (verified —
+  `test/unit/core/budgets-orchestrator.test.ts`).
+- The audit log is the events ring, exposed owner-only
+  (`POST /api/orchestrator/audit`, confirm-token gated), cursor-paginated,
+  secret-free by write-time redaction.
+
+## Releases
+
+- `v1.2.0-gui` — the loopback console build (CLI/headless fallback; still
+  documented and working).
+- `v1.3.1-gui-native` — the NATIVE Tauri desktop GUI: bundled console
+  assets in the binary, Tauri IPC data layer over the stdio bridge (no
+  loopback URL for the UI), strict CSP, 24-command IPC allowlist, Node
+  coordinator sidecar inside the install (ADR-0006 supersedes ADR-0004).
