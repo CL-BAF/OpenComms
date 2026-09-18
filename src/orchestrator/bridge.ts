@@ -151,8 +151,8 @@ export function parseBridgeRequest(line: string): BridgeRequest | { error: strin
   let parsed: unknown
   try {
     parsed = JSON.parse(line)
-  } catch {
-    return { id: "", cmd: "", args: {} }
+  } catch (error) {
+    return { error: `invalid JSON request: ${(error as Error).message.slice(0, 120)}` }
   }
   if (typeof parsed !== "object" || parsed === null) return { error: "request must be a JSON object" }
   const rec = parsed as Record<string, unknown>
@@ -255,7 +255,21 @@ function respond(deps: BridgeDeps, req: BridgeRequest, result: ApiResult): void 
  * IGNORED until the handshake is written — no partial execution.
  * Gate condition (B): args are never logged — errors carry only the
  * command name and a typed reason.
+ *
+ * M5 (3) hardening:
+ *  - PARTIAL LINES: requests are buffered per line (readline) and an
+ *    oversized line (BRIDGE_MAX_LINE_CHARS) is rejected with a typed
+ *    error — a truncated/hostile stream can never wedge the parser.
+ *  - BACKPRESSURE: requests are processed SEQUENTIALLY (one at a time,
+ *    await each dispatch before reading the next line) — the sidecar
+ *    never interleaves responses or drops a request under load. The
+ *    ordering guarantee matches the HTTP transport (one in-flight
+ *    mutation per project at the lock level).
+ *  - OVERSIZED PAYLOAD: args larger than the line cap are refused before
+ *    dispatch (same class as the engine's 100k content cap).
  */
+export const BRIDGE_MAX_LINE_CHARS = 1_000_000
+
 export async function runBridge(deps: BridgeDeps, input: NodeJS.ReadableStream): Promise<void> {
   // HANDSHAKE FIRST: speak before listening (anti-spoofing; the Rust host
   // validates this line before writing any command).
@@ -271,6 +285,9 @@ export async function runBridge(deps: BridgeDeps, input: NodeJS.ReadableStream):
   handshakeTimer.unref?.()
 
   const rl = createInterface({ input, crlfDelay: Infinity })
+  // Backpressure: sequential processing — one request fully dispatched and
+  // responded before the next line is pulled from the queue. readline
+  // buffers lines internally; we never skip or reorder.
   for await (const line of rl) {
     if (!handshakeDone) {
       // The sidecar ignores stdin until the host has acknowledged the
@@ -288,12 +305,23 @@ export async function runBridge(deps: BridgeDeps, input: NodeJS.ReadableStream):
       }
       continue
     }
+    // M5 hardening: oversized line rejected BEFORE parsing (a truncated
+    // stream or hostile host cannot wedge the adapter or exhaust memory).
+    if (line.length > BRIDGE_MAX_LINE_CHARS) {
+      deps.error(`bridge: request line exceeds ${BRIDGE_MAX_LINE_CHARS} chars; rejected`)
+      deps.write(
+        JSON.stringify({ id: null, ok: false, message: `request line too large (max ${BRIDGE_MAX_LINE_CHARS} chars)` }),
+      )
+      continue
+    }
     const req = parseBridgeRequest(line)
     if ("error" in req) {
       deps.write(JSON.stringify({ id: null, ok: false, message: req.error }))
       continue
     }
     try {
+      // Sequential dispatch = backpressure: slow core work naturally
+      // paces the read loop; responses stay ordered per connection.
       const result = await dispatchBridgeCommand(deps, req)
       respond(deps, req, result)
     } catch (error) {

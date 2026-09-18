@@ -1659,3 +1659,81 @@ test("bridge M4.5: run loop - handshake FIRST, pre-ack stdin ignored, one-line-p
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("bridge M5: hardening — oversized line rejected, partial line cannot wedge, sequential order kept", async () => {
+  const dir = tmpProject()
+  try {
+    const store = new OrchestratorStore(dir)
+    const deps = testDeps(store, dir)
+    const written: string[] = []
+    const errors: string[] = []
+    const dispatchOrder: string[] = []
+    const bridgeDeps: BridgeDeps = {
+      api: new OrchestratorApi(deps),
+      guiReads: {
+        sessions: () => ({ ok: true, message: "ok", data: {} }),
+        sessionMembers: () => ({ ok: true, message: "ok", data: {} }),
+        workspaceState: () => ({ ok: true, message: "ok", data: {} }),
+        integrationsList: () => ({ ok: true, message: "ok", data: [] }),
+        diagnostics: () => ({ ok: true, message: "ok", data: {} }),
+      },
+      guiWrites: {
+        sessionCreate: async () => {
+          dispatchOrder.push("session_create")
+          await new Promise((r) => setTimeout(r, 30))
+          return { ok: true, message: "created" }
+        },
+        sessionSave: () => Promise.resolve({ ok: true, message: "saved" }),
+        sessionResume: () => Promise.resolve({ ok: true, message: "resumed" }),
+        sessionDelete: () => Promise.resolve({ ok: true, message: "deleted" }),
+        setSessionPaused: () => Promise.resolve({ ok: true, message: "paused" }),
+        memberRemove: () => Promise.resolve({ ok: true, message: "removed" }),
+        workspaceSelect: () => Promise.resolve({ ok: true, message: "selected" }),
+      },
+      write: (line) => written.push(line),
+      error: (m) => errors.push(m),
+    }
+    const { Readable } = await import("node:stream")
+    const stdin = new Readable({ read() {} })
+    const done = runBridge(bridgeDeps, stdin)
+    await new Promise((r) => setTimeout(r, 50))
+    stdin.push('{"hello_ok":true}\n')
+    await new Promise((r) => setTimeout(r, 50))
+    // OVERSIZED LINE: rejected with a typed error BEFORE parsing.
+    const oversized = "x".repeat(1_000_001)
+    stdin.push(`{"id":"big","cmd":"agents_list","args":{"blob":"${oversized}"}}\n`)
+    await new Promise((r) => setTimeout(r, 80))
+    const tooBig = JSON.parse(written[written.length - 1]!)
+    assert.equal(tooBig.ok, false)
+    assert.match(tooBig.message, /too large/)
+    // PARTIAL LINE: a truncated JSON fragment followed by the complete line —
+    // readline CONCATENATES the fragment into the next line, so the merged
+    // line fails to parse and gets a typed parse error (the stream is never
+    // wedged; the NEXT complete line still works).
+    stdin.push('{"id":"trunc","cmd":"agents_l')
+    await new Promise((r) => setTimeout(r, 40))
+    stdin.push('{"id":"ok1","cmd":"agents_list","args":{}}\n')
+    await new Promise((r) => setTimeout(r, 50))
+    // The merged line was invalid JSON => typed parse-error response.
+    const parseErr = written.find((l) => l.includes('"ok":false') && l.includes("invalid JSON request"))
+    assert.ok(parseErr, "partial-line merge did not produce a typed parse error")
+    // The stream still serves the next complete request.
+    stdin.push('{"id":"ok2","cmd":"agents_list","args":{}}\n')
+    await new Promise((r) => setTimeout(r, 50))
+    const ok2 = JSON.parse(written[written.length - 1]!)
+    assert.equal(ok2.id, "ok2")
+    assert.equal(ok2.ok, true)
+    // BACKPRESSURE/ORDER: two slow mutations issued back-to-back complete
+    // in ISSUE ORDER (sequential dispatch, responses never interleave).
+    stdin.push('{"id":"c1","cmd":"session_create","args":{"name":"a"}}\n')
+    stdin.push('{"id":"c2","cmd":"session_create","args":{"name":"b"}}\n')
+    await new Promise((r) => setTimeout(r, 120))
+    const ids = written.slice(-2).map((l) => JSON.parse(l).id)
+    assert.deepEqual(ids, ["c1", "c2"], "responses out of order under backpressure")
+    assert.deepEqual(dispatchOrder, ["session_create", "session_create"])
+    stdin.push(null)
+    await done
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
