@@ -39,6 +39,7 @@ import { updateCommand } from "./update.js"
 import { runAgentCommand } from "./agent.js"
 import { taskList, taskAssign, membersRemove, sessionCreate } from "./tasks.js"
 import { VERSION } from "../version.js"
+import { runBridge } from "../orchestrator/bridge.js"
 
 /** Package version, derived from package.json so the CLI can never drift. */
 function flagValue(tokens: string[], name: string): string | undefined {
@@ -647,6 +648,25 @@ function startGui(projectDir: string | undefined, portFlag: string | undefined, 
   return ok("Starting OpenComms console...")
 }
 
+/** Start the GUI-backed stdio bridge used by the native Tauri shell. */
+async function startBridge(projectDir: string): Promise<void> {
+  const handle = await startGuiServer({ projectDir, port: 0, hostname: "127.0.0.1" })
+  try {
+    const coreDeps = handle.bridgeDeps()
+    if (!coreDeps) throw new Error("OpenComms bridge requires a selected project.")
+    await runBridge(
+      {
+        ...coreDeps,
+        write: (line) => process.stdout.write(line + "\n"),
+        error: (message) => process.stderr.write(message + "\n"),
+      },
+      process.stdin,
+    )
+  } finally {
+    await handle.close()
+  }
+}
+
 /**
  * True when this process runs as the packaged standalone exe (Node SEA):
  * the double-click case has NO argv[1], the explicit-command case has
@@ -816,6 +836,8 @@ export function runCli(argv: string[]): CliResult {
         flagValue(tokens, "--port"),
         !tokens.includes("--server") && !tokens.includes("--no-open"),
       )
+    case "bridge":
+      return fail("Bridge command is async: the CLI entry handles it directly.")
     case "install-wizard":
       return launchWizard()
     case "uninstall-self":
@@ -855,6 +877,7 @@ export function runCli(argv: string[]): CliResult {
           "  opencomms install-member [--host <id>] [--id <memberId> | --name <name>] [--project <dir>]",
           "  opencomms session <list|get|save|delete|resume> [name] [--summary ...] [--as name] [--confirm]",
           "  opencomms gui [--project <dir>] [--port <port>] [--server]  # embedded HTML console",
+          "  opencomms bridge [--project <dir>]  # native GUI stdio sidecar",
           "  opencomms install-wizard             # Windows setup wizard (also launched by double-clicking the exe)",
           "  opencomms uninstall-self             # remove PATH entry, shortcuts, and the install folder",
           "  opencomms join-command <session> [--host <opencode|claude-code|codex|claude-desktop|chatgpt>]",
@@ -886,6 +909,11 @@ if (isCliEntry) {
     // The GUI server blocks; never take the sync exit path.
     const guiResult = runCli(argv)
     if (guiResult.output) process.stdout.write(guiResult.output + "\n")
+  } else if (argv[0] === "bridge") {
+    void startBridge(projectDirFromFlag(argv, "--project") ?? process.cwd()).catch((error: unknown) => {
+      process.stderr.write(`Bridge failed: ${(error as Error).message}\n`)
+      process.exitCode = 1
+    })
   } else if (argv[0] === "session") {
     void runSession(argv.slice(1), projectDirFromFlag(argv, "--project") ?? process.cwd()).then(emit)
   } else if (argv[0] === "update") {
@@ -914,6 +942,39 @@ if (isCliEntry) {
     argv[0] = "gui"
     const guiResult = runCli(argv)
     if (guiResult.output) process.stdout.write(guiResult.output + "\n")
+  } else if (argv[0] === "bridge") {
+    // M4.5: the native Tauri GUI's stdio JSON-RPC bridge. Speaks the
+    // handshake FIRST, then one request line -> one response line until
+    // stdin closes. Blocks (like gui); never takes the sync exit path.
+    const projectDir = projectDirFromFlag(argv, "--project") ?? initialWorkspaceProject()
+    const port = Number(flagValue(argv, "--port") ?? "4919")
+    void (async () => {
+      try {
+        const handle = await startGuiServer({
+          projectDir: projectDir ?? undefined,
+          port: Number.isFinite(port) && port > 0 ? port : 4919,
+          hostname: "127.0.0.1",
+        })
+        const coreDeps = handle.bridgeDeps()
+        if (!coreDeps) {
+          process.stderr.write("bridge: no project selected — set --project or open a project in the console first.\n")
+          await handle.close()
+          process.exitCode = 2
+          return
+        }
+        await runBridge(
+          {
+            ...coreDeps,
+            write: (line) => process.stdout.write(line + "\n"),
+            error: (m) => process.stderr.write(m + "\n"),
+          },
+          process.stdin,
+        )
+      } catch (error) {
+        process.stderr.write(`bridge failed: ${(error as Error).message}\n`)
+        process.exitCode = 1
+      }
+    })()
   } else {
     emit(runCli(argv))
   }

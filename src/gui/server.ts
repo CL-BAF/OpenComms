@@ -82,6 +82,13 @@ export interface GuiServerHandle {
   server: Server
   port: number
   close(): Promise<void>
+  /**
+   * M4.5 bridge: the SAME OrchestratorApi + GUI closures the HTTP routes
+   * use, exposed for the stdio bridge (cli main wires `bridge` to
+   * runBridge with these + stdout/stderr). Null before a project is
+   * selected.
+   */
+  bridgeDeps: () => import("../orchestrator/bridge.js").BridgeCoreDeps | null
 }
 
 export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
@@ -162,6 +169,14 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     )
   }
   let orchestratorApi: OrchestratorApi | null = null
+  let bridgeDepsProvider: (() => import("../orchestrator/bridge.js").BridgeCoreDeps | null) | null = null
+  const handlePortRef = (): number => {
+    try {
+      return (server?.address() as { port: number } | null)?.port ?? 4919
+    } catch {
+      return 4919
+    }
+  }
   if (projectDir && orchestratorStore && feed && store) {
     const apiOrchestratorStore = orchestratorStore
     const apiStore = store
@@ -201,6 +216,201 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
         ),
       saveChannelEngineState: (state) => apiStore.save(state as never),
     })
+    // M4.5 bridge deps: the SAME api + closures the HTTP routes use, so the
+    // stdio bridge (cli main's `bridge` dispatch) shares one core.
+    const currentOrchestratorApi = orchestratorApi
+    if (currentOrchestratorApi) {
+      bridgeDepsProvider = () => ({
+        api: currentOrchestratorApi,
+        guiReads: {
+          sessions: () => {
+            const sp = sessionsPayload()
+            return { ok: true, message: "ok", data: sp.data }
+          },
+          sessionMembers: (name: string) => {
+            const live = findLive(name)
+            if (live) {
+              const st = load()
+              return {
+                ok: true,
+                message: "ok",
+                data: {
+                  name: live.name,
+                  lifecycle: live.lifecycle,
+                  description: live.description ?? "No description yet",
+                  agents: live.members.map((m: Member) => ({
+                    session_id: m.session_id,
+                    role: m.role,
+                    host: m.host,
+                    delivery_mode: m.delivery_mode,
+                    state: memberState(m, (st.queues[m.session_id] ?? []).length),
+                  })),
+                },
+              }
+            }
+            const archive = archives?.findByName(name) ?? archives?.get(name)
+            if (archive) {
+              return {
+                ok: true,
+                message: "ok",
+                data: {
+                  name: archive.name,
+                  lifecycle: "saved",
+                  agents: archive.members.map((m) => ({
+                    session_id: m.session_id,
+                    role: m.role,
+                    host: m.host,
+                    state: "Offline",
+                  })),
+                },
+              }
+            }
+            return { ok: false, message: `No live or archived session matches "${name}".` }
+          },
+          workspaceState: () => ({ ok: true, message: "ok", data: workspaceSummary(projectDir) }),
+          integrationsList: () => ({
+            ok: true,
+            message: "ok",
+            data: [],
+          }),
+          diagnostics: () => {
+            const st = load()
+            return {
+              ok: true,
+              message: "ok",
+              data: {
+                version: VERSION,
+                project: projectDir,
+                state_exists: Boolean(store?.file && existsSync(store.file)),
+                state_schema: st.schema_version,
+                backend: "healthy",
+                port: handlePortRef(),
+                errors: st.errors.slice(-20).map((e) => ({ at: e.at, message: e.message })),
+              },
+            }
+          },
+        },
+        guiWrites: {
+          sessionCreate: async (body) => {
+            const st = load()
+            const created = createSessionAsOperator(st, {
+              channel: String(body["name"] ?? ""),
+              project_id: "gui-local-project",
+              worktree: projectDir ?? "",
+              max_members: typeof body["max_members"] === "number" ? body["max_members"] : undefined,
+              rate_limit: typeof body["rate_limit"] === "number" ? body["rate_limit"] : undefined,
+              max_hops: typeof body["max_hops"] === "number" ? body["max_hops"] : undefined,
+            })
+            if (created.ok) apiStore.save(st)
+            return created
+          },
+          sessionSave: async (body) => {
+            const st = load()
+            const built = buildSessionArchive(st, {
+              channel: String(body["name"] ?? ""),
+              session_id: null,
+              summary: typeof body["summary"] === "string" ? body["summary"] : null,
+            })
+            if (!built.ok) return built
+            const inputs = (built.data as { archive_inputs: Record<string, unknown> }).archive_inputs
+            const archive = (archives ?? null)?.fromChannel(
+              inputs as never,
+              inputs["messages"] as never,
+              null,
+              null,
+              (inputs["summary"] as string | null) ?? null,
+            )
+            if (!archive) return { ok: false, message: "archive store unavailable" }
+            ;(archives ?? null)?.save(archive)
+            commitSessionSave(st, archive.channel_id)
+            apiStore.save(st)
+            return { ok: true, message: `Session "${archive.name}" SAVED.` }
+          },
+          sessionResume: async (body) => {
+            const st = load()
+            const archive =
+              (archives ?? null)?.findByName(String(body["name"] ?? "")) ??
+              (archives ?? null)?.get(String(body["name"] ?? ""))
+            if (!archive) return { ok: false, message: `No archived session matches "${String(body["name"] ?? "")}".` }
+            const resumed = resumeSession(st, {
+              archive,
+              new_name: typeof body["new_name"] === "string" ? body["new_name"] : null,
+              project_id: "gui-local-project",
+              worktree: projectDir ?? "",
+            })
+            if (resumed.ok) apiStore.save(st)
+            return resumed
+          },
+          sessionDelete: async (body) => {
+            const st = load()
+            const decided = deleteSession(st, {
+              channel: String(body["name"] ?? ""),
+              session_id: null,
+              confirm: true,
+              operator: true,
+            })
+            if (!decided.ok) return decided
+            const { channel_id: channelId } = decided.data as { phase: string; channel_id: string }
+            if (
+              decided.data &&
+              typeof decided.data === "object" &&
+              "phase" in (decided.data as Record<string, unknown>) &&
+              (decided.data as { phase: string }).phase === "live"
+            ) {
+              const doomed = new Set(
+                Object.values(st.messages)
+                  .filter((m) => m.channel_id === channelId)
+                  .map((m) => m.message_id),
+              )
+              for (const id of doomed) {
+                delete st.messages[id]
+                delete st.delivered_to[id]
+              }
+              for (const key of Object.keys(st.queues)) {
+                const ids: string[] = st.queues[key] ?? []
+                const filtered = ids.filter((id) => !doomed.has(id))
+                if (filtered.length !== ids.length) st.queues[key] = filtered
+              }
+              for (const key of Object.keys(st.channels)) {
+                const ch = st.channels[key]
+                if (ch && ch.id === channelId) delete st.channels[key]
+              }
+              apiStore.save(st)
+            } else {
+              const archiveId = channelId.startsWith("chn_")
+                ? channelId
+                : ((archives ?? null)?.findByName(channelId)?.channel_id ?? null)
+              const removed = archiveId ? (archives ?? null)?.delete(archiveId) : false
+              return {
+                ok: removed ?? false,
+                message: removed ? "Archived session DELETED." : `No archive found for ${channelId}.`,
+              }
+            }
+            return { ok: true, message: `Session ${channelId} DELETED.` }
+          },
+          setSessionPaused: async (body, paused) => {
+            const st = load()
+            const changed = setSessionPausedAsOperator(st, { channel: String(body["name"] ?? ""), paused })
+            if (changed.ok) apiStore.save(st)
+            return changed
+          },
+          memberRemove: async (body) => {
+            const st = load()
+            const removed = removeMemberAsOperator(st, {
+              channel: String(body["name"] ?? ""),
+              target_session_id: typeof body["target_session_id"] === "string" ? body["target_session_id"] : null,
+              target_role: typeof body["target_role"] === "string" ? body["target_role"] : null,
+            })
+            if (removed.ok) apiStore.save(st)
+            return removed
+          },
+          workspaceSelect: async (body) => {
+            const selected = selectProject(String(body["path"] ?? ""))
+            return { ok: true, message: `Project selected: ${selected}`, data: workspaceSummary(projectDir) }
+          },
+        },
+      })
+    }
   }
   const load = (): State => store?.load() ?? emptyState()
   const recordError = (message: string): void => {
@@ -351,6 +561,189 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
         ),
       saveChannelEngineState: (state) => activeStoreRef.save(state as never),
     })
+    // Rebuild the bridge deps for the newly selected project (same closures).
+    if (orchestratorApi) {
+      const apiRef = orchestratorApi
+      bridgeDepsProvider = () => ({
+        api: apiRef,
+        guiReads: {
+          sessions: () => {
+            const sp = sessionsPayload()
+            return { ok: true, message: "ok", data: sp.data }
+          },
+          sessionMembers: (name: string) => {
+            const live = findLive(name)
+            if (live) {
+              const st = load()
+              return {
+                ok: true,
+                message: "ok",
+                data: {
+                  name: live.name,
+                  lifecycle: live.lifecycle,
+                  description: live.description ?? "No description yet",
+                  agents: live.members.map((m: Member) => ({
+                    session_id: m.session_id,
+                    role: m.role,
+                    host: m.host,
+                    delivery_mode: m.delivery_mode,
+                    state: memberState(m, (st.queues[m.session_id] ?? []).length),
+                  })),
+                },
+              }
+            }
+            const archive = archives?.findByName(name) ?? archives?.get(name)
+            if (archive) {
+              return {
+                ok: true,
+                message: "ok",
+                data: {
+                  name: archive.name,
+                  lifecycle: "saved",
+                  agents: archive.members.map((m) => ({
+                    session_id: m.session_id,
+                    role: m.role,
+                    host: m.host,
+                    state: "Offline",
+                  })),
+                },
+              }
+            }
+            return { ok: false, message: `No live or archived session matches "${name}".` }
+          },
+          workspaceState: () => ({ ok: true, message: "ok", data: workspaceSummary(projectDir) }),
+          integrationsList: () => ({ ok: true, message: "ok", data: [] }),
+          diagnostics: () => {
+            const st = load()
+            return {
+              ok: true,
+              message: "ok",
+              data: {
+                version: VERSION,
+                project: projectDir,
+                state_exists: Boolean(store?.file && existsSync(store.file)),
+                state_schema: st.schema_version,
+                backend: "healthy",
+                port: handlePortRef(),
+                errors: st.errors.slice(-20).map((e) => ({ at: e.at, message: e.message })),
+              },
+            }
+          },
+        },
+        guiWrites: {
+          sessionCreate: async (body) => {
+            const st = load()
+            const created = createSessionAsOperator(st, {
+              channel: String(body["name"] ?? ""),
+              project_id: "gui-local-project",
+              worktree: projectDir ?? "",
+              max_members: typeof body["max_members"] === "number" ? body["max_members"] : undefined,
+              rate_limit: typeof body["rate_limit"] === "number" ? body["rate_limit"] : undefined,
+              max_hops: typeof body["max_hops"] === "number" ? body["max_hops"] : undefined,
+            })
+            if (created.ok) activeStoreRef.save(st)
+            return created
+          },
+          sessionSave: async (body) => {
+            const st = load()
+            const built = buildSessionArchive(st, {
+              channel: String(body["name"] ?? ""),
+              session_id: null,
+              summary: typeof body["summary"] === "string" ? body["summary"] : null,
+            })
+            if (!built.ok) return built
+            const inputs = (built.data as { archive_inputs: Record<string, unknown> }).archive_inputs
+            const archive = (archives ?? null)?.fromChannel(
+              inputs as never,
+              inputs["messages"] as never,
+              null,
+              null,
+              (inputs["summary"] as string | null) ?? null,
+            )
+            if (!archive) return { ok: false, message: "archive store unavailable" }
+            ;(archives ?? null)?.save(archive)
+            commitSessionSave(st, archive.channel_id)
+            activeStoreRef.save(st)
+            return { ok: true, message: `Session "${archive.name}" SAVED.` }
+          },
+          sessionResume: async (body) => {
+            const st = load()
+            const name = String(body["name"] ?? "")
+            const archive = (archives ?? null)?.findByName(name) ?? (archives ?? null)?.get(name)
+            if (!archive) return { ok: false, message: `No archived session matches "${name}".` }
+            const resumed = resumeSession(st, {
+              archive,
+              new_name: typeof body["new_name"] === "string" ? body["new_name"] : null,
+              project_id: "gui-local-project",
+              worktree: projectDir ?? "",
+            })
+            if (resumed.ok) activeStoreRef.save(st)
+            return resumed
+          },
+          sessionDelete: async (body) => {
+            const st = load()
+            const decided = deleteSession(st, {
+              channel: String(body["name"] ?? ""),
+              session_id: null,
+              confirm: true,
+              operator: true,
+            })
+            if (!decided.ok) return decided
+            const { channel_id: channelId, phase } = decided.data as { phase: string; channel_id: string }
+            if (phase === "live") {
+              const doomed = new Set(
+                Object.values(st.messages)
+                  .filter((m) => m.channel_id === channelId)
+                  .map((m) => m.message_id),
+              )
+              for (const id of doomed) {
+                delete st.messages[id]
+                delete st.delivered_to[id]
+              }
+              for (const key of Object.keys(st.queues)) {
+                const ids: string[] = st.queues[key] ?? []
+                const filtered = ids.filter((id) => !doomed.has(id))
+                if (filtered.length !== ids.length) st.queues[key] = filtered
+              }
+              for (const key of Object.keys(st.channels)) {
+                const ch = st.channels[key]
+                if (ch && ch.id === channelId) delete st.channels[key]
+              }
+              activeStoreRef.save(st)
+              return { ok: true, message: `Session ${channelId} DELETED.` }
+            }
+            const archiveId = channelId.startsWith("chn_")
+              ? channelId
+              : ((archives ?? null)?.findByName(channelId)?.channel_id ?? null)
+            const removed = archiveId ? (archives ?? null)?.delete(archiveId) : false
+            return {
+              ok: removed ?? false,
+              message: removed ? "Archived session DELETED." : `No archive found for ${channelId}.`,
+            }
+          },
+          setSessionPaused: async (body, paused) => {
+            const st = load()
+            const changed = setSessionPausedAsOperator(st, { channel: String(body["name"] ?? ""), paused })
+            if (changed.ok) activeStoreRef.save(st)
+            return changed
+          },
+          memberRemove: async (body) => {
+            const st = load()
+            const removed = removeMemberAsOperator(st, {
+              channel: String(body["name"] ?? ""),
+              target_session_id: typeof body["target_session_id"] === "string" ? body["target_session_id"] : null,
+              target_role: typeof body["target_role"] === "string" ? body["target_role"] : null,
+            })
+            if (removed.ok) activeStoreRef.save(st)
+            return removed
+          },
+          workspaceSelect: async (body) => {
+            const selected = selectProject(String(body["path"] ?? ""))
+            return { ok: true, message: `Project selected: ${selected}`, data: workspaceSummary(projectDir) }
+          },
+        },
+      })
+    }
     ensureStatWatcher()
     ensureArchivesWatcher()
     onStatChange()
@@ -439,6 +832,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       }))
     return {
       ok: true,
+      message: "ok",
       data: {
         project: projectDir,
         live,
@@ -1033,6 +1427,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       resolve({
         server,
         port: (server.address() as { port: number }).port,
+        bridgeDeps: () => bridgeDepsProvider?.() ?? null,
         close: () =>
           new Promise<void>((resolveClose) => {
             // The refresh timer is unref'd; unwind the stat watchers too.
