@@ -188,3 +188,51 @@ test("M4.6 registry: tool list is identity-scoped (member pin sees no operator t
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("M4.6 wiring: the production MCP server registry includes the orchestrator tools (P2 wiring gap)", async () => {
+  // The P2: orchestratorTools() was only invoked in tests — the production
+  // serve() registered only the 16 channel tools. Verify the WIRING by
+  // spawning the real MCP server, requesting tools/list over its stdio,
+  // and asserting the orchestrator tools are IN the registry.
+  const dir = projectWithPin("member")
+  try {
+    const { spawn } = await import("node:child_process")
+    const serverTarget = join(process.cwd(), "dist-test", "src", "mcp", "main.js")
+    const child = spawn(process.execPath, [serverTarget, dir, "--host", "probe", "--admin"], {
+      env: { ...process.env, OPENCOMMS_MEMBER_ID: "member_test01" },
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+    let out = ""
+    child.stdout.on("data", (d) => (out += d.toString()))
+    child.stdin.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "probe", version: "0" } },
+      }) + "\n",
+    )
+    await new Promise((r) => setTimeout(r, 300))
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n")
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) + "\n")
+    await new Promise((r) => setTimeout(r, 500))
+    child.kill()
+    const lines = out
+      .split("\n")
+      .filter((l) => l.includes(String.fromCharCode(34) + "result" + String.fromCharCode(34)))
+    const toolsLine = lines.at(-1)
+    assert.ok(toolsLine, "no tools/list response from the MCP server")
+    const parsed = JSON.parse(toolsLine)
+    const names = (parsed.result?.tools ?? []).map((t: { name: string }) => t.name)
+    assert.ok(
+      names.includes("opencomms_agent_create"),
+      "orchestrator tools missing from the production registry (P2 wiring gap)",
+    )
+    assert.ok(names.includes("opencomms_task_assign"))
+    assert.ok(names.includes("opencomms_node_approve"))
+    assert.ok(names.includes("opencomms_send"))
+    assert.ok(names.length >= 24, `expected >= 24 tools, got ${names.length}`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

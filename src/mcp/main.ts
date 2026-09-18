@@ -12,6 +12,7 @@
 import { resolve } from "node:path"
 import { McpStdioServer } from "./server.js"
 import { buildMcpToolDefs } from "./opencomms-tools.js"
+import { orchestratorTools } from "./orchestrator-tools.js"
 import { pinnedMember } from "./identity.js"
 import { StateStore } from "../core/store.js"
 import { ArchiveStore } from "../core/archive.js"
@@ -41,27 +42,33 @@ export function serve(opts: { projectDir: string; host: string; admin: boolean }
               /* diagnostics only */
             })
         })
-  const tools = buildMcpToolDefs(
-    store,
-    {
-      host: opts.host,
-      admin: opts.admin,
-      projectId,
-      worktree: resolve(opts.projectDir),
-      spawnDelivery,
-      archives: new ArchiveStore(resolve(opts.projectDir)),
-    },
-    {
-      mutate: (mutate: (state: State) => ToolResult) =>
-        store.withLock(() => {
-          const state = store.load()
-          const result = mutate(state)
-          if (result.ok) store.save(state)
-          return result
-        }),
-      readState: () => store.load(),
-    },
-  )
+  const tools = [
+    ...buildMcpToolDefs(
+      store,
+      {
+        host: opts.host,
+        admin: opts.admin,
+        projectId,
+        worktree: resolve(opts.projectDir),
+        spawnDelivery,
+        archives: new ArchiveStore(resolve(opts.projectDir)),
+      },
+      {
+        mutate: (mutate: (state: State) => ToolResult) =>
+          store.withLock(() => {
+            const state = store.load()
+            const result = mutate(state)
+            if (result.ok) store.save(state)
+            return result
+          }),
+        readState: () => store.load(),
+      },
+    ),
+    // M4.6: the orchestrator tool surface (principal-classed, thin wrappers
+    // on OrchestratorApi). Operator tools register only for --admin
+    // instances; human-present tools always list (token-gated at call).
+    ...orchestratorTools(buildOrchestratorApi(resolve(opts.projectDir), store), opts.admin),
+  ]
   const server = new McpStdioServer({ name: "opencomms", version: "2.0.0", tools })
   const pin = pinnedMember()
   server.log(
@@ -88,6 +95,58 @@ function cli(argv: string[]): void {
 // Matches every shipped filename: dist/mcp/main.js, installed
 // opencomms-mcp.mjs, .mcpb bundle server/main.mjs.
 const invoked = process.argv[1]?.replace(/\\/g, "/") ?? ""
+
+/**
+ * M4.6: the OrchestratorApi for the MCP tool surface. Constructed with the
+ * same project-local state the channel tools use (one core, both surfaces).
+ */
+import { OrchestratorApi } from "../orchestrator/api.js"
+import { OrchestratorStore } from "../orchestrator/state.js"
+import { createOrchestratorFeed } from "../orchestrator/events.js"
+import { startGuiServer } from "../gui/server.js"
+
+function buildOrchestratorApi(projectDir: string, store: StateStore): OrchestratorApi {
+  const orchStore = new OrchestratorStore(resolve(projectDir), store)
+  const feed = createOrchestratorFeed((fn) =>
+    orchStore.withLock(() => {
+      const s = orchStore.load()
+      const seq = fn(s)
+      orchStore.save(s)
+      return seq
+    }),
+  )
+  return new OrchestratorApi({
+    projectDir: resolve(projectDir),
+    servePassword: () => process.env["OPENCOMMS_ORCH_SERVE_PASSWORD"] ?? "",
+    serveModel: () => process.env["OPENCOMMS_ORCH_SERVE_MODEL"],
+    servePort: () => 0,
+    withLock: (fn) => store.withLock(fn),
+    loadOrchestrator: () => orchStore.load(),
+    saveOrchestrator: (s) => orchStore.save(s),
+    loadChannelEngineState: () => store.load(),
+    engineSend: (state, input, senderSessionId) => channelSend(state, input, senderSessionId),
+    saveChannelEngineState: (state) => {
+      void state
+      /* channel-state saves flow through the mutate() path above */
+    },
+    feed,
+    projectId: () => process.env["OPENCOMMS_PROJECT_ID"] ?? null,
+  })
+}
+
+import { sendMessage as engineSendMessage } from "../core/engine.js"
+function channelSend(
+  state: unknown,
+  input: { channel: string; content: string; message_type: "review_request" },
+  senderSessionId: string,
+): { ok: boolean; message: string } {
+  const result = engineSendMessage(
+    state as State,
+    { channel: input.channel, content: input.content, type: input.message_type },
+    senderSessionId,
+  )
+  return { ok: result.ok, message: result.message }
+}
 if (
   /mcp[\\/]main\.(js|mjs|ts)$/.test(invoked) ||
   /opencomms-mcp\.mjs$/.test(invoked) ||
