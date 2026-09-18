@@ -201,6 +201,8 @@ export async function dispatchBridgeCommand(deps: BridgeDeps, req: BridgeRequest
     }
     case "trust_view":
       return api.trustView()
+    case "sessions_list":
+      return deps.guiReads.sessions()
     case "audit_log":
       // Owner-only (confirm-token gate enforced inside auditLog); relays the
       // token verbatim — the bridge never logs bodies.
