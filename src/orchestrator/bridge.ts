@@ -50,6 +50,7 @@ export const BRIDGE_COMMANDS = [
   "workspace_state",
   "integrations_list",
   "diagnostics",
+  "audit_log",
   // Mutating (owner/operator actions)
   "session_create",
   "session_save",
@@ -130,6 +131,7 @@ const COMMAND_TABLE: Record<string, "none" | "body" | "nameArg"> = {
   workspace_state: "none",
   integrations_list: "none",
   diagnostics: "none",
+  audit_log: "body", // { confirm_token, since? } — owner-only; token never logged
   session_create: "body",
   session_save: "body",
   session_resume: "body",
@@ -199,6 +201,10 @@ export async function dispatchBridgeCommand(deps: BridgeDeps, req: BridgeRequest
     }
     case "trust_view":
       return api.trustView()
+    case "audit_log":
+      // Owner-only (confirm-token gate enforced inside auditLog); relays the
+      // token verbatim — the bridge never logs bodies.
+      return api.auditLog(req.args)
     case "session_members": {
       const name = typeof req.args["name"] === "string" ? req.args["name"] : ""
       if (!name) return { ok: false, message: "session_members requires args.name" }

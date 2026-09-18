@@ -649,8 +649,13 @@ function startGui(projectDir: string | undefined, portFlag: string | undefined, 
 }
 
 /** Start the GUI-backed stdio bridge used by the native Tauri shell. */
-async function startBridge(projectDir: string): Promise<void> {
-  const handle = await startGuiServer({ projectDir, port: 0, hostname: "127.0.0.1" })
+async function startBridge(projectDir: string, bootstrap = false): Promise<void> {
+  const handle = await startGuiServer({
+    projectDir: bootstrap ? undefined : projectDir,
+    bridgeStorageDir: bootstrap ? projectDir : undefined,
+    port: 0,
+    hostname: "127.0.0.1",
+  })
   try {
     const coreDeps = handle.bridgeDeps()
     if (!coreDeps) throw new Error("OpenComms bridge requires a selected project.")
@@ -910,10 +915,12 @@ if (isCliEntry) {
     const guiResult = runCli(argv)
     if (guiResult.output) process.stdout.write(guiResult.output + "\n")
   } else if (argv[0] === "bridge") {
-    void startBridge(projectDirFromFlag(argv, "--project") ?? process.cwd()).catch((error: unknown) => {
-      process.stderr.write(`Bridge failed: ${(error as Error).message}\n`)
-      process.exitCode = 1
-    })
+    void startBridge(projectDirFromFlag(argv, "--project") ?? process.cwd(), argv.includes("--bootstrap")).catch(
+      (error: unknown) => {
+        process.stderr.write(`Bridge failed: ${(error as Error).message}\n`)
+        process.exitCode = 1
+      },
+    )
   } else if (argv[0] === "session") {
     void runSession(argv.slice(1), projectDirFromFlag(argv, "--project") ?? process.cwd()).then(emit)
   } else if (argv[0] === "update") {

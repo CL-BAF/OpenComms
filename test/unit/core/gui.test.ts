@@ -134,6 +134,31 @@ test("GUI: workspace registry switches projects and never writes state before se
   }
 })
 
+test("GUI: native bridge bootstrap keeps runtime storage hidden until project selection", async () => {
+  const root = mkdtempSync(join(tmpdir(), "oc-bridge-bootstrap-"))
+  const previousConfigDir = process.env["OPENCOMMS_CONFIG_DIR"]
+  process.env["OPENCOMMS_CONFIG_DIR"] = join(root, "app-config")
+  const handle = await startGuiServer({
+    projectDir: join(root, "not-a-project"),
+    bridgeStorageDir: join(root, "bridge-runtime"),
+    port: 0,
+    hostname: "127.0.0.1",
+  })
+  const base = `http://127.0.0.1:${handle.port}`
+  try {
+    const workspace = await api(base, "/api/workspace")
+    assert.equal(workspace.status, 200)
+    assert.equal((workspace.body.data as { current_project: string | null }).current_project, null)
+    const sessions = await api(base, "/api/sessions")
+    assert.equal((sessions.body.data as { project: string | null }).project, null)
+  } finally {
+    await handle.close()
+    if (previousConfigDir === undefined) delete process.env["OPENCOMMS_CONFIG_DIR"]
+    else process.env["OPENCOMMS_CONFIG_DIR"] = previousConfigDir
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("GUI: embedded application shell uses modals and exposes project, diagnostics, and capability surfaces", () => {
   // M1 IA: seven-surface nav (docs/gui-ia.md §2, Lead-approved).
   assert.match(GUI_HTML, /data-nav="overview"/)
@@ -148,6 +173,7 @@ test("GUI: embedded application shell uses modals and exposes project, diagnosti
   assert.match(GUI_HTML, /Copy diagnostics/)
   assert.match(GUI_HTML, /Technical details/)
   assert.match(GUI_HTML, /Reconnecting/)
+  assert.match(GUI_HTML, /pick_project/)
   assert.doesNotMatch(GUI_HTML, /\bprompt\s*\(/)
   assert.doesNotMatch(GUI_HTML, /\bconfirm\s*\(/)
 })

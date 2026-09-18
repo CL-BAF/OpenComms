@@ -33,13 +33,22 @@ button.small { padding:4px 8px; font-size:12px; }
 .brand-mark { width:27px; height:27px; border:1px solid #b88a4e; color:var(--accent); display:grid; place-items:center; border-radius:5px; font-weight:700; letter-spacing:-.08em; }
 .brand-name { font-size:15px; font-weight:650; letter-spacing:.01em; }
 .brand-sub { color:var(--muted); font-size:11px; margin-top:1px; }
-.project-switch { text-align:left; width:100%; padding:10px; background:var(--surface); border-color:var(--line); margin-bottom:22px; }
+.project-switch { text-align:left; width:100%; padding:11px; background:var(--surface); border-color:var(--line); margin-bottom:22px; border-radius:8px; }
 .project-label { display:block; color:var(--dim); font-size:10px; text-transform:uppercase; letter-spacing:.11em; }
 .project-path { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:3px; color:var(--text); }
 .nav { display:grid; gap:3px; }
-.nav button { background:transparent; border-color:transparent; color:var(--muted); text-align:left; padding:9px 10px; }
+.nav button { background:transparent; border-color:transparent; color:var(--muted); text-align:left; padding:9px 10px; border-radius:7px; }
 .nav button:hover,.nav button.active { background:var(--surface-2); border-color:var(--line); color:var(--text); }
-.nav-icon { display:inline-block; width:23px; color:var(--dim); }
+.nav-icon { display:inline-flex; align-items:center; justify-content:center; width:23px; color:var(--dim); font-size:0; font-weight:700; }
+.nav-icon::before { font-size:12px; line-height:1; }
+.nav button:nth-child(1) .nav-icon::before { content:"O"; }
+.nav button:nth-child(2) .nav-icon::before { content:"S"; }
+.nav button:nth-child(3) .nav-icon::before { content:"T"; }
+.nav button:nth-child(4) .nav-icon::before { content:"v"; }
+.nav button:nth-child(5) .nav-icon::before { content:"N"; }
+.nav button:nth-child(6) .nav-icon::before { content:"~"; }
+.nav button:nth-child(7) .nav-icon::before { content:"*"; }
+.nav button.active .nav-icon,.nav button:hover .nav-icon { color:var(--accent); }
 .sidebar-footer { margin-top:auto; padding:16px 9px 0; border-top:1px solid var(--line); color:var(--muted); font-size:11px; }
 .connection { display:flex; align-items:center; gap:7px; }
 .connection-dot { width:7px; height:7px; border-radius:50%; background:var(--good); }
@@ -79,10 +88,10 @@ details.tech { margin-top:7px; color:var(--muted); font-size:11px; } details.tec
 .join-box { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:end; }.join-controls { display:flex; gap:8px; align-items:center; }.join-where { color:var(--muted); font-size:11px; margin:9px 0 6px; }.command { background:#101112; border:1px solid var(--line); border-radius:4px; padding:12px; color:#d8dde1; font:12px/1.55 Consolas,"Cascadia Code",monospace; overflow-wrap:anywhere; user-select:all; }.cap-warning { color:var(--warn); font-size:11px; margin-top:7px; }
 .summary { white-space:pre-wrap; color:#c6cbd0; background:var(--surface-2); border:1px solid var(--line); padding:12px; border-radius:5px; }.context { white-space:pre-wrap; color:var(--muted); font-size:12px; max-height:250px; overflow:auto; }.notice { border-left:2px solid var(--accent); color:var(--muted); padding:8px 11px; background:var(--surface-2); margin-top:12px; }
 .integration-list,.diagnostic-list { display:grid; gap:8px; }.integration-row,.diagnostic-row { display:flex; justify-content:space-between; gap:18px; border-bottom:1px solid var(--line); padding:11px 0; }.integration-row:last-child,.diagnostic-row:last-child { border-bottom:0; }.integration-name { font-weight:600; }.integration-detail,.diagnostic-value { color:var(--muted); text-align:right; overflow-wrap:anywhere; }.diagnostic-key { color:var(--dim); }.diagnostic-value { max-width:65%; }
-.settings-note { max-width:650px; color:var(--muted); }.modal-backdrop { position:fixed; inset:0; z-index:10; display:grid; place-items:center; padding:20px; background:rgba(0,0,0,.67); }.modal { width:min(560px,100%); max-height:90vh; overflow:auto; background:var(--surface); border:1px solid var(--line-strong); border-radius:7px; box-shadow:0 16px 60px rgba(0,0,0,.45); }.modal-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; border-bottom:1px solid var(--line); padding:18px 20px 14px; }.modal-head h2 { margin:0; font-size:16px; }.modal-body { padding:18px 20px; }.modal-foot { display:flex; justify-content:flex-end; gap:8px; border-top:1px solid var(--line); padding:13px 20px; }
+.settings-note { max-width:650px; color:var(--muted); }.modal-backdrop { position:fixed; inset:0; z-index:10; display:grid; place-items:center; padding:20px; background:rgba(0,0,0,.67); backdrop-filter:blur(3px); }.modal { width:min(620px,100%); max-height:90vh; overflow:auto; background:var(--surface); border:1px solid var(--line-strong); border-radius:10px; box-shadow:0 16px 60px rgba(0,0,0,.45); }.modal-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; border-bottom:1px solid var(--line); padding:18px 20px 14px; }.modal-head h2 { margin:0; font-size:16px; }.modal-body { padding:18px 20px; }.modal-foot { display:flex; justify-content:flex-end; gap:8px; border-top:1px solid var(--line); padding:13px 20px; }
 .field { margin-bottom:14px; }.field label { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }.field-help { color:var(--dim); font-size:11px; margin-top:4px; }.inline-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; }.check-row { display:flex; gap:8px; align-items:center; color:var(--muted); }.check-row input { accent-color:var(--accent); }
 input[type=text],input[type=number],textarea,select { width:100%; background:#111314; color:var(--text); border:1px solid var(--line-strong); border-radius:4px; padding:8px 9px; } textarea { min-height:130px; resize:vertical; }
-.recent-project { display:flex; justify-content:space-between; gap:10px; align-items:center; padding:9px 10px; background:var(--surface-2); border:1px solid var(--line); border-radius:4px; margin:6px 0; }.recent-project.invalid { opacity:.55; }.recent-project code { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.form-error { color:var(--bad); min-height:20px; margin:0 0 8px; }.toast { position:fixed; z-index:20; left:50%; bottom:22px; transform:translateX(-50%); background:#2b3034; border:1px solid var(--line-strong); color:var(--text); padding:9px 15px; border-radius:5px; box-shadow:0 5px 25px rgba(0,0,0,.35); }
+.recent-project { display:flex; justify-content:space-between; gap:10px; align-items:center; padding:10px 11px; background:var(--surface-2); border:1px solid var(--line); border-radius:6px; margin:6px 0; }.recent-project.invalid { opacity:.55; }.recent-project code { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.form-error { color:var(--bad); min-height:0; margin:0 0 8px; }.form-error:empty { display:none; }.toast { position:fixed; z-index:20; left:50%; bottom:22px; transform:translateX(-50%); background:#2b3034; border:1px solid var(--line-strong); color:var(--text); padding:9px 15px; border-radius:5px; box-shadow:0 5px 25px rgba(0,0,0,.35); }
 .tabbar { display:flex; gap:6px; border-bottom:1px solid var(--line); margin-bottom:18px; }
 .tabbar button { background:transparent; border:1px solid transparent; border-bottom:0; border-radius:6px 6px 0 0; color:var(--muted); padding:8px 14px; }
 .tabbar button.active { background:var(--surface); border-color:var(--line); color:var(--text); }
@@ -102,9 +111,63 @@ input[type=text],input[type=number],textarea,select { width:100%; background:#11
 <div class="app-shell"><aside class="sidebar"><div class="brand"><div class="brand-mark">OC</div><div><div class="brand-name">OpenComms</div><div class="brand-sub">Agent session coordination</div></div></div><button class="project-switch" id="projectBtn"><span class="project-label">Current project</span><span class="project-path" id="projectPath">Choose a project</span></button><nav class="nav"><button data-nav="overview"><span class="nav-icon">â—‰</span>Overview</button><button data-nav="sessions"><span class="nav-icon">â—ˆ</span>Sessions</button><button data-nav="team"><span class="nav-icon">â—”</span>Team</button><button data-nav="tasks"><span class="nav-icon">â–¤</span>Tasks</button><button data-nav="nodes"><span class="nav-icon">â–£</span>Nodes</button><button data-nav="activity"><span class="nav-icon">âŒ</span>Activity</button><button data-nav="settings"><span class="nav-icon">âš™</span>Settings</button></nav><div class="sidebar-footer"><div class="connection" id="connection"><span class="connection-dot"></span><span id="connectionText">Connecting</span></div><div style="margin-top:7px">Local-only console</div></div></aside><main class="main"><header class="topbar"><div><div class="eyebrow">OpenComms / local workspace</div><h1 class="page-title" id="pageTitle">Sessions</h1></div><div class="top-actions"><span class="top-connection" id="topConnection">Connecting</span><button class="primary" id="newBtn">New Session</button></div></header><div class="content" id="view"></div></main></div>
 <div id="modalRoot"></div><div id="toastRoot"></div>
 <script>
+if(window.__TAURI__){window.EventSource=function(){return{addEventListener:function(){}};};}
 var app={route:"sessions",detail:null,workspace:null,connected:false};var viewToken=0;var projectModalPending=false;var hosts=["opencode","claude-code","codex","claude-desktop","chatgpt"];var $=function(sel){return document.querySelector(sel);};var esc=function(value){return String(value==null?"":value).replace(/[&<>\"]/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[c];});};
 var setConnection=function(connected){var isConnected=connected===true,isReconnecting=connected==="reconnecting";app.connected=isConnected;var el=$("#connection"),label=isConnected?"Connected":isReconnecting?"Reconnecting":"Offline";if(el){el.className="connection "+(isConnected?"":isReconnecting?"reconnecting":"offline");$("#connectionText").textContent=label;$("#topConnection").textContent=label;}};
-var api=async function(path,options){try{var res=await fetch(path,Object.assign({headers:{"Content-Type":"application/json"}},options||{}));var body=await res.json();if(!res.ok)body.ok=false;setConnection(true);return body;}catch(error){setConnection(false);return{ok:false,message:"OpenComms backend is unavailable."};}};
+var invokeNative=window.__TAURI__&&window.__TAURI__.core&&window.__TAURI__.core.invoke?function(cmd,args){return window.__TAURI__.core.invoke("orchestrator_invoke",{cmd:cmd,args:args||{}});}:null;
+var pickProjectNative=window.__TAURI__&&window.__TAURI__.core&&window.__TAURI__.core.invoke?function(){return window.__TAURI__.core.invoke("pick_project");}:null;
+var ROUTE_COMMANDS={
+ "/api/workspace":{cmd:"workspace_state",method:"GET"},
+ "/api/sessions":{cmd:"sessions_list",method:"GET",create:"session_create"},
+ "/api/orchestrator/agents":{cmd:"agents_list",method:"GET"},
+ "/api/orchestrator/trust":{cmd:"trust_view",method:"GET"},
+ "/api/orchestrator/nodes":{cmd:"nodes_list",method:"GET"},
+ "/api/orchestrator/audit":{cmd:"audit_log",method:"POST"},
+ "/api/orchestrator/tasks":{cmd:"tasks_list",method:"GET"},
+ "/api/orchestrator/events":{cmd:"events_list",method:"GET",query:"since"},
+ "/api/integrations":{cmd:"integrations_list",method:"GET"},
+ "/api/diagnostics":{cmd:"diagnostics",method:"GET"}
+};
+var api=async function(path,options){var opts=options||{};var method=opts.method||"GET";var nativeBody=opts.body?safeParse(opts.body):{};
+if(invokeNative){
+if(path==="/api/workspace/browse"&&method==="POST"&&pickProjectNative){try{var picked=await pickProjectNative();if(!picked)return{ok:false,message:"No project selected."};return await invokeRoute("/api/workspace","POST",{path:picked});}catch(error){return{ok:false,message:String(error&&error.message?error.message:error)};}}
+var body=await invokeRoute(path,method,nativeBody);
+if(body.ok!==false)setConnection(true);
+return body;}
+try{var res=await fetch(path,Object.assign({headers:{"Content-Type":"application/json"}},options||{}));var body=await res.json();if(!res.ok)body.ok=false;setConnection(true);return body;}catch(error){setConnection(false);return{ok:false,message:"OpenComms backend is unavailable."};}};
+var safeParse=function(raw){try{return typeof raw==="string"?JSON.parse(raw):raw;}catch(e){return{};}};
+var invokeRoute=async function(path,method,nativeBody){
+var basePath=path.split("?")[0];
+var map=ROUTE_COMMANDS[basePath];
+// Dynamic sub-routes: /api/sessions/<name>[/verb], /api/orchestrator/nodes/<id>[/runtimes]
+var sub=null;
+if(!map){var parts=path.split("/").filter(Boolean);if(parts[1]==="sessions"){sub={kind:"sessions",name:parts[2],tail:parts[3]||""};}else if(parts[2]==="nodes"){sub={kind:"nodes",id:parts[3],tail:parts[4]||""};}}
+if(map&&method==="GET"&&map.query){var q=(path.split("?")[1]||"").split("&").reduce(function(acc,kv){var kv2=kv.split("=");if(kv2[0])acc[decodeURIComponent(kv2[0])]=decodeURIComponent(kv2[1]||"");return acc;},{});var args2={};if(q[map.query]!=null)args2[map.query]=Number(q[map.query])||0;map={cmd:map.cmd,method:"GET"};nativeBody=args2;}
+if(map&&!map.create&&method==="POST"&&path==="/api/workspace"){map={cmd:"workspace_select",method:"POST"};}
+var cmd=null;var args={};
+if(sub&&sub.kind==="sessions"){
+if(sub.tail==="members"){cmd="session_members";args={name:sub.name};}
+else if(sub.tail==="save"){cmd="session_save";args={name:sub.name,summary:nativeBody.summary||""};}
+else if(sub.tail==="resume"){cmd="session_resume";args={name:sub.name,new_name:nativeBody.new_name||""};}
+else if(sub.tail==="pause"){cmd="session_pause";args={name:sub.name};}
+else if(sub.tail==="unpause"){cmd="session_unpause";args={name:sub.name};}
+else if(sub.tail==="members/remove"){cmd="member_remove";args={name:sub.name,target_session_id:nativeBody.target_session_id||""};}
+else if(sub.tail===""&&method==="DELETE"){cmd="session_delete";args={name:sub.name};}
+else if(sub.tail===""&&method==="GET"){cmd="session_members";args={name:sub.name};}
+else return {ok:false,message:"No IPC command for "+path};
+}
+else if(method==="POST"&&path==="/api/orchestrator/nodes/approve"){cmd="node_approve";args=nativeBody;}
+else if(method==="POST"&&path==="/api/orchestrator/nodes/revoke"){cmd="node_revoke";args=nativeBody;}
+else if(sub&&sub.kind==="nodes"){
+if(sub.tail==="runtimes"){cmd="runtimes_list";args={node_id:sub.id};}
+else if(sub.tail===""&&method==="GET"){cmd="nodes_list";args={};}
+else return {ok:false,message:"No IPC command for "+path};
+}
+else if(method==="POST"&&map&&map.create){cmd=map.create;args=nativeBody;}
+else if(map&&method==="GET"){cmd=map.cmd;args=nativeBody;}
+else if(map&&method==="POST"){cmd=map.cmd;args=nativeBody;}
+else return {ok:false,message:"No IPC command for "+method+" "+path};
+ try{var res=await invokeNative(cmd,args);return res&&res.ok===false?res:res;}catch(error){return{ok:false,message:String(error&&error.message?error.message:error)};}};
 var toast=function(message){var old=$("#toastRoot .toast");if(old)old.remove();var el=document.createElement("div");el.className="toast";el.textContent=message||"Done";$("#toastRoot").appendChild(el);setTimeout(function(){el.remove();},2800);};var closeModal=function(){projectModalPending=false;$("#modalRoot").innerHTML="";};var formError=function(message){var el=$(".form-error");if(el)el.textContent=message||"";};
 var modal=function(title,content,submitText,onSubmit){$("#modalRoot").innerHTML='<div class="modal-backdrop" id="modalBackdrop"><section class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h2>'+esc(title)+'</h2><button class="ghost" id="modalClose" aria-label="Close">×</button></div><form id="modalForm"><div class="modal-body">'+content+'</div><div class="modal-foot"><button type="button" id="modalCancel">Cancel</button><button type="submit" class="primary">'+esc(submitText||"Save")+'</button></div></form></section></div>';$("#modalClose").onclick=closeModal;$("#modalCancel").onclick=closeModal;$("#modalBackdrop").onclick=function(e){if(e.target.id==="modalBackdrop")closeModal();};$("#modalForm").onsubmit=function(e){e.preventDefault();onSubmit(new FormData(e.target));};};
 var projectLabel=function(){return app.workspace&&app.workspace.current_project?app.workspace.current_project:"Choose a project";};var renderShell=function(){$("#projectPath").textContent=projectLabel();$("#newBtn").style.display=app.route==="sessions"?"inline-block":"none";var titles={overview:"Overview",sessions:"Sessions",team:"Team",tasks:"Tasks",nodes:"Nodes",activity:"Activity",settings:"Settings"};$("#pageTitle").textContent=titles[app.route]||"Overview";document.querySelectorAll("[data-nav]").forEach(function(el){el.classList.toggle("active",el.getAttribute("data-nav")==app.route);});};
@@ -177,10 +240,11 @@ modal("Assign task",'<p class="settings-note">Assigns a task to a worker agent b
 var renderActivity=async function(){var token=viewToken;renderShell();if(!app.workspace||!app.workspace.current_project){emptyProject();return;}var ev=await api("/api/orchestrator/events?since=0");if(token!==viewToken||app.route!=="activity"||app.detail)return;
 if(!ev.ok){renderShell();$("#view").innerHTML='<div class="toolbar"><div><h2>Activity</h2><p>Unified feed: orchestration events + channel notices.</p></div></div><div class="surface-disabled"><span class="waits">Waits on M2 contract</span><div>The composed events feed (<code>GET /api/orchestrator/events</code> with kind orchestration|channel_notice) lands in M2.</div><p class="muted" style="margin:0">'+esc(ev.message||"Endpoint missing from contract v0.3 §9.")+'</p></div>';return;}
 var page=ev.data||{};var events=page.events||[];var cursor=page.cursor||0;
-var h='<div class="toolbar"><div><h2>Activity</h2><p>Unified feed: orchestration events + channel notices.</p></div>'+(cursor?'<button id="olderBtn">Older…</button>':'')+'</div><div class="grid" style="grid-template-columns:1fr">';
+var h='<div class="toolbar"><div><h2>Activity</h2><p>Unified feed: orchestration events + channel notices.</p></div><div class="detail-actions"><button id="auditBtn">Audit log…</button>'+(cursor?'<button id="olderBtn">Older…</button>':'')+'</div></div><div class="grid" style="grid-template-columns:1fr">';
 if(!events.length)h+='<div class="empty">No activity recorded yet. Orchestration events (spawn/stop/stale/error) and channel notices appear here as they happen.</div>';
 events.forEach(function(e){var kind=e.kind||"orchestration";var detail=kind==="channel_notice"&&e.message_id?'<div class="agent-identity">message ref: <code>'+esc(e.message_id)+'</code></div>':"";var agentDetail=e.agent_id?'<div class="agent-identity">agent: <code>'+esc(e.agent_id)+'</code></div>':"";var taskDetail=e.task_id?'<div class="agent-identity">task: <code>'+esc(e.task_id)+'</code></div>':"";h+='<div class="agent"><div class="agent-row"><div><div class="agent-role">'+esc(e.message||e.type||"(event)")+'<span class="badge '+esc(kind)+'">'+esc(kind)+'</span></div>'+agentDetail+taskDetail+detail+'</div><div class="agent-actions"><span class="muted">'+esc(e.at?new Date(e.at).toLocaleString():"")+'</span></div></div></div>';});
-h+='</div>';$("#view").innerHTML=h;var ob=$("#olderBtn");if(ob)ob.onclick=function(){renderActivity();};};
+h+='</div>';$("#view").innerHTML=h;var ob=$("#olderBtn");if(ob)ob.onclick=function(){renderActivity();};var ab=$("#auditBtn");if(ab)ab.onclick=function(){openAuditModal();};};
+var openAuditModal=function(){modal("Audit log — owner only",'<p class="settings-note">The audit log records trust-relevant events (approvals, revocations, denials) in append-only form. Owner-only: the confirm token is required to read it and is never logged.</p><div class="field"><label for="auditToken">Owner confirm token</label><input id="auditToken" name="confirm_token" type="password" autocomplete="off" required placeholder="Enter the owner confirm token" /><div class="field-help">Same token as node approval; surfaced in the CLI/settings surface only; cleared after this action.</div></div><p class="form-error"></p>',"Open audit log",async function(fd){var token=String(fd.get("confirm_token")||"");if(!token){formError("The owner confirm token is required.");return;}var x=await api("/api/orchestrator/audit",{method:"POST",body:JSON.stringify({confirm_token:token,since:0})});fd.set("auditToken","");if(!x.ok){formError(x.message);return;}closeModal();var page=x.data||{};var audit=page.audit||[];var h='<div class="toolbar"><div><h2>Audit log</h2><p>Owner-only, append-only trust event log.</p></div><button id="backActivity">← Activity</button></div><div class="grid" style="grid-template-columns:1fr">';if(!audit.length)h+='<div class="empty">No audit events recorded.</div>';audit.forEach(function(e){h+='<div class="agent"><div class="agent-row"><div><div class="agent-role">'+esc(e.message||e.type||"(event)")+'<span class="badge orchestration">'+esc(e.type||"event")+'</span></div>'+(e.agent_id?'<div class="agent-identity">agent: <code>'+esc(e.agent_id)+'</code></div>':"")+(e.node_id?'<div class="agent-identity">node: <code>'+esc(e.node_id)+'</code></div>':"")+'</div><div class="agent-actions"><span class="muted">'+esc(e.at?new Date(e.at).toLocaleString():"")+'</span></div></div></div>';});h+='</div>';$("#view").innerHTML=h;var bb=$("#backActivity");if(bb)bb.onclick=function(){renderActivity();};});};
 var renderNodes=async function(){var token=viewToken;renderShell();if(!app.workspace||!app.workspace.current_project){emptyProject();return;}var nd=await api("/api/orchestrator/nodes");if(token!==viewToken||app.route!=="nodes"||app.detail)return;
 if(!nd.ok){renderShell();$("#view").innerHTML='<div class="toolbar"><div><h2>Nodes</h2><p>Machines that may host agents. Multi-machine is opt-in, never assumed.</p></div></div><div class="surface-disabled"><span class="waits">Waits on M3 contract</span><div>Node registry + trust-gate endpoints arrive in M3. The local node is implicit and always available; remote nodes appear only after owner approval.</div><p class="muted" style="margin:0">'+esc(nd.message||"Endpoint missing from contract v0.3 §1.")+'</p></div>';return;}
 var nodes=(nd.data&&nd.data.nodes)||[];var trust=await api("/api/orchestrator/trust");var tv=trust.ok?(trust.data||{}):{pending_requests:[],approved_nodes:[]};

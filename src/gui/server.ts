@@ -74,6 +74,12 @@ export function memberState(member: { stale: boolean }, queueLength: number): "W
 
 export interface GuiDeps {
   projectDir?: string
+  /**
+   * Sidecar-only storage used before the owner chooses a project. It keeps
+   * the bridge alive for workspace_state/workspace_select without exposing
+   * the install/runtime directory as the current project.
+   */
+  bridgeStorageDir?: string
   port: number
   hostname: string
 }
@@ -98,13 +104,14 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     )
   }
   let projectDir = initialWorkspaceProject(deps.projectDir)
-  let store = projectDir ? new StateStore(projectDir) : null
-  let archives = projectDir ? new ArchiveStore(projectDir) : null
+  let storageProjectDir = projectDir ?? (deps.bridgeStorageDir ? resolve(deps.bridgeStorageDir) : null)
+  let store = storageProjectDir ? new StateStore(storageProjectDir) : null
+  let archives = storageProjectDir ? new ArchiveStore(storageProjectDir) : null
   // Orchestrator core (M1): in-process in THIS server (ADR-0005 leaning);
   // Tauri sidecar argv stays exactly `gui --port N --server --project dir`.
   let orchestratorStore: OrchestratorStore | null = null
-  if (projectDir && store) {
-    orchestratorStore = new OrchestratorStore(projectDir, store)
+  if (storageProjectDir && store) {
+    orchestratorStore = new OrchestratorStore(storageProjectDir, store)
   }
   // Serve password + model are in-memory only (never persisted, never
   // returned, never logged; Reviewer redaction-by-value gate).
@@ -177,7 +184,8 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       return 4919
     }
   }
-  if (projectDir && orchestratorStore && feed && store) {
+  if (storageProjectDir && orchestratorStore && feed && store) {
+    const initialStorageProjectDir = storageProjectDir
     const apiOrchestratorStore = orchestratorStore
     const apiStore = store
     const apiFeed = feed
@@ -198,7 +206,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       return ""
     }
     orchestratorApi = new OrchestratorApi({
-      projectDir,
+      projectDir: initialStorageProjectDir,
       servePassword: orchestratorServePassword,
       serveModel: () => process.env["OPENCOMMS_ORCH_SERVE_MODEL"],
       servePort: () => servePort,
@@ -514,6 +522,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     rememberWorkspaceProject(normalized)
     stopWatchers()
     projectDir = normalized
+    storageProjectDir = normalized
     store = new StateStore(normalized)
     archives = new ArchiveStore(normalized)
     orchestratorStore = new OrchestratorStore(normalized, store)

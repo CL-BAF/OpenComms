@@ -8,6 +8,7 @@
     "beforeBuildCommand": "node ../scripts/build-shell-asset.mjs"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "OpenComms Tauri Desktop GUI",

@@ -1,9 +1,11 @@
-# OpenComms Desktop GUI — Information Architecture (M0 proposal)
+# OpenComms Desktop GUI — Information Architecture (FINAL, shipped)
 
-Owner: Frontend. Status: PROPOSAL for Lead approval; contract gaps in §8 are
-requests, not decisions. Consumes only `docs/orchestrator-api.md` contract v0 —
-no invented endpoints, no fake data; surfaces whose endpoints are missing stay
-visibly disabled until Backend lands them.
+Owner: Frontend. Status: SHIPPED — this document described the contract for
+the surfaces that now run in the native Tauri app (ADR-0006, tagged
+v1.3.1-gui-native). The original M0 proposal text is preserved below for
+history; the final-state notes in §9a/§10 supersede it where they differ.
+Consumes the Orchestrator API (contract v0.3) — no invented endpoints, no
+fake data; surfaces whose endpoints are missing stay visibly disabled.
 
 ## 1. Design principles
 
@@ -146,12 +148,40 @@ Remote-node UI renders disabled until M3; local node renders from M1 stubs.
   identical when/if an ADR moves transport to Tauri IPC.
 - No fake data anywhere; disabled states carry explanatory copy instead.
 
-## 10. Sequencing
+## 9a. Final state (ADR-0006 — what shipped)
 
-1. **Now (M0):** spike shell wraps existing console (done — see
-   `desktop/README.md`); this doc is the contract-coordination artifact.
-2. **M1:** rebuild IA shell (new nav, Overview skeleton, Sessions restyled
-   from existing endpoints, Team live against real agents endpoints).
-3. **M2:** Tasks + Activity (with events composition per §8.3/8.4 outcomes).
+- **Transport:** Tauri IPC, NOT loopback HTTP. The webview loads bundled
+  assets (`dist-shell/index.html`, the real console build); the data layer
+  is `window.__TAURI__.core.invoke("orchestrator_invoke", …)` through the
+  handshake-validated stdio JSON-RPC bridge (§8 of
+  docs/tauri-native-gui.md). fetch() exists only as the non-Tauri fallback
+  (the loopback console remains for CLI/headless per ADR-0005).
+- **Security:** strict CSP (default-src 'none', script-src 'self',
+  connect-src ipc-only), 24-command IPC allowlist mirroring contract v0.3
+  1:1, thin Rust relay (no policy in Rust), ALL trust enforcement in the
+  TS core. Confirm-token flows preserved exactly (human-typed, no storage,
+  cleared after submit).
+- **§8 gap resolutions (the original five proposals):** (1) Lead identity →
+  `designated:"lead"` on agents items — SHIPPED; (2) runtimes listing →
+  `GET /nodes/{id}/runtimes` — SHIPPED (powers the create-agent dialog);
+  (3) Activity composition → kind orchestration|channel_notice with
+  message_id refs — SHIPPED; (4) task_id in events — SHIPPED; (5) SSE
+  topic split — additive `orchestrator` + `tasks` topics — SHIPPED.
+- **Packaging:** NSIS (Windows) + deb/AppImage (Linux), sidecar inside the
+  install, `bundle.active=true`; loopback console remains the CLI/headless
+  fallback (ADR-0005).
+- **Tag trail:** v1.1.0-gui → v1.2.0-gui → v1.2.1-gui-interim →
+  v1.3.0-gui-native → v1.3.1-gui-native. Every step Reviewer-gated.
+
+## 10. Sequencing (all complete)
+
+1. **M0:** spike shell wrapped the existing console; this doc was the
+   contract-coordination artifact.
+2. **M1:** IA shell rebuilt (new nav, Overview skeleton, Sessions restyled,
+   Team live against real agents endpoints).
+3. **M2:** Tasks + Activity (events composition per the §8 outcomes).
 4. **M3:** Nodes + trust-gate UI against real Registry endpoints.
-5. **M4:** parity pass Win/Linux + headless CLI parity check with Platform.
+5. **M4:** parity pass + headless CLI parity checklist
+   (docs/gui-cli-parity.md) with Platform.
+6. **M4.5:** native re-scope — bundled assets + IPC data layer (ADR-0006);
+   shipped as v1.3.1-gui-native.

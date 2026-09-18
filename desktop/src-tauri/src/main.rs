@@ -38,6 +38,7 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "workspace_state",
     "integrations_list",
     "diagnostics",
+    "audit_log",
     // mutations
     "session_create",
     "session_save",
@@ -68,6 +69,35 @@ const PROTOCOL_VERSION: u64 = 1;
 /// PAIR: the bridge's own 10s timer (bridge.ts) exits the process if the
 /// host never acks, so neither side can hang forever.
 
+/// Bridge diagnostics log (P1 owner-bug): spawn/handshake failures were
+/// invisible because stderr is nulled in release builds. Write the failure
+/// beside the exe — the first place a user/Lead looks — capped to keep the
+/// file small. Command BODIES are never logged (token-bearing requests must
+/// never reach a log file); only connection lifecycle events.
+fn bridge_log(exe_dir: &std::path::Path, message: &str) {
+    use std::io::Write as _;
+    let path = exe_dir.join("bridge.log");
+    let entry = format!(
+        "[{}] {}\n",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        message
+    );
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    // Keep the last ~50 lines.
+    let mut lines: Vec<&str> = existing.lines().collect();
+    lines.push(entry.trim_end());
+    if lines.len() > 50 {
+        let start = lines.len() - 50;
+        lines = lines[start..].to_vec();
+    }
+    if let Ok(mut f) = std::fs::File::create(&path) {
+        let _ = writeln!(f, "{}", lines.join("\n"));
+    }
+}
+
 fn connect_coordinator() -> Result<Coordinator, String> {
     let exe_dir = std::env::current_exe()
         .map_err(|e| format!("resolve exe: {e}"))?
@@ -75,27 +105,41 @@ fn connect_coordinator() -> Result<Coordinator, String> {
         .ok_or("no parent dir")?
         .to_path_buf();
     let sidecar = exe_dir.join("opencomms-coordinator.exe");
-    let project = installed_project_dir(&exe_dir).unwrap_or_else(repo_root);
+    let seeded_project = installed_project_dir(&exe_dir);
+    let bootstrap = seeded_project.is_none();
+    let project = seeded_project.unwrap_or_else(|| fallback_project_dir(&exe_dir));
 
     let mut child = if sidecar.exists() {
-        Command::new(&sidecar)
-            .arg("bridge")
-            .arg("--project")
-            .arg(&project)
+        let mut command = Command::new(&sidecar);
+        command.arg("bridge").arg("--project").arg(&project);
+        if bootstrap {
+            command.arg("--bootstrap");
+        }
+        match command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("spawn sidecar: {e}"))?
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let msg = format!("spawn sidecar failed: {e}");
+                bridge_log(&exe_dir, &msg);
+                return Err(msg);
+            }
+        }
     } else {
+        bridge_log(&exe_dir, "sidecar not found beside exe (installed context)");
         // Dev path: repo coordinator (node dist/cli/main.js).
         let root = repo_root();
         let script = root.join("dist").join("cli").join("main.js");
         if !script.exists() {
-            return Err(format!("coordinator not found: {}", script.display()));
+            let msg = format!("coordinator not found: {}", script.display());
+            bridge_log(&exe_dir, &msg);
+            return Err(msg);
         }
         let node = if cfg!(windows) { "node.exe" } else { "node" };
-        Command::new(node)
+        match Command::new(node)
             .arg(&script)
             .arg("bridge")
             .arg("--project")
@@ -104,7 +148,14 @@ fn connect_coordinator() -> Result<Coordinator, String> {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("spawn dev coordinator: {e}"))?
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let msg = format!("spawn dev coordinator failed: {e}");
+                bridge_log(&exe_dir, &msg);
+                return Err(msg);
+            }
+        }
     };
 
     let stdout = child
@@ -131,17 +182,29 @@ fn connect_coordinator() -> Result<Coordinator, String> {
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
     match reader.read_line(&mut line) {
-        Ok(0) => return Err("coordinator exited before handshake (bridge timer expired)".to_string()),
+        Ok(0) => {
+            let msg = "coordinator exited before handshake (bridge timer expired)".to_string();
+            bridge_log(&exe_dir, &msg);
+            return Err(msg);
+        }
         Ok(_) => {}
-        Err(e) => return Err(format!("handshake read failed: {e}")),
+        Err(e) => {
+            let msg = format!("handshake read failed: {e}");
+            bridge_log(&exe_dir, &msg);
+            return Err(msg);
+        }
     }
     let hello: Value =
         serde_json::from_str(line.trim()).map_err(|e| format!("handshake not JSON: {e}"))?;
     if hello.get("hello").and_then(|v| v.as_str()) != Some(HANDSHAKE_ID) {
-        return Err("handshake identity mismatch — not the OpenComms coordinator".to_string());
+        let msg = "handshake identity mismatch — not the OpenComms coordinator".to_string();
+        bridge_log(&exe_dir, &msg);
+        return Err(msg);
     }
     if hello.get("protocol").and_then(|v| v.as_u64()) != Some(PROTOCOL_VERSION) {
-        return Err("handshake protocol version mismatch".to_string());
+        let msg = "handshake protocol version mismatch".to_string();
+        bridge_log(&exe_dir, &msg);
+        return Err(msg);
     }
     let announced = hello
         .get("api")
@@ -149,7 +212,9 @@ fn connect_coordinator() -> Result<Coordinator, String> {
         .ok_or_else(|| "handshake missing api list".to_string())?;
     for cmd in ALLOWED_COMMANDS {
         if !announced.iter().any(|a| a.as_str() == Some(*cmd)) {
-            return Err(format!("coordinator missing IPC command: {cmd}"));
+            let msg = format!("coordinator missing IPC command: {cmd}");
+            bridge_log(&exe_dir, &msg);
+            return Err(msg);
         }
     }
 
@@ -222,6 +287,40 @@ fn installed_project_dir(install_dir: &std::path::Path) -> Option<std::path::Pat
     None
 }
 
+/// Installed-context fallback when no .opencomms is seeded beside the exe:
+/// use the per-user app-data directory (NOT a compile-time repo path, which
+/// is meaningless on a clean install).
+fn fallback_project_dir(install_dir: &std::path::Path) -> std::path::PathBuf {
+    // Keep bootstrap state outside the installation directory. The GUI server
+    // treats this as storage-only until the owner chooses a real project, so
+    // uninstalling/updating the app cannot become a project-state operation.
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(std::path::PathBuf::from)
+                .map(|profile| profile.join("AppData").join("Local"))
+        })
+        .unwrap_or_else(|| std::env::temp_dir());
+    let path = local_app_data.join("OpenComms").join("bridge-runtime");
+    if path == install_dir {
+        std::env::temp_dir().join("OpenComms").join("bridge-runtime")
+    } else {
+        path
+    }
+}
+
+/// Open the host-native project directory picker. This is a UI affordance,
+/// not a project validator; the TypeScript core validates the returned path
+/// when `workspace_select` is relayed over the audited bridge.
+#[tauri::command]
+fn pick_project() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("Choose an OpenComms project directory")
+        .pick_folder()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
 fn repo_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -257,7 +356,7 @@ fn main() {
     // The bridge connects lazily on the first IPC command.
     tauri::Builder::default()
         .manage(std::sync::Mutex::<Option<Coordinator>>::new(None))
-        .invoke_handler(tauri::generate_handler![orchestrator_invoke])
+        .invoke_handler(tauri::generate_handler![orchestrator_invoke, pick_project])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
