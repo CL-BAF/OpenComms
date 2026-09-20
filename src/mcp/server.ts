@@ -78,7 +78,7 @@ export class McpStdioServer {
     process.stdin.setEncoding("utf8")
     process.stdin.on("data", (chunk: string) => {
       buffer += chunk
-      if (buffer.length > McpStdioServer.MAX_BUFFER_BYTES) {
+      if (Buffer.byteLength(buffer, "utf8") > McpStdioServer.MAX_BUFFER_BYTES) {
         // Oversized frame flood: drop the buffered bytes and signal a parse
         // error, but keep the connection alive so the client can recover.
         this.log(`inbound buffer exceeded ${McpStdioServer.MAX_BUFFER_BYTES} bytes; discarding`)
@@ -95,7 +95,7 @@ export class McpStdioServer {
         const line = buffer.slice(0, idx).trim()
         buffer = buffer.slice(idx + 1)
         if (!line) continue
-        if (line.length > McpStdioServer.MAX_LINE_BYTES) {
+        if (Buffer.byteLength(line, "utf8") > McpStdioServer.MAX_LINE_BYTES) {
           this.write({
             jsonrpc: "2.0",
             id: null,
