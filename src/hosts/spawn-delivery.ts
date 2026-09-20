@@ -82,9 +82,11 @@ const BUILDERS: Record<string, SpawnCommandBuilder> = {
 /**
  * Windows argv budget (Reviewer P2-2): CreateProcess caps the WHOLE command
  * line at 32,767 chars; POSIX caps a single arg at 128 KiB
- * (MAX_ARG_STRLEN). Keep conservative headroom. Oversized batches are
- * refused BEFORE draining (queued mail preserved, never truncated) with an
- * actionable error.
+ * (MAX_ARG_STRLEN). Keep conservative headroom.
+ *
+ * Delivery policy (issue #3): FIFO partial drain under the budget. Only the
+ * head message being individually oversized refuses delivery (queue intact).
+ * Later messages that do not fit remain pending for the next cycle.
  */
 export const SPAWN_ARGV_BUDGET: Record<string, number> = { win32: 30_000, default: 120_000 }
 
@@ -308,51 +310,42 @@ export async function deliverViaSpawn(deps: SpawnRunnerDeps, member: Member): Pr
     return { status: "skipped", detail: "a spawn delivery is already in flight for this member" }
   }
 
-  // Pre-spawn argv size guard (P2-2): estimate the framed batch size from
-  // the PENDING queue without draining. Framing adds ~450 chars per
-  // envelope; the builder's fixed argv adds a little more.
+  // Argv size guard (issue #3 / P2-2): framing adds ~450 chars per envelope;
+  // the builder's fixed argv adds a little more. FIFO: drain every message
+  // that still fits; leave the rest pending. Only refuse when the *head*
+  // pending message alone cannot fit under the platform budget.
   const builder = spawnBuilderFor(member.host)!
   const budget = spawnArgvBudget()
-  let estimated = 0
-  let oversizedIds: string[] = []
+  const FRAMING_PER_MSG = 450
+  const JOIN_SEP = 6 // "\n\n---\n\n".length
+
+  // Phase 1 (locked): head-only oversized refusal, else partial drain.
+  let batch: Array<{ id: string; channelName: string }> = []
+  let framed = ""
+  let headOversizedId: string | null = null
   try {
     await deps.withLock(() => {
       const state = deps.load()
       const cmd = builder.buildResumeCommand({ hostSessionId: member.host_session_id as string, cwd: deps.cwd })
       const fixedOverhead = cmd.command.length + cmd.args.join(" ").length + 64
+
       for (const id of state.queues[member.session_id] ?? []) {
         const msg = state.messages[id]
         if (!msg || msg.delivery_status !== "pending") continue
-        const framedEstimate = msg.content.length + 450
-        if (fixedOverhead + estimated + framedEstimate > budget) oversizedIds.push(id)
-        else estimated += framedEstimate + 6
+        const headCost = fixedOverhead + msg.content.length + FRAMING_PER_MSG
+        if (headCost > budget) headOversizedId = id
+        break
       }
-      return null
-    })
-  } catch (error) {
-    deps.recordError(`Spawn delivery size check for ${member.session_id} failed: ${(error as Error).message}`)
-  }
-  if (oversizedIds.length > 0) {
-    // Do NOT drain: leave the queue untouched so the operator can shrink
-    // content or switch the member to pull. Record once per message id per
-    // process lifetime to avoid error spam.
-    const fresh = oversizedIds.filter((id) => !sizeGuardReported.has(id))
-    for (const id of fresh) sizeGuardReported.add(id)
-    if (fresh.length > 0) {
-      deps.recordError(
-        `Spawn delivery refused for ${member.session_id}: batch exceeds the spawn argv limit (~${budget} chars on ${process.platform}). Reduce message size or switch this member to pull delivery. Message ids: ${fresh.join(", ")}`,
-      )
-    }
-    return { status: "skipped", detail: `batch exceeds the spawn argv limit (~${budget} chars); queue left untouched` }
-  }
+      if (headOversizedId) return null
 
-  // Phase 1 (locked): drain + persist in_flight.
-  let batch: Array<{ id: string; channelName: string }> = []
-  let framed = ""
-  try {
-    await deps.withLock(() => {
-      const state = deps.load()
-      const pairs = drainForDelivery(state, member.session_id)
+      let used = fixedOverhead
+      const canDeliver = (msg: { content: string }) => {
+        const cost = msg.content.length + FRAMING_PER_MSG + JOIN_SEP
+        if (used + cost > budget) return false
+        used += cost
+        return true
+      }
+      const pairs = drainForDelivery(state, member.session_id, { canDeliver })
       if (pairs.length > 0) deps.save(state)
       batch = pairs.map((p) => ({ id: p.message_id, channelName: p.channel_name }))
       return null
@@ -360,6 +353,15 @@ export async function deliverViaSpawn(deps: SpawnRunnerDeps, member: Member): Pr
   } catch (error) {
     deps.recordError(`Spawn delivery drain for ${member.session_id} failed: ${(error as Error).message}`)
     return { status: "failed", detail: `drain failed: ${(error as Error).message}` }
+  }
+  if (headOversizedId) {
+    if (!sizeGuardReported.has(headOversizedId)) {
+      sizeGuardReported.add(headOversizedId)
+      deps.recordError(
+        `Spawn delivery refused for ${member.session_id}: message exceeds the spawn argv limit (~${budget} chars on ${process.platform}). Reduce message size or switch this member to pull delivery. Message ids: ${headOversizedId}`,
+      )
+    }
+    return { status: "skipped", detail: `batch exceeds the spawn argv limit (~${budget} chars); queue left untouched` }
   }
   if (batch.length === 0) return { status: "skipped", detail: "no pending messages" }
 

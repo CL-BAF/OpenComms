@@ -1115,8 +1115,12 @@ export function pendingRecipients(state: State): string[] {
  * OWN channel's name (a session may sit in multiple channels; provenance in
  * the untrusted-message framing must never borrow another channel's label).
  */
-export function drainForDelivery(state: State, recipientSessionId: string): DeliveryPair[] {
-  const delivered = drainQueue(state, recipientSessionId)
+export function drainForDelivery(
+  state: State,
+  recipientSessionId: string,
+  opts: { now?: number; canDeliver?: (msg: MessageEnvelope) => boolean } = {},
+): DeliveryPair[] {
+  const delivered = drainQueue(state, recipientSessionId, opts)
   return delivered.map((envelope) => ({
     message_id: envelope.message_id,
     channel_name: Object.values(state.channels).find((c) => c.id === envelope.channel_id)?.name ?? "(unknown channel)",

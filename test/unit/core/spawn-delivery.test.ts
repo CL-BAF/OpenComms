@@ -18,6 +18,7 @@ import {
   parseCommandTemplate,
   resolveBinaryOverride,
   spawnArgvBudget,
+  SPAWN_ARGV_BUDGET,
   isWindowsShimPath,
   type SpawnCommand,
   type SpawnRunnerDeps,
@@ -306,12 +307,45 @@ test("P2-1: spawn failure with EINVAL carries the actionable shim hint", async (
 
 // ── P2-2: argv size guard ──
 
-test("P2-2: oversized batch refused BEFORE draining; queue untouched; no spawn", async () => {
+test("P2-2: head message alone oversized refused; queue untouched; no spawn", async () => {
   const state = emptyState()
   const member = makeMember()
   seedChannelWithSpawnMember(state, member)
-  // Three 45k-char messages (each under the 100k single-message send limit)
-  // sum past every platform budget (win32 30k / POSIX 120k).
+  // Force a tiny budget so a normal-sized message is head-oversized on any platform.
+  const key = process.platform === "win32" ? "win32" : "default"
+  const prev = SPAWN_ARGV_BUDGET[key]
+  SPAWN_ARGV_BUDGET[key] = 500
+  try {
+    const sent = sendMessage(state, { channel: "spawn-ch", content: "x".repeat(2_000) }, "sess_sender")
+    assert.equal(sent.ok, true)
+    const { deps, spawned, errors } = makeFakeDeps(state)
+
+    const outcome = await deliverViaSpawn(deps, member)
+    assert.equal(outcome.status, "skipped")
+    assert.match(outcome.detail, /argv limit/)
+    assert.equal(spawned.length, 0, "no doomed spawn attempted")
+    assert.equal((state.queues[member.session_id] ?? []).length, 1, "queue left untouched")
+    for (const m of Object.values(state.messages)) assert.equal(m.delivery_status, "pending", "not drained")
+    assert.ok(errors.some((e) => e.includes("spawn argv limit") && e.includes("switch this member to pull")))
+
+    // Repeat attempt: no duplicate error spam (guard dedups per message id).
+    const outcome2 = await deliverViaSpawn(deps, member)
+    assert.equal(outcome2.status, "skipped")
+    assert.equal(errors.filter((e) => e.includes("spawn argv limit")).length, 1)
+  } finally {
+    SPAWN_ARGV_BUDGET[key] = prev!
+  }
+})
+
+test("P2-2b: FIFO partial drain when batch exceeds budget (issue #3)", async () => {
+  // Force POSIX-sized budget path: three ~45k messages → first two fit under
+  // 120k, third stays pending. On win32 (30k) the head alone is oversized;
+  // skip the partial-drain assertion on that platform.
+  if (process.platform === "win32") return
+
+  const state = emptyState()
+  const member = makeMember()
+  seedChannelWithSpawnMember(state, member)
   for (let i = 0; i < 3; i++) {
     const sent = sendMessage(state, { channel: "spawn-ch", content: `m${i} ` + "x".repeat(45_000) }, "sess_sender")
     assert.equal(sent.ok, true)
@@ -319,17 +353,12 @@ test("P2-2: oversized batch refused BEFORE draining; queue untouched; no spawn",
   const { deps, spawned, errors } = makeFakeDeps(state)
 
   const outcome = await deliverViaSpawn(deps, member)
-  assert.equal(outcome.status, "skipped")
-  assert.match(outcome.detail, /argv limit/)
-  assert.equal(spawned.length, 0, "no doomed spawn attempted")
-  assert.equal((state.queues[member.session_id] ?? []).length, 3, "queue left untouched")
-  for (const m of Object.values(state.messages)) assert.equal(m.delivery_status, "pending", "not drained")
-  assert.ok(errors.some((e) => e.includes("spawn argv limit") && e.includes("switch this member to pull")))
-
-  // Repeat attempt: no duplicate error spam (guard dedups per message id).
-  const outcome2 = await deliverViaSpawn(deps, member)
-  assert.equal(outcome2.status, "skipped")
-  assert.equal(errors.filter((e) => e.includes("spawn argv limit")).length, 1)
+  assert.equal(outcome.status, "delivered", "first fitting prefix should deliver")
+  assert.equal(spawned.length, 1, "one spawn with the fitting prefix")
+  assert.equal((state.queues[member.session_id] ?? []).length, 1, "third message remains queued")
+  const pending = Object.values(state.messages).filter((m) => m.delivery_status === "pending")
+  assert.equal(pending.length, 1, "exactly one message still pending")
+  assert.equal(errors.filter((e) => e.includes("spawn argv limit")).length, 0, "deferred messages are not errors")
 })
 
 test("spawn argv budget is platform-aware and conservative", () => {
