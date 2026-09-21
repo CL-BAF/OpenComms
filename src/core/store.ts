@@ -334,8 +334,9 @@ export class StateStore {
       try {
         fd = openSync(this.lockPath, "wx")
         break
-      } catch {
-        // Either EEXIST (someone else holds it) or a race lost. Inspect age.
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        // Someone else holds it, or another creator won the race. Inspect age.
         try {
           const st = statSync(this.lockPath)
           if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
