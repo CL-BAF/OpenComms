@@ -495,7 +495,11 @@ test("manager.uninstall: delegates to adapters with the member; ok:false 'uninst
   }
 })
 
-test("PLACEHOLDER_ISSUE is the exact string both claude-code and codex adapters emit", async () => {
+test("PLACEHOLDER_ISSUE is the exact string both claude-code and codex adapters emit", async (t) => {
+  if (!distReady()) {
+    t.skip("dist missing — run npm run build")
+    return
+  }
   const dir = mkdtempSync(join(tmpdir(), "oc-int-ph-"))
   try {
     const manager = new IntegrationManager()
