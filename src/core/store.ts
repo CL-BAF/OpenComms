@@ -5,7 +5,7 @@
  * atomic: we serialize to a temp file in the same directory, flush it, then
  * rename over the target. On Windows, `rename` over an existing file is
  * supported by Node's fs.rename (it maps to MoveFileEx with REPLACE_EXISTING),
- * but we defensively retry once after a short delay because antivirus or
+ * but we defensively retry with bounded delays because antivirus or
  * OneDrive can briefly hold a handle.
  *
  * Concurrency: multiple host sessions share one state.json. A bare
@@ -19,7 +19,6 @@
 import {
   mkdirSync,
   readFileSync,
-  renameSync,
   writeFileSync,
   existsSync,
   copyFileSync,
@@ -30,6 +29,7 @@ import {
   type PathOrFileDescriptor,
 } from "node:fs"
 import { dirname, join } from "node:path"
+import { replaceStateFile } from "./atomic-file.js"
 import { randomBytes } from "node:crypto"
 import {
   DEFAULT_MAX_MEMBERS,
@@ -541,30 +541,7 @@ export class StateStore {
     mkdirSync(this.dir, { recursive: true })
     const tmp = join(this.dir, `.state.${process.pid}.${randomBytes(4).toString("hex")}.tmp`)
     const payload = JSON.stringify(state, null, 2)
-    writeFileSync(tmp, payload, "utf8")
-    try {
-      renameSync(tmp, this.file)
-    } catch (error) {
-      // Windows: retry once after a short yielding pause (AV/OneDrive races).
-      // A blocking 50ms stall is acceptable here: the write already happened,
-      // and this path is rare; the atomic-rename guarantee is what matters.
-      try {
-        // save() is intentionally synchronous (callers rely on durability
-        // when it returns), so this rare retry path uses a bounded 50ms
-        // blocking wait rather than async. LOCK acquisition â€” the path that
-        // can wait seconds â€” uses yielding sleepAsync instead.
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
-        renameSync(tmp, this.file)
-      } catch (second) {
-        try {
-          writeFileSync(this.file, payload, "utf8")
-        } catch {
-          throw new Error(
-            `OpenComms: failed to persist state (${(error as Error).message}; ${(second as Error).message})`,
-          )
-        }
-      }
-    }
+    replaceStateFile(this.file, tmp, payload)
   }
 
   /** Convenience: load, mutate, save â€” all under the cross-process lock. */
