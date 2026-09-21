@@ -37,8 +37,10 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { execFileSync } from "node:child_process"
 import { homedir } from "node:os"
-
 import { createHash } from "node:crypto"
+// Reviewer P3-1: single compareVersions home (integrations/versioning.ts).
+// Same semantics (leading-v strip, NaN->0) — the local copy is retired.
+import { compareVersions } from "../integrations/versioning.js"
 
 const REPO = "CL-BAF/OpenComms"
 const RELEASES_BASE = `https://github.com/${REPO}/releases/download`
@@ -102,23 +104,8 @@ function parseTagVersion(payload: string): string | null {
   return match?.[1] ?? null
 }
 
-/** Semver-ish comparison: positive when b > a, 0 equal, negative when b < a. */
-export function compareVersions(a: string, b: string): number {
-  const pa = a
-    .replace(/^v/, "")
-    .split(".")
-    .map((part) => Number.parseInt(part, 10))
-  const pb = b
-    .replace(/^v/, "")
-    .split(".")
-    .map((part) => Number.parseInt(part, 10))
-  for (let i = 0; i < 3; i++) {
-    const na = Number.isNaN(pa[i]) ? 0 : (pa[i] ?? 0)
-    const nb = Number.isNaN(pb[i]) ? 0 : (pb[i] ?? 0)
-    if (nb !== na) return nb - na
-  }
-  return 0
-}
+/** Semver-ish comparison — imported from integrations/versioning.js (P3-1). */
+export { compareVersions }
 
 export function sha256Hex(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex")

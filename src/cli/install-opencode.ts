@@ -23,6 +23,19 @@ import { pluginBundlePath } from "./paths.js"
 export interface OpencodeInstallOutcome {
   ok: boolean
   lines: string[]
+  /**
+   * Structured fields (Reviewer P3-3): adapters must use THESE, never parse
+   * the English lines[] — string parsing breaks on copy edits.
+   */
+  pluginRelPath?: string
+  configPath?: string
+  /** plugin.js was written this run (false = already identical/registered). */
+  wrotePlugin?: boolean
+  /** opencode.json(.jsonc) "plugin" array now contains our entry. */
+  pluginRegistered?: boolean
+  /** true when plugin.js existed but was NOT the registered OpenComms entry
+   *  before this run (possible foreign plugin — surfaced as a warning). */
+  preExistingForeignPlugin?: boolean
 }
 
 /**
@@ -66,11 +79,62 @@ function readConfigText(path: string): string | null {
   return readFileSync(path, "utf8")
 }
 
-/** Strip comments ONLY for .jsonc (naive // stripping corrupts URLs in .json). */
+/**
+ * String-aware comment stripping for .jsonc (Reviewer P1-2).
+ *
+ * The previous regex (`\/\/.*$` per line) truncated string VALUES containing
+ * "//" — e.g. "$schema": "https://opencode.ai/config.json" became "https:"
+ * — and rewrote the file without its comments. This scanner tracks JSON
+ * string state (with escape handling) and only removes // and slash-star
+ * comments OUTSIDE string literals; string contents are preserved verbatim.
+ */
+export function stripJsoncComments(raw: string): string {
+  let out = ""
+  let i = 0
+  let inString = false
+  while (i < raw.length) {
+    const ch = raw[i]!
+    if (inString) {
+      out += ch
+      if (ch === "\\") {
+        const next = raw[i + 1]
+        if (next !== undefined) {
+          out += next
+          i += 2
+          continue
+        }
+      } else if (ch === '"') {
+        inString = false
+      }
+      i += 1
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      out += ch
+      i += 1
+      continue
+    }
+    if (ch === "/" && raw[i + 1] === "/") {
+      while (i < raw.length && raw[i] !== "\n") i += 1
+      continue
+    }
+    if (ch === "/" && raw[i + 1] === "*") {
+      const end = raw.indexOf("*/", i + 2)
+      i = end === -1 ? raw.length : end + 2
+      continue
+    }
+    out += ch
+    i += 1
+  }
+  return out
+}
+
+/** Strip comments ONLY for .jsonc; string values are never corrupted. */
 function parseConfig(path: string, raw: string): { config?: Record<string, unknown>; error?: string } {
   let text = raw
   if (path.endsWith(".jsonc")) {
-    text = text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")
+    text = stripJsoncComments(text)
   }
   try {
     return { config: JSON.parse(text) as Record<string, unknown> }
@@ -105,6 +169,10 @@ export function opencodeInstallReport(opts: {
           ? "The packaged exe should carry the embedded plugin; rebuild with npm run build:exe."
           : "dist/plugin.bundled.js missing — run `npm run build` first.",
       ],
+      pluginRelPath: ".opencode/plugins/plugin.js",
+      wrotePlugin: false,
+      pluginRegistered: false,
+      preExistingForeignPlugin: false,
     }
   }
 
@@ -121,8 +189,17 @@ export function opencodeInstallReport(opts: {
     }
   }
   const pluginFile = join(pluginsDir, "plugin.js")
+  // Foreign-plugin guard (Reviewer P3-3): detect a plugin.js that was NOT
+  // ours BEFORE overwriting it, so the report can warn (the file is still
+  // overwritten — our plugin path is OpenComms-owned — but the user is told).
+  const preExistingForeignPlugin = existsSync(pluginFile) && !readFileSync(pluginFile, "utf8").includes("opencomms")
   writeFileSync(pluginFile, contents, "utf8")
   lines.push(`wrote .opencode/plugins/plugin.js (self-contained)`)
+  if (preExistingForeignPlugin) {
+    lines.push(
+      "WARNING: .opencode/plugins/plugin.js existed but was not an OpenComms plugin; it was replaced. Restore it from version control if it was yours.",
+    )
+  }
 
   // Patch opencode.json (or .jsonc) — same behavior as the legacy install.mjs.
   const jsonCandidates = [join(target, "opencode.json"), join(target, "opencode.jsonc")]
@@ -131,13 +208,20 @@ export function opencodeInstallReport(opts: {
   const pluginRelPath = ".opencode/plugins/plugin.js"
   if (!configPath) {
     lines.push("could not determine opencode.json path")
-    return { ok: false, lines }
+    return { ok: false, lines, pluginRelPath, wrotePlugin: true, pluginRegistered: false, preExistingForeignPlugin }
   }
   const raw = readConfigText(configPath)
   if (raw !== null) {
     const parsed = parseConfig(configPath, raw)
     if (parsed.error) {
-      return { ok: false, lines: [parsed.error] }
+      return {
+        ok: false,
+        lines: [parsed.error],
+        pluginRelPath,
+        wrotePlugin: true,
+        pluginRegistered: false,
+        preExistingForeignPlugin,
+      }
     }
     const config = parsed.config as Record<string, unknown>
     const pluginField = config["plugin"]
@@ -147,7 +231,7 @@ export function opencodeInstallReport(opts: {
     else if (Array.isArray(pluginField)) arr = [...pluginField]
     else {
       lines.push('opencode.json "plugin" field is not a string or array; refusing to overwrite.')
-      return { ok: false, lines }
+      return { ok: false, lines, pluginRelPath, wrotePlugin: true, pluginRegistered: false, preExistingForeignPlugin }
     }
     const already = arr.some((entry) => entry === pluginRelPath || (Array.isArray(entry) && entry[0] === pluginRelPath))
     if (!already) arr.push(pluginRelPath)
@@ -160,5 +244,13 @@ export function opencodeInstallReport(opts: {
   }
 
   lines.push("Done. Open OpenCode in the target project and run /OpenComms Create ... in a session.")
-  return { ok: true, lines }
+  return {
+    ok: true,
+    lines,
+    pluginRelPath,
+    configPath: configPath.replace(/\\/g, "/"),
+    wrotePlugin: true,
+    pluginRegistered: true,
+    preExistingForeignPlugin,
+  }
 }

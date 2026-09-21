@@ -14,7 +14,7 @@
  * Never prints secrets (env values, pin contents are summarized, not dumped).
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, unlinkSync } from "node:fs"
 import { join, resolve, dirname } from "node:path"
 import { tmpdir } from "node:os"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
@@ -39,6 +39,7 @@ import { updateCommand } from "./update.js"
 import { runAgentCommand } from "./agent.js"
 import { taskList, taskAssign, membersRemove, sessionCreate } from "./tasks.js"
 import { VERSION } from "../version.js"
+import { doctorReport } from "./doctor.js"
 import { runBridge } from "../orchestrator/bridge.js"
 
 /** Package version, derived from package.json so the CLI can never drift. */
@@ -246,6 +247,34 @@ function fmtDoctor(projectDir: string): CliResult {
 }
 
 /**
+ * Structured doctor backend (`src/cli/doctor.ts`) rendered for the CLI.
+ * `doctorReport` is the machine-readable form the GUI Integrations surface
+ * (M3) reuses — CLI and GUI consume the SAME backend, never two.
+ */
+export async function doctorCommand(projectDir: string, fix: boolean): Promise<CliResult> {
+  const report = await doctorReport(projectDir, { fix })
+  const lines: string[] = []
+  lines.push(`OpenComms doctor (v${VERSION})${fix ? " --fix" : ""}`)
+  for (const check of report.checks) {
+    const mark = check.status === "ok" ? "OK  " : check.status === "warn" ? "WARN" : "FAIL"
+    lines.push(`  [${mark}] ${check.label}: ${check.detail}`)
+  }
+  if (report.fixed.length > 0) {
+    lines.push("")
+    lines.push("Fixed:")
+    for (const f of report.fixed) lines.push(`  + ${f}`)
+  }
+  if (report.unfixable.length > 0) {
+    lines.push("")
+    lines.push("Needs manual attention:")
+    for (const u of report.unfixable) lines.push(`  ! ${u}`)
+  }
+  lines.push("")
+  lines.push(report.ok ? "Doctor: no failures." : "Doctor: failures present (see [FAIL] rows above).")
+  return report.ok ? ok(lines.join("\n")) : fail(lines.join("\n"))
+}
+
+/**
  * G5 Linux runtime discovery for the daemon: where does `node` resolve
  * from, and is it a nvm/fnm-managed shim (which is NOT on a systemd unit's
  * PATH unless explicitly added)? Honest about the discovery mechanism.
@@ -359,7 +388,11 @@ function runUninstall(host: string | undefined, projectDir: string): CliResult {
   switch ((host ?? "").toLowerCase()) {
     case "claude-code": {
       // Remove ONLY OpenComms entries; never touch unrelated config.
-      const settingsPath = join(resolve(projectDir), ".claude", "settings.json")
+      // Reviewer P2-5: uninstall must ALSO remove the .mcp.json server
+      // entry and the copied bundles — hooks-only removal left stale state
+      // that reinstall then mis-detected as "installed".
+      const target = resolve(projectDir)
+      const settingsPath = join(target, ".claude", "settings.json")
       let removed = false
       if (existsSync(settingsPath)) {
         const raw = JSON.parse(readFileSync(settingsPath, "utf8")) as { hooks?: Record<string, unknown> }
@@ -376,29 +409,88 @@ function runUninstall(host: string | undefined, projectDir: string): CliResult {
               }
             }
           }
+          // Drop empty hook events rather than leaving [] shells behind.
+          for (const event of Object.keys(raw.hooks)) {
+            if (Array.isArray(raw.hooks[event]) && (raw.hooks[event] as unknown[]).length === 0) {
+              delete raw.hooks[event]
+              changedAny = true
+            }
+          }
+          if (Object.keys(raw.hooks).length === 0) delete raw.hooks
           // Write only when something was actually removed (no format churn).
           if (changedAny) writeFileSync(settingsPath, JSON.stringify(raw, null, 2) + "\n", "utf8")
         }
       }
+      const mcpJsonPath = join(target, ".mcp.json")
+      if (existsSync(mcpJsonPath)) {
+        const mcpConfig = JSON.parse(readFileSync(mcpJsonPath, "utf8")) as { mcpServers?: Record<string, unknown> }
+        if (mcpConfig.mcpServers && "opencomms" in mcpConfig.mcpServers) {
+          delete mcpConfig.mcpServers["opencomms"]
+          if (Object.keys(mcpConfig.mcpServers).length === 0) delete mcpConfig.mcpServers
+          writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf8")
+          removed = true
+        }
+      }
+      for (const bundle of ["claude-code-hooks.mjs", "opencomms-mcp.mjs"]) {
+        const bundlePath = join(target, ".opencomms", bundle)
+        if (existsSync(bundlePath)) {
+          try {
+            unlinkSync(bundlePath)
+            removed = true
+          } catch {
+            /* best effort; report continues */
+          }
+        }
+      }
       return ok(
         removed
-          ? "OpenComms hooks removed from .claude/settings.json (other config untouched)."
-          : "No OpenComms hooks found (nothing to remove).",
+          ? "OpenComms integration removed (hooks, .mcp.json entry, copied bundles). Other config untouched. NOTE: .opencomms/state.json and pins are shared project state and were NOT removed."
+          : "No OpenComms integration found (nothing to remove).",
       )
     }
     case "codex": {
+      // Reviewer P2-2: remove ALL [mcp_servers.opencomms*] sections — the
+      // old cut stopped at the env sub-table, leaving an orphan env block;
+      // reinstall's includes() check then skipped the rewrite and Codex saw
+      // a server with env but no command.
       const configPath = join(resolve(projectDir), ".codex", "config.toml")
       if (!existsSync(configPath)) return ok("No Codex config present.")
       const toml = readFileSync(configPath, "utf8")
-      const sectionStart = toml.indexOf("[mcp_servers.opencomms]")
-      if (sectionStart === -1) return ok("No opencomms section in config.toml.")
-      // Cut from the section to the next top-level [section] after it.
-      const rest = toml.slice(sectionStart)
-      const nextSection = rest.slice(1).search(/\n\[/)
-      const end = nextSection === -1 ? rest.length : 1 + nextSection + 1
-      const cleaned = (toml.slice(0, sectionStart) + rest.slice(end)).replace(/\n{3,}/g, "\n\n")
-      writeFileSync(configPath, cleaned, "utf8")
-      return ok("[mcp_servers.opencomms] removed from .codex/config.toml (other sections untouched).")
+      const sectionRe = /^\[mcp_servers\.opencomms(?:\.[^\]]*)?\]$/gm
+      if (!sectionRe.test(toml)) return ok("No opencomms section in config.toml.")
+      sectionRe.lastIndex = 0
+      const cuts: Array<[number, number]> = []
+      for (let m = sectionRe.exec(toml); m !== null; m = sectionRe.exec(toml)) {
+        const start = m.index
+        const rest = toml.slice(start)
+        // Cut to the next top-level [section] AFTER this header (skipping
+        // sub-tables of the same server is what the regex already handled).
+        const afterHeader = toml.indexOf("\n[", start + 1)
+        // Find the next section header that is NOT an opencomms sub-table.
+        let end = toml.length
+        let cursor = afterHeader
+        while (cursor !== -1) {
+          const lineEnd = toml.indexOf("\n", cursor + 1)
+          const line = toml.slice(cursor + 1, lineEnd === -1 ? toml.length : lineEnd).trim()
+          if (/^\[mcp_servers\.opencomms(?:\.[^\]]*)?\]$/.test(line)) {
+            cursor = toml.indexOf("\n[", cursor + 1)
+            continue
+          }
+          end = cursor === -1 ? toml.length : cursor + 1
+          break
+        }
+        cuts.push([start, end])
+      }
+      let cleaned = toml
+      for (let i = cuts.length - 1; i >= 0; i--) {
+        const [start, end] = cuts[i]!
+        cleaned = cleaned.slice(0, start) + cleaned.slice(end)
+      }
+      cleaned = cleaned.replace(/\n{3,}/g, "\n\n")
+      if (cleaned !== toml) writeFileSync(configPath, cleaned, "utf8")
+      return ok(
+        "[mcp_servers.opencomms] (incl. env sub-table) removed from .codex/config.toml (other sections untouched).",
+      )
     }
     case "claude-desktop":
       return ok(
@@ -827,6 +919,11 @@ export function runCli(argv: string[]): CliResult {
     case "members":
       return fmtMembers(projectDir, positional)
     case "doctor":
+      // `doctor --fix` mutates via the manager (async, state-locked), so it
+      // takes the async path; plain `doctor` stays sync/read-only.
+      if (tokens.includes("--fix")) {
+        return fail("Doctor --fix is async: await doctorCommand(...) (CLI main handles this).")
+      }
       return fmtDoctor(projectDir)
     case "version":
       return ok(`opencomms ${VERSION} (state schema v${SCHEMA_VERSION})`)
@@ -877,7 +974,7 @@ export function runCli(argv: string[]): CliResult {
           "  opencomms status [--project <dir>]",
           "  opencomms channels [--project <dir>]",
           "  opencomms members <channel> [--project <dir>]",
-          "  opencomms doctor [--project <dir>]",
+          "  opencomms doctor [--project <dir>] [--fix]   # --fix repairs safe, understood problems",
           "  opencomms install <opencode|claude-code|claude-desktop|codex|chatgpt> [--project <dir>]",
           "  opencomms install-member [--host <id>] [--id <memberId> | --name <name>] [--project <dir>]",
           "  opencomms session <list|get|save|delete|resume> [name] [--summary ...] [--as name] [--confirm]",
@@ -921,6 +1018,9 @@ if (isCliEntry) {
         process.exitCode = 1
       },
     )
+  } else if (argv[0] === "doctor") {
+    // doctor --fix mutates via the integration manager (state-locked, async).
+    void doctorCommand(projectDirFromFlag(argv, "--project") ?? process.cwd(), argv.includes("--fix")).then(emit)
   } else if (argv[0] === "session") {
     void runSession(argv.slice(1), projectDirFromFlag(argv, "--project") ?? process.cwd()).then(emit)
   } else if (argv[0] === "update") {

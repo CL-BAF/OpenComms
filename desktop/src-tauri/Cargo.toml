@@ -1,6 +1,6 @@
 [package]
 name = "opencomms-desktop"
-version = "1.2.0"
+version = "1.4.0"
 description = "OpenComms Tauri Desktop GUI - the owner-facing desktop shell. Owns no business logic; consumes the Orchestrator API (contract v0.3) over loopback."
 edition = "2021"
 

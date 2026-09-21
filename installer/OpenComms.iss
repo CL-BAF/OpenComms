@@ -5,8 +5,11 @@
 ; under {app} and is therefore preserved.
 
 #define AppName "OpenComms"
+; Default AppVersion = the build script always passes /DAppVersion=<package.json
+; version> (scripts/build-installer.mjs); this fallback only applies to manual
+; ISCC runs. Keep in lockstep with package.json when bumping by hand.
 #ifndef AppVersion
-#define AppVersion "1.1.0"
+#define AppVersion "1.4.0"
 #endif
 #define AppPublisher "OpenComms"
 #define AppExeName "opencomms.exe"

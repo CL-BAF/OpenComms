@@ -42,8 +42,7 @@ import {
   workspaceConfigDir,
   workspaceSummary,
 } from "./workspace.js"
-import { detectCodex } from "../adapters/codex/install.js"
-import { detectChatGptDesktop } from "../adapters/chatgpt/install.js"
+import { integrationsOverview, integrationsListSync, integrationAction, projectBootstrap } from "./integrations.js"
 import { VERSION } from "../version.js"
 import { OrchestratorStore } from "../orchestrator/state.js"
 import { createOrchestratorFeed } from "../orchestrator/events.js"
@@ -276,11 +275,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
             return { ok: false, message: `No live or archived session matches "${name}".` }
           },
           workspaceState: () => ({ ok: true, message: "ok", data: workspaceSummary(projectDir) }),
-          integrationsList: () => ({
-            ok: true,
-            message: "ok",
-            data: [],
-          }),
+          integrationsList: () => ({ ok: true, message: "ok", data: integrationsListSync(projectDir) }),
           diagnostics: () => {
             const st = load()
             return {
@@ -621,7 +616,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
             return { ok: false, message: `No live or archived session matches "${name}".` }
           },
           workspaceState: () => ({ ok: true, message: "ok", data: workspaceSummary(projectDir) }),
-          integrationsList: () => ({ ok: true, message: "ok", data: [] }),
+          integrationsList: () => ({ ok: true, message: "ok", data: integrationsListSync(projectDir) }),
           diagnostics: () => {
             const st = load()
             return {
@@ -1074,46 +1069,45 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       return
     }
 
+    // M3: Integrations surface — backed by the SAME manager as the CLI
+    // doctor (no second diagnostics implementation). GET is read-only
+    // detection; POST actions are mutating and pass the guard above.
     if (method === "GET" && path === "/api/integrations") {
+      if (!projectDir) {
+        json(res, 409, { ok: false, message: "Select a project before inspecting integrations." })
+        return
+      }
       const selected = projectDir
-      const codex = detectCodex()
-      const projectFile = (name: string): boolean =>
-        Boolean(selected && isExistingDirectory(selected) && existsSync(join(selected, name)))
-      json(res, 200, {
-        ok: true,
-        data: [
-          {
-            id: "opencode",
-            name: "OpenCode",
-            status: selected && projectFile(".opencode") ? "Available" : "Install in a project",
-            delivery: "PUSH; system prompt role injection",
-          },
-          {
-            id: "claude-code",
-            name: "Claude Code",
-            status: selected && projectFile(".mcp.json") ? "Configured" : "Not configured",
-            delivery: "MCP + hooks; spawn-push when explicitly enabled",
-          },
-          {
-            id: "codex",
-            name: "Codex",
-            status: codex.detected ? `Detected${codex.version ? ` (${codex.version})` : ""}` : "Not detected",
-            delivery: "MCP pull; spawn-push for compatible resumed sessions",
-          },
-          {
-            id: "claude-desktop",
-            name: "Claude Desktop",
-            status: selected && projectFile("opencomms-claude-desktop") ? "Bundle present" : "Not configured",
-            delivery: "PULL only",
-          },
-          {
-            id: "chatgpt",
-            name: "ChatGPT",
-            status: detectChatGptDesktop().detected ? "Detected" : "Platform setup required",
-            delivery: "Remote MCP / PULL only",
-          },
-        ],
-      })
+      const overview = await integrationsOverview(selected)
+      // Machine-level CLI presence stays separate from project integrations
+      // (plan decision #4); detection-only, never off the sync path — all
+      // host detections here are filesystem reads.
+      json(res, 200, { ok: true, data: overview })
+      return
+    }
+
+    const bootstrapMatch = path === "/api/integrations/bootstrap"
+    if (method === "GET" && bootstrapMatch) {
+      if (!projectDir) {
+        json(res, 409, { ok: false, message: "Select a project before requesting the bootstrap status." })
+        return
+      }
+      const decision = await projectBootstrap(projectDir)
+      json(res, 200, { ok: true, data: decision })
+      return
+    }
+
+    const integrationActionMatch = path.match(/^\/api\/integrations\/([^/]+)\/([^/]+)$/)
+    if (integrationActionMatch && method === "POST") {
+      if (!projectDir) {
+        json(res, 409, { ok: false, message: "Select a project before changing integrations." })
+        return
+      }
+      const id = decodeURIComponent(integrationActionMatch[1]!)
+      const action = decodeURIComponent(integrationActionMatch[2]!)
+      const report = await integrationAction(projectDir, id, action)
+      if (report.ok) broadcast("refresh", { reason: `integration_${action}` })
+      json(res, report.ok ? 200 : 400, report)
       return
     }
 

@@ -172,15 +172,20 @@ if [ "$do_uninstall" -eq 1 ]; then
   bin_dir=${bin_dir_override:-${OPENCOMMS_INSTALL_DIR:-"$real_home/.local/bin"}}
   target="$bin_dir/opencomms"
   unit_file="${XDG_CONFIG_HOME:-"$real_home/.config"}/systemd/user/opencomms.service"
+  # Reviewer P3-5: --node-daemon installs opencomms-node.service; the old
+  # uninstall left it behind. Remove it too (same user-unit directory).
+  node_unit_file="${XDG_CONFIG_HOME:-"$real_home/.config"}/systemd/user/opencomms-node.service"
   removed=""
   if [ -f "$target" ]; then rm -f "$target" && removed="$target"; fi
   if [ -f "$unit_file" ]; then rm -f "$unit_file" && removed="$removed $unit_file"; fi
+  if [ -f "$node_unit_file" ]; then rm -f "$node_unit_file" && removed="$removed $node_unit_file"; fi
   if [ -n "$removed" ]; then
     info "Removed:$removed"
   else
-    info "Nothing installed at $target or $unit_file."
+    info "Nothing installed at $target, $unit_file, or $node_unit_file."
   fi
   printf 'If the service was enabled, run: systemctl --user daemon-reload && systemctl --user disable --now opencomms\n'
+  printf 'If the node daemon was enabled, run: systemctl --user daemon-reload && systemctl --user disable --now opencomms-node\n'
   printf 'Optionally (only if no other user services need it): loginctl disable-linger %s\n' "${SUDO_USER:-$(id -un)}"
   printf 'Project .opencomms state and archives were NOT touched.\n'
   exit 0

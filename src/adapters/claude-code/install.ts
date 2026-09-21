@@ -111,6 +111,19 @@ export function installClaudeCode(projectDir: string, opts: { bundleDir?: string
   }
 
   const target = resolve(projectDir)
+
+  // Parse-before-copy (atomicity): validate existing configs BEFORE any
+  // bundle copy or directory creation so a malformed settings/.mcp.json
+  // returns a structured failure with zero partial writes.
+  try {
+    readJson(join(target, ".claude", "settings.json"))
+    readJson(join(target, ".mcp.json"))
+  } catch (error) {
+    report.ok = false
+    report.warnings.push(`Refusing to install with malformed config (nothing was written): ${(error as Error).message}`)
+    return report
+  }
+
   const opencommsDir = join(target, ".opencomms")
   mkdirSync(opencommsDir, { recursive: true })
 

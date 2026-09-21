@@ -66,6 +66,34 @@ Detailed pages: [CLAUDE_CODE.md](CLAUDE_CODE.md),
 [CLAUDE_DESKTOP.md](CLAUDE_DESKTOP.md), [CODEX.md](CODEX.md),
 [CHATGPT.md](CHATGPT.md), [OPENCODE.md](OPENCODE.md).
 
+## Integration lifecycle (M1–M3)
+
+Every host also has a project-integration lifecycle behind the common
+`HostIntegration` abstraction (`src/integrations/types.ts`), registry
+(`src/integrations/registry.ts`) and manager (`src/integrations/manager.ts`):
+`detect / install / update / repair / verify / uninstall?` — adapters WRAP the
+existing per-host installers (`src/cli/install-opencode.ts`,
+`src/adapters/*/install.ts`), never rewrite them. Version markers live in
+`<project>/.opencomms/integration.json`; all mutating ops run under the
+manager's `runGuarded` (in-process mutex + `StateStore.withLock`), markers are
+never written on `ok:false`, and uninstall is files-first / marker-last so a
+failed uninstall never leaves a marker over removed artifacts. The CLI
+(`opencomms doctor [--fix]`) and the GUI (`/api/integrations*`) consume the
+SAME backend; detection status is `absent | installed | outdated | broken`.
+
+Known detection heuristics (documented per Reviewer P3-8):
+- OpenCode foreign-plugin guard: `plugin.js` content is matched against
+  `/opencomms/i` to classify the file as OpenComms-owned. A third-party
+  plugin that legitimately contains the word "opencomms" false-negatives
+  (treated as ours), and a minified/foreign file without the word
+  false-positives (reported broken instead of foreign). Accepted heuristic;
+  the file remains OpenComms-owned property at that path.
+- Claude Code / Codex placeholder detection: the literal
+  `OPENCOMMS_MEMBER_ID = "<set by: opencomms install-member>"` env value is
+  NEVER treated as installed evidence — it reports `broken` with
+  `PLACEHOLDER_ISSUE` (structural constant shared with doctor) until
+  `opencomms install-member` binds a real member.
+
 ## Shared MCP tool surface (all MCP hosts)
 
 Registered per pinned-member instance by `src/mcp/opencomms-tools.ts`:

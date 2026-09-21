@@ -134,10 +134,25 @@ Delivery text format (`formatDeliveryBatch` in core/engine.ts):
 [OpenComms message from ...]
 ```
 
-## Adding a New Tool â€” Checklist
+## Adding a New Tool — Checklist
 
 1. Add `tool({ description, args:{...}, async execute(args, ctx){...} })` in `src/plugin.ts` `tools` object.
 2. Implement pure logic in `src/core/engine.ts` (take `State` + input, mutate, return `ToolResult` via the `ok`/`fail` helpers).
 3. Add types in `src/core/types.ts` if a new input shape is needed.
 4. Wire slash subcommand in the `command.execute.before` switch in `src/plugin.ts` if CLI access wanted.
-5. `npm run typecheck && npm run test` â€” engine tests at `test/unit/engine.test.ts:1`.
+5. `npm run typecheck && npm run test` — engine tests at `test/unit/engine.test.ts:1`.
+
+## CLI integration commands (M1–M3)
+
+| Command | Effect |
+|---|---|
+| `opencomms install <opencode\|claude-code\|claude-desktop\|codex\|chatgpt> [--project <dir>]` | Installs the host integration (idempotent, parse-before-merge, atomic writes). |
+| `opencomms uninstall <host> [--project <dir>]` | Removes ONLY OpenComms-owned entries (hooks, MCP registrations, bundles); state.json/pins never touched. |
+| `opencomms doctor [--project <dir>]` | Read-only diagnostics via the structured backend (`src/cli/doctor.ts`): state, per-host integration status, machine CLIs, pins, permissions. |
+| `opencomms doctor --fix` | Repairs safe, understood problems (broken → repair, outdated → update) under the manager's lock; absent integrations are NEVER installed implicitly; placeholder member env is reported unfixable with install-member guidance (never auto-run). Idempotent — second run reports nothing left to fix. |
+
+The GUI (`GET /api/integrations`, `GET /api/integrations/bootstrap`,
+`POST /api/integrations/:id/:action`) and the CLI consume the SAME integration
+manager backend (`src/integrations/registry.ts`) — there is no second
+diagnostics implementation. Bootstrap is OFFER-ONLY: opening a project never
+mutates anything unless the user explicitly runs an action.

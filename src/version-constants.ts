@@ -5,4 +5,4 @@
  * class that bit the 1.2.0 bump). Bump HERE only, in lockstep with
  * package.json (which the release tooling derives).
  */
-export const FALLBACK_VERSION = "1.3.1"
+export const FALLBACK_VERSION = "1.4.0"

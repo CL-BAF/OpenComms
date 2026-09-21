@@ -1,48 +1,77 @@
 ﻿# OpenComms
 
-> A host-neutral, project-local communication layer for AI coding agents.
-> Link sessions you already have open - OpenCode, Claude Code, Claude Desktop,
-> Codex - into shared multi-agent channels, without creating, owning, or
-> replacing any session.
+> Connect your AI coding agents. Let them work together.
+>
+> OpenComms is a host-neutral, project-local communication and coordination
+> layer for AI coding sessions that already exist. Link sessions you have
+> open - OpenCode, Claude Code, Claude Desktop, Codex - into shared
+> multi-agent channels, without creating, owning, or replacing any session.
+
+**TypeScript | MIT | OpenCode >= 1.18.0**
 
 ```
-npm install && npm run build
-node install.mjs C:\path\to\your\project        # install the OpenCode plugin
+opencomms install opencode C:\path\to\your\project   # install a project integration
+opencomms doctor                                      # verify every host + project
+opencomms gui                                         # local operator console
 ```
-
-**Version 1.1.0** | TypeScript | MIT | OpenCode >= 1.18.0 (verified against 1.18.25)
 
 ---
 
 ## Why OpenComms
 
-Multi-agent coding workflows break down at coordination. OpenComms solves one
-problem well: **reliable, safe communication between agent sessions that already
-exist** - across tabs, terminals, and providers.
+Traditional orchestrators create agents, own their runtimes, and control how
+they work. OpenComms takes the opposite approach: it **connects sessions the
+user already runs** and lets each keep its own:
+
+- provider and model
+- native context and history
+- tools and permissions
+- host/runtime
+
+OpenComms provides the communication, coordination, persistence, delivery, and
+operator control *between* them. It is not a swarm runtime - agent creation
+exists only as an optional extra for providers that support it; linking
+existing sessions is the first-class flow.
 
 - **Link-only.** OpenComms never creates, replaces, or deletes host sessions.
-  Linked sessions keep their own history, model, and permissions.
 - **Autonomous, not runaway.** Messages deliver when a recipient is actually
-  available (idle wake, session resume, or pull), so agents can hold multi-turn
-  conversations without a human pressing Enter on each one. Loop protection
-  (dedup, rate limits, hop caps, cooldowns) keeps autonomy bounded.
+  available (idle wake, session resume, or pull). Loop protection (dedup,
+  rate limits, hop caps, cooldowns) keeps autonomy bounded.
 - **Provider-independent core.** A channel is a shared OpenComms space, not a
-  provider session. Native provider sessions are delivery endpoints only.
-  Any mix of hosts can share one channel.
+  provider session. Any mix of hosts can share one channel.
 - **Honest about limits.** Where a host cannot do something, OpenComms reports
   UNSUPPORTED instead of faking parity. See
   [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the evidence-backed matrix.
-- **Operator console + portable CLI.** A loopback-only local GUI made from
-  embedded HTML/CSS/JavaScript (`opencomms gui`) creates sessions, shows honest
-  agent states, and hands out real join commands; a standalone executable builds
-  without Node (`npm run build:exe`).
+- **Operator console + portable CLI.** The loopback-only local GUI
+  (`opencomms gui`) and the CLI consume the same backend: sessions, member
+  rosters, project-integration lifecycle (install / update / repair / verify
+  / uninstall), and diagnostics.
+
+## Project integration & host support
+
+When the GUI opens a repository (or you run `opencomms doctor`), OpenComms
+detects whether each host integration is installed, current, outdated, or
+broken, and offers the matching action - it never silently modifies a
+repository, and uninstall removes only OpenComms-owned entries.
+
+| Host | Setup | Status | How members receive messages |
+|------|-------|--------|------------------------------|
+| **OpenCode** | `opencomms install opencode` (or the GUI button) | **FULL** (reference adapter) | **PUSH** - delivered automatically when the session is idle; full autonomous agent-to-agent loops |
+| **Claude Code** | hooks + MCP: `opencomms install claude-code` | **PUSH** (spawn-resume) | `claude --resume <id> --print "<msg>"` (documented non-interactive resume); join with `spawn_push=true`. Also hook-boundary delivery + `opencomms_pull`. Never mid-turn |
+| **Codex CLI** | `config.toml` MCP: `opencomms install codex` | **PUSH** (exec-compatible sessions) | `codex exec resume <id> "<msg>"` (documented continuation); join with `spawn_push=true`. TUI-created-session resume is UNVERIFIED. Project-scope config requires Codex `/trust`. Otherwise `opencomms_pull` |
+| **Claude Desktop** | `.mcpb` extension bundle | **PULL** (platform limit) | The agent calls `opencomms_pull`. Desktop exposes no session identity and no push path - a platform limitation, not an OpenComms one |
+| **ChatGPT** (web/desktop) | remote MCP (operator-hosted) | **BLOCKED** by platform requirements | Would be PULL via a public HTTPS MCP endpoint; ChatGPT requires operator-hosted OAuth - [docs/CHATGPT.md](docs/CHATGPT.md) |
+
+Machine-level presence (is the Claude/Codex CLI even on PATH?) is reported
+separately from project-level integration state - a project integration can
+exist before the CLI is installed, and vice versa.
 
 ## Install (one command)
 
 Linux/Debian/Ubuntu/VPS (x86_64):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CL-Baf/OpenComms/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/CL-BAF/OpenComms/main/scripts/install.sh | bash
 ```
 
 Downloads the latest release from GitHub Releases, verifies its SHA256SUMS
@@ -132,16 +161,11 @@ the installer).
 
 | Host | Setup | Status | How members receive messages |
 |------|-------|--------|------------------------------|
-| **OpenCode** | plugin (auto-installer) | **FULL** (reference adapter) | **PUSH** - delivered automatically when the session is idle; full autonomous agent-to-agent loops |
+| **OpenCode** | `opencomms install opencode` (or the GUI button) | **FULL** (reference adapter) | **PUSH** - delivered automatically when the session is idle; full autonomous agent-to-agent loops |
 | **Claude Code** | hooks + MCP: `opencomms install claude-code` | **PUSH** (spawn-resume) | `claude --resume <id> --print "<msg>"` (documented non-interactive resume); join with `spawn_push=true`. Also hook-boundary delivery + `opencomms_pull`. Never mid-turn |
-| **Codex CLI** | `config.toml` MCP: `opencomms install codex` | **PUSH** (exec-compatible sessions) | `codex exec resume <id> "<msg>"` (documented continuation); join with `spawn_push=true`. TUI-created-session resume is UNVERIFIED. Otherwise `opencomms_pull` |
+| **Codex CLI** | `config.toml` MCP: `opencomms install codex` | **PUSH** (exec-compatible sessions) | `codex exec resume <id> "<msg>"` (documented continuation); join with `spawn_push=true`. TUI-created-session resume is UNVERIFIED. Project-scope config requires Codex `/trust`. Otherwise `opencomms_pull` |
 | **Claude Desktop** | `.mcpb` extension bundle | **PULL** (platform limit) | The agent calls `opencomms_pull`. Desktop exposes no session identity and no push path - a platform limitation, not an OpenComms one |
 | **ChatGPT** (web/desktop) | remote MCP (operator-hosted) | **BLOCKED** by platform requirements | Would be PULL via a public HTTPS MCP endpoint; ChatGPT requires operator-hosted OAuth - [docs/CHATGPT.md](docs/CHATGPT.md) |
-
-| CLI command | Purpose |
-|-------------|---------|
-| `opencomms update --check` | Preview an available update (read-only) |
-| `opencomms update` | Download, verify, and atomically install the latest release (Linux; Windows prints the installer pointer) |
 
 Any mix of these hosts can share one channel. Delivery mode is explicit per
 member (`push | spawn_push | pull | poll | managed_thread`), with per-member
@@ -156,6 +180,19 @@ CLIs are `.cmd` shims that Node refuses to spawn without a shell — set
 command template (e.g. `OPENCOMMS_CODEX_BIN="node C:\path\to\codex.js"`);
 oversized batches are refused before spawning (30k-char Windows command
 line; never truncated).
+
+## CLI command reference (core)
+
+| CLI command | Purpose |
+|-------------|---------|
+| `opencomms install <host> [--project <dir>]` | Install a host integration into a project (idempotent, preserves unrelated config) |
+| `opencomms uninstall <host> [--project <dir>]` | Remove only OpenComms-owned entries (state.json/pins never touched) |
+| `opencomms doctor [--fix]` | Read-only diagnostics; `--fix` repairs safe, understood problems (never installs absent integrations implicitly) |
+| `opencomms gui [--project <dir>]` | Local operator console (loopback-only) |
+| `opencomms update --check` | Preview an available update (read-only) |
+| `opencomms update` | Download, verify, and atomically install the latest release (Linux; Windows prints the installer pointer) |
+
+Full inventory (agent/task/session/daemon commands): `opencomms help`.
 
 ## Session lifecycle: save, resume as new, delete, description
 
@@ -239,7 +276,7 @@ installer are platform-specific.
 
 For macOS/Linux: prefer the one-command install above. To build from source on
 the target OS (`npm run build:exe` — note: SEA builds require exactly Node
-22.14.0, enforced by the build preflight), `sh scripts/install.sh
+22.14.0, enforced by the build preflight), `sh scripts/install.sh --exe
 dist-opencomms/opencomms` copies the binary into `~/.local/bin` and wires the
 PATH. Linux CI builds are pinned to the same Node 22.14.0
 (`engines.buildNode`); the build fails closed on any other Node version (see
@@ -247,15 +284,19 @@ PATH. Linux CI builds are pinned to the same Node 22.14.0
 
 ## Quick start (OpenCode, two tabs)
 
-1. **Install the plugin** (from the repo root):
+1. **Install the project integration** (any one of):
 
    ```bash
-   node install.mjs C:\path\to\your\project
+   opencomms install opencode C:\path\to\your\project   # from the installed CLI
+   # or, from a dev checkout:
+   npm run build && opencomms install opencode C:\path\to\your\project
+   # or click Install in the GUI's Settings > Integrations view
    ```
 
-   The installer builds `dist/` if needed, copies the plugin into the
-   project's `.opencode/plugins/`, and registers it in `opencode.json`
-   (idempotent; existing config preserved).
+   The installer copies the plugin into the project's `.opencode/plugins/`,
+   registers it in `opencode.json` (idempotent; parse-before-merge; existing
+   config preserved verbatim), and stamps a version marker so later updates
+   can be detected. Verify with `opencomms doctor`.
 
 2. **Create a channel** in the first OpenCode tab:
 
