@@ -20,18 +20,9 @@
  * from agent-facing tool arguments.
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-  openSync,
-  closeSync,
-  unlinkSync,
-  statSync,
-} from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, statSync } from "node:fs"
 import { join } from "node:path"
+import { replaceStateFile } from "../core/atomic-file.js"
 import { randomBytes, createHash } from "node:crypto"
 
 export const ORCHESTRATOR_FILE = "orchestrator.json"
@@ -475,23 +466,7 @@ export class OrchestratorStore {
   save(state: OrchestratorState): void {
     mkdirSync(this.dir, { recursive: true })
     const tmp = join(this.dir, `.orchestrator.${process.pid}.${randomBytes(4).toString("hex")}.tmp`)
-    writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8")
-    try {
-      renameSync(tmp, this.file)
-    } catch {
-      // Windows AV/OneDrive races: bounded blocking retry (same discipline as
-      // StateStore.save), then direct write as a last resort.
-      try {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
-        renameSync(tmp, this.file)
-      } catch (second) {
-        try {
-          writeFileSync(this.file, JSON.stringify(state, null, 2), "utf8")
-        } catch {
-          throw new Error(`OpenComms: failed to persist orchestrator state (${(second as Error).message})`)
-        }
-      }
-    }
+    replaceStateFile(this.file, tmp, JSON.stringify(state, null, 2))
   }
 
   /** Load, mutate, save under the lock. The mutation runs synchronously. */

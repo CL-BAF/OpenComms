@@ -186,7 +186,7 @@ Session helpers (read-only): `markStale(state, sessionId)`, `clearStale(state, s
 | `class StateStore` | `constructor(projectDir:string)` | `dir`, `file`, private `lockPath` |
 | `.withLock(fn)` | `<T>(fn:()=>T)=>T` | Exclusive-create `.state.lock` (`<pid>@<ts>`); LOCK_TIMEOUT_MS=5s; locks older than LOCK_STALE_MS=15s broken. R5 tradeoff documented in ARCHITECTURE.md |
 | `.load()` | `()=>State` | validateState gate (schema_version, shapes, key/name agreement) â†’ reject to fresh + error; backfillState for legacy files |
-| `.save(state)` | `(state:State)=>void` | Atomic tmp+rename; blocking-sleep retry; direct-write fallback |
+| `.save(state)` | `(state:State)=>void` | Flushed tmp+rename; bounded retries; preserves previous file on failure |
 | `.update(fn)` | `(mutate:(state:State)=>void)=>State` | `withLock(load â†’ mutate â†’ save)` |
 | `LOCK_TIMEOUT_MS` / `LOCK_STALE_MS` | `5000` / `15000` | Exported for tests |
 | `stateDirFor` / `isInsideStateDir` | path helpers | |
