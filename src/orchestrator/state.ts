@@ -381,13 +381,13 @@ export class OrchestratorStore {
   private async ownLock<T>(fn: () => T): Promise<T> {
     mkdirSync(this.dir, { recursive: true })
     const deadline = Date.now() + ORCH_LOCK_TIMEOUT_MS
+    let fd: number
     for (;;) {
       try {
-        const fd = openSync(this.lockPath, "wx")
-        writeFileSync(fd, `${process.pid}@${Date.now()}`, "utf8")
-        closeSync(fd)
+        fd = openSync(this.lockPath, "wx")
         break
-      } catch {
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
         try {
           if (Date.now() - statSync(this.lockPath).mtimeMs > ORCH_LOCK_STALE_MS) {
             try {
@@ -406,8 +406,10 @@ export class OrchestratorStore {
       }
     }
     try {
+      writeFileSync(fd, `${process.pid}@${Date.now()}`, "utf8")
       return fn()
     } finally {
+      closeSync(fd)
       try {
         unlinkSync(this.lockPath)
       } catch {
