@@ -62,9 +62,12 @@ jobs:
             package-lock.json
             desktop/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri -> target
+          cache-on-failure: true
       - name: Install locked dependencies
         run: |
           npm ci
@@ -99,7 +102,7 @@ jobs:
         run: cargo test --locked
       - name: Build native GUI installer
         working-directory: desktop
-        run: npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+        run: node node_modules/@tauri-apps/cli/tauri.js build --target x86_64-pc-windows-msvc --bundles nsis -- --locked
       - name: Install native WebDriver
         run: |
           cargo install tauri-driver --locked
@@ -127,6 +130,7 @@ jobs:
         with:
           name: native-verification
           if-no-files-found: ignore
+          include-hidden-files: true
           path: .verification/native-release-summary.json
       - name: Upload verified Windows downloads
         uses: actions/upload-artifact@v4.6.2
