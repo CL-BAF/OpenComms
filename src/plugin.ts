@@ -1,22 +1,6 @@
 ﻿/**
- * OpenComms â€” OpenCode plugin entry point.
- *
- * Registers:
- *  - deterministic custom tools (opencomms_create, opencomms_join, ...)
- *  - the /OpenComms slash command (parses arguments deterministically and
- *    forwards the raw arguments to the matching tool)
- *  - the experimental.chat.system.transform hook, which injects the
- *    persistent per-session role prompt before model dispatch
- *  - the event hook, which tracks session idle/busy state and drains
- *    pending queues when a linked session becomes idle
- *
- * The plugin never creates sessions. It only links sessions the user has
- * already opened.
- *
- * Concurrency: every load->mutate->save cluster runs inside store.withLock so
- * two OpenCode processes sharing one project cannot lose each other's writes.
- * Bare reads (system-prompt transform, status) stay lock-free because saves
- * are atomic renames â€” readers see either the old or the new file intact.
+ * Linked OpenCode plugin: provider sessions remain user-owned.
+ * Mutations use the cross-process state lock; atomic saves keep reads lock-free.
  */
 
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
@@ -41,7 +25,6 @@ import {
   memberInfosFor,
   normalizeRole,
   pauseChannel,
-  requeueFailedDelivery,
   REJECT_REASON_INVALID_MESSAGE_TYPE,
   resumeChannel,
   resumeSession,
@@ -80,11 +63,6 @@ interface SlashArgs {
   rest: string
 }
 
-/**
- * Extract only RECOGNIZED key=value tokens; free-form role prompts survive:
- * unknown `x=y` substrings in prose are no longer swallowed by a blanket
- * key=value stripper.
- */
 function extractSlashArgs(raw: string): SlashArgs {
   const params: Record<string, string> = {}
   let rest = raw
@@ -127,10 +105,6 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
     })
   }
 
-  // Owner-side delivery controller (see src/hosts/opencode/delivery.ts):
-  // multi-server topology fix + two-phase in_flight delivery + fs-watch wake.
-  // spawnPush routes cross-host members (claude-code / codex spawn_push) to
-  // their host's documented CLI resume instead of client.session.prompt.
   const spawnPush = createSpawnDeliveryHook(store, recordError)
   const delivery = createDeliveryController({
     store,
@@ -143,7 +117,6 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
     .startupSweep()
     .catch((error) => recordError(`Startup in-flight sweep failed: ${(error as Error).message}`))
 
-  /** Mutating update that persists when `shouldSave(result)` holds true. */
   const withLockedState = async (
     mutate: (state: State) => ToolResult,
     shouldSave: (result: ToolResult) => boolean,
@@ -513,7 +486,6 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
           },
           (r) => r.ok,
         )
-        // Drain the queued system notices immediately, post-lock.
         for (const rid of notifyRecipients) delivery.notifyRecipient(rid)
         return JSON.stringify(result)
       },
@@ -658,7 +630,6 @@ export const OpenCommsPlugin: Plugin = async ({ client, project, directory, work
           const phase = (decided.data as { phase: string; channel_id: string }).phase
           const channelId = (decided.data as { phase: string; channel_id: string }).channel_id
           if (phase === "live") {
-            // Deletion (unlike save) discards everything.
             const doomed = Object.values(state.messages).filter((m) => m.channel_id === channelId)
             for (const m of doomed) {
               delete state.messages[m.message_id]

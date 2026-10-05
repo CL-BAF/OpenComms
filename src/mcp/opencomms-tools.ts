@@ -1,11 +1,6 @@
 ﻿/**
- * OpenComms MCP tool definitions, shared by every MCP-capable host adapter
- * (Claude Code, Claude Desktop, Codex, future hosts).
- *
- * Identity: the caller is ALWAYS the pinned member of this server process
- * (src/mcp/identity.ts) â€” never a tool argument. `to`/`target` arguments
- * only ever name OTHER members. Mutating tools run under the state lock;
- * reads are lock-free.
+ * Callers use the process's pinned identity, never a tool-supplied sender.
+ * Mutations require the state lock; protected reads are roster-scoped.
  */
 
 import {
@@ -85,8 +80,7 @@ export const UNTRUSTED_NOTE =
  * Build the OpenComms MCP tool set for one pinned member instance.
  * cfg.admin=false omits opencomms_kick (desktop-facing default).
  */
-export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo): McpToolDef[] {
-  /** Locked mutating call: authorize -> mutate -> wrap. */
+export function buildMcpToolDefs(_store: McpStore, cfg: McpToolConfig, io: McpIo): McpToolDef[] {
   const run = (mutate: (state: State, memberId: string) => ToolResult): Promise<ToolPayload> =>
     io
       .mutate((state) => {
@@ -96,7 +90,6 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
       })
       .then(wrap)
 
-  /** Lock-free read: authorize against the snapshot -> wrap. */
   const read = (fn: (state: State, memberId: string) => ToolResult): Promise<ToolPayload> => {
     const a = authorizeMember(io.readState())
     if (!a.ok) return Promise.resolve(denial(a.message))
@@ -138,7 +131,7 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
           // host_session_id starts EMPTY: the host's own session id lives in
           // a different namespace and is bound by the host's lifecycle hook
           // (e.g. Claude Code SessionStart records it for the pinned member).
-          // Never guess it here (Reviewer Issue 2).
+          // Never guess it here.
           host_session_id: null,
           stale_policy:
             deliveryMode === "spawn_push"
@@ -527,7 +520,7 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
         properties: { channel: { type: "string" } },
         required: ["channel"],
       },
-      execute: async (args) =>
+      execute: async (_args) =>
         run((state, memberId) => {
           const drained = drainForDelivery(state, memberId)
           if (drained.length === 0) {
@@ -546,7 +539,6 @@ export function buildMcpToolDefs(store: McpStore, cfg: McpToolConfig, io: McpIo)
             drained.map((p) => p.message_id),
             "pull",
           )
-          // Per-envelope channel provenance; framed as untrusted peer data.
           const framed = drained.map((pair) => {
             const envelope = state.messages[pair.message_id]
             if (!envelope) return null

@@ -1,21 +1,10 @@
 /**
- * Orchestration event feed (M1 scope: kind "orchestration"; M2 adds
- * "channel_notice" + task_id + additive SSE topics — contract v0.3 §9).
- *
- * Events live in the orchestrator state ring (capped). The API layer
- * exposes `GET /api/orchestrator/events?since=` (cursor pagination) and
- * broadcasts an additive `orchestrator` SSE topic on the EXISTING
- * /api/events stream (generic refresh stays unchanged).
- *
- * Persistence happens via `mutate` (locked update that appends the event);
- * broadcast happens AFTER persistence succeeds, so a crashed write never
- * announces an event that was not stored.
+ * Capped, cursor-addressed events. Each append uses the supplied locked mutation.
  */
 
 import type { OrchestratorState, OrchestrationEvent, OrchestrationEventKind } from "./state.js"
 import { pushEvent } from "./state.js"
 
-/** Event type literals for the orchestration kind (open set, additive). */
 export type OrchestrationEventType =
   | "agent_created"
   | "agent_starting"
@@ -43,24 +32,18 @@ export interface EmitInput {
 }
 
 export interface OrchestratorFeed {
-  /** Emit an orchestration event: persisted (locked) + broadcast. */
+  /** Append through the supplied locked mutation. */
   emit(event: EmitInput): void
 }
 
-/**
- * Create the feed. `mutate` runs a locked orchestrator-state update; the
- * returned state (post-mutation) provides the appended event's seq for the
- * broadcast payload. Client callbacks must never throw across the ring.
- */
 export function createOrchestratorFeed(
   mutate: (fn: (state: OrchestratorState) => number) => Promise<number>,
 ): OrchestratorFeed {
-  const clients = new Set<(topic: string, data: unknown) => void>()
   return {
     emit(event) {
       void (async () => {
         const kind: OrchestrationEventKind = event.kind ?? "orchestration"
-        const seq = await mutate((state) => {
+        await mutate((state) => {
           pushEvent(state, {
             kind,
             type: event.type,
@@ -72,19 +55,11 @@ export function createOrchestratorFeed(
           const last = state.events[state.events.length - 1]
           return last?.seq ?? 0
         })
-        for (const send of clients) {
-          try {
-            send("orchestrator", { ...event, kind, seq })
-          } catch {
-            clients.delete(send)
-          }
-        }
       })()
     },
   }
 }
 
-/** Cursor-paginated read (pure; the API layer calls this on a snapshot). */
 export function listEvents(state: OrchestratorState, since: number): { events: OrchestrationEvent[]; cursor: number } {
   const events = state.events.filter((e) => e.seq > since).slice(0, 100)
   const cursor = events.length > 0 ? (events[events.length - 1] as OrchestrationEvent).seq : since

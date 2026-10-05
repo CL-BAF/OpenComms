@@ -1,4 +1,3 @@
-/** Dependency-free UI for the persisted work and host-authority flows. */
 export const WORKFLOW_SCRIPT = String.raw`
 var taskDetailId=null,taskFilter="",contextQuery="";
 var lines=function(value){return String(value||"").split(/\r?\n/).map(function(x){return x.trim();}).filter(Boolean);};

@@ -1,26 +1,7 @@
 /**
- * `opencomms update` + `update --check` (Workstream L, Platform).
- *
- * Explicitly user-initiated self-update: NEVER automatic, no timers, no
- * background checks. `--check` is strictly read-only.
- *
- * Flow (Linux; Windows refuses with the installer pointer ÔÇö replacing a
- * running SEA exe on win32 locks the file):
- *   1. Resolve the latest release from GitHub (api.github.com, same source
- *      of truth as scripts/install.sh: CL-BAF/OpenComms).
- *   2. `--check`: print "current -> latest" (or "up to date") and exit.
- *      Exit codes: 0 = answered, 1 = network/parse failure.
- *   3. Full update: download the release tarball + SHA256SUMS to a private
- *      staging dir, VERIFY checksums before extract, extract, stage-validate
- *      the candidate binary (`version` must succeed and be NEWER), then
- *      atomically replace the RUNNING executable via rename(2) (same
- *      directory, same filesystem ÔÇö POSIX rename over a running exe works).
- *      Rollback restores the previous binary from a pre-backup on any
- *      post-validation failure. Project `.opencomms` state is never touched.
- *
- * The command never runs node, never spawns a shell, and never writes
- * secrets. All network fetches use the same 3-attempt backoff and
- * --max-filesize disk-fill defense as the installer.
+ * Explicit self-update; --check is read-only. Verify downloads and validate the
+ * candidate before atomic replacement, with rollback and project state preserved.
+ * Windows uses the installer because a running SEA executable is locked.
  */
 
 import {
@@ -36,10 +17,7 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { execFileSync } from "node:child_process"
-import { homedir } from "node:os"
 import { createHash } from "node:crypto"
-// Reviewer P3-1: single compareVersions home (integrations/versioning.ts).
-// Same semantics (leading-v strip, NaN->0) — the local copy is retired.
 import { compareVersions } from "../integrations/versioning.js"
 
 const REPO = "CL-BAF/OpenComms"
@@ -65,7 +43,6 @@ interface CliIo {
   execFile(file: string, args: string[]): { status: number | null; stdout: string }
 }
 
-/** Default IO ÔÇö real network + real process execution. Tests inject fakes. */
 function defaultIo(): CliIo {
   const fetchText = async (url: string): Promise<string> => {
     const response = await fetch(url, { signal: AbortSignal.timeout(30_000) })
@@ -104,7 +81,6 @@ function parseTagVersion(payload: string): string | null {
   return match?.[1] ?? null
 }
 
-/** Semver-ish comparison — imported from integrations/versioning.js (P3-1). */
 export { compareVersions }
 
 export function sha256Hex(buffer: Buffer): string {
@@ -169,8 +145,6 @@ export async function updateCommand(argv: string[], deps: UpdateDeps): Promise<U
     )
   }
 
-  // ---- full update (Linux only) ----
-  const home = deps.homeDir ?? homedir()
   const binPath = resolve(deps.execPath)
   const binDir = dirname(binPath)
   const staging = join(tmpdir(), `opencomms-update-${process.pid}-${Date.now().toString(36)}`)
@@ -196,7 +170,6 @@ export async function updateCommand(argv: string[], deps: UpdateDeps): Promise<U
   })()
 
   try {
-    // 1. Download + verify checksums BEFORE extract.
     const tarballPath = join(staging, tarballName)
     const sumsPath = join(staging, "SHA256SUMS")
     await io.fetchToFile(`${RELEASES_BASE}/${version}/${tarballName}`, tarballPath)
@@ -215,7 +188,6 @@ export async function updateCommand(argv: string[], deps: UpdateDeps): Promise<U
       )
     }
 
-    // 2. Extract + stage-validate the candidate.
     execTarExtract(tarballPath, staging)
     const candidate = join(staging, "opencomms", "opencomms")
     if (!existsSync(candidate))
@@ -228,7 +200,6 @@ export async function updateCommand(argv: string[], deps: UpdateDeps): Promise<U
       return fail("candidate binary failed 'version' BEFORE install ÔÇö artifact defective, nothing was changed.")
     }
 
-    // 3. Atomic replace with rollback.
     const previous = readFileSync(binPath)
     if (backupPath) {
       copyFileSync(binPath, backupPath)
@@ -275,7 +246,6 @@ export async function updateCommand(argv: string[], deps: UpdateDeps): Promise<U
   }
 }
 
-/** Small helper so tests can inject a fake binDir without a real bin dir. */
 function mkTempIn(dir: string, template: string): string {
   mkdirSync(dir, { recursive: true })
   // Node has no mktemp; emulate with random bytes (unpredictable, O_EXCL-ish

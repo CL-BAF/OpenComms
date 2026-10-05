@@ -1,19 +1,6 @@
 ﻿/**
- * Claude Desktop adapter â€” Desktop Extension (.mcpb) packaging + install.
- *
- * Verified 2026-08-29 against official sources (see docs/CLAUDE_DESKTOP.md):
- * - .mcpb = ZIP containing manifest.json (spec v0.3) + server code
- *   (github.com/modelcontextprotocol/mcpb).
- * - Claude Desktop spawns the server per mcp_config over stdio; user_config
- *   values substitute as ${user_config.KEY}; sensitive values go to the OS
- *   keychain.
- * - Delivery is STRICTLY PULL: no conversation identity, no push, no
- *   lifecycle. The model/user must call tools for anything to happen.
- *
- * The adapter therefore:
- *   - registers PULL members (stale_policy "none": messages survive until read),
- *   - exposes only non-privileged tools by default (no kick),
- *   - never claims push/role injection/lifecycle.
+ * Desktop MCPB layout is pull-only: no native conversation identity, lifecycle
+ * or push. Non-privileged tools are exposed by default.
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
@@ -63,12 +50,8 @@ function validateManifestContent(content: string): { ok: true } | { ok: false; r
 }
 
 /**
- * Lay out the .mcpb bundle contents for the Desktop adapter:
- *   <outDir>/manifest.json
- *   <outDir>/server/main.mjs        (SELF-CONTAINED esbuild bundle — the
- *                                    un-bundled dist/mcp/main.js imports
- *                                    relative modules that don't ship)
- * Package with the official CLI: npx @anthropic-ai/mcpb pack <bundleDir>.
+ * Write manifest.json and the standalone server/main.mjs into outDir.
+ * Package with npx @anthropic-ai/mcpb pack <bundleDir>.
  */
 export function buildDesktopBundle(opts: { projectDir: string; outDir?: string }): DesktopPackageResult {
   let manifest: string
@@ -117,7 +100,6 @@ export function buildDesktopBundle(opts: { projectDir: string; outDir?: string }
   }
 }
 
-/** Honest capability report for the Desktop adapter (no fake push). */
 export const DESKTOP_CAPABILITIES: Record<string, string> = {
   installation: "PARTIAL (.mcpb bundle; install via Claude Desktop > Settings > Extensions)",
   delivery: "PULL ONLY (model/user invokes opencomms_inbox; no push into conversations)",

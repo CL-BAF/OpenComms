@@ -1,26 +1,8 @@
 ﻿/**
- * Spawn-push delivery â€” real PUSH for hosts whose CLI can resume a session
- * non-interactively (verified against official docs, 2026-09-08):
- *
- *   Claude Code:  claude --resume <session-id> --print "<message>"
- *   Codex CLI:    codex exec resume <session-id> "<message>"
- *
- * This is a DOCUMENTED API, not terminal keystroke automation. The message
- * is passed as a single argv element via execFile-style spawn (no shell),
- * so untrusted peer content can never inject shell syntax. Delivery runs
- * the same two-phase protocol as push: drain marks in_flight (persisted),
- * the CLI resume accepting the message commits delivered, a failure
- * requeues in FIFO order.
- *
- * Honest limits:
- *   - Claude Code: resuming a session that is mid-turn in a live TUI can
- *     interleave; we serialize per member and requeue on failure, but the
- *     platform gives no busy-check API.
- *   - Codex CLI: `codex exec resume` is documented for exec sessions;
- *     resuming TUI-created sessions is NOT verified (guarded by live test
- *     when the codex CLI is present).
- *   - Claude Desktop / ChatGPT: no session identity and no resume API â€”
- *     they stay PULL (a platform limit, not an OpenComms one).
+ * Resume delivery uses argv-only child processes and persisted two-phase queues.
+ * The host exposes no busy-check API; concurrent TUI turns may interleave.
+ * Codex TUI-session resume remains unverified. Hosts without a verified native
+ * session binding or resume command stay on pull delivery.
  */
 
 import { execFile } from "node:child_process"
@@ -81,7 +63,7 @@ const BUILDERS: Record<string, SpawnCommandBuilder> = {
 }
 
 /**
- * Windows argv budget (Reviewer P2-2): CreateProcess caps the WHOLE command
+ * Windows argv budget: CreateProcess caps the WHOLE command
  * line at 32,767 chars; POSIX caps a single arg at 128 KiB
  * (MAX_ARG_STRLEN). Keep conservative headroom. Oversized batches are
  * refused BEFORE draining (queued mail preserved, never truncated) with an
@@ -126,7 +108,7 @@ export function parseCommandTemplate(raw: string): string[] {
 }
 
 /**
- * Binary override resolution (Reviewer P2-1). The env value is either:
+ * Binary override resolution. The env value is either:
  *  - a plain executable path/name (argv[0] verbatim), or
  *  - a command template whose FIRST token is the executable and whose
  *    REMAINING tokens are PREPENDED to the builder's args — e.g.
@@ -330,7 +312,7 @@ export async function deliverViaSpawn(deps: SpawnRunnerDeps, member: Member): Pr
  * host session once with the framed batch. Two-phase + FIFO-requeue on
  * failure, identical guarantees to the OpenCode push path.
  *
- * Oversized batches are refused BEFORE draining (Reviewer P2-2): queued
+ * Oversized batches are refused BEFORE draining: queued
  * mail is preserved untouched, one actionable error is recorded, and no
  * doomed spawn loop is ever entered. Peer content is never truncated.
  */

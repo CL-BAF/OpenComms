@@ -1,10 +1,4 @@
-/**
- * App-level GUI preferences.
- *
- * Project state deliberately remains in each project's `.opencomms` folder.
- * This file only remembers which projects the local console should open and
- * a small amount of UI preference data. It is safe to discard at any time.
- */
+/** Disposable app preferences; project state remains in each project's .opencomms directory. */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, relative, resolve, sep, isAbsolute } from "node:path"

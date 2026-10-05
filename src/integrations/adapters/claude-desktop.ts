@@ -1,16 +1,4 @@
-/**
- * Claude Desktop adapter (M2): wraps src/adapters/claude-desktop/package.ts.
- *
- * Project artifacts:
- *   - <project>/opencomms-claude-desktop/manifest.json (MCPB spec v0.3)
- *   - <project>/opencomms-claude-desktop/server/main.mjs (self-contained bundle)
- *
- * Both present + manifest valid -> installed (or outdated via marker);
- * neither -> absent; partial/invalid -> broken.
- * Capabilities stay honest: PULL ONLY, no push/identity/lifecycle (never FULL).
- * The Claude Desktop app itself is not programmatically detectable from a CLI
- * process; bundle presence is the project signal (doctor reports the same).
- */
+/** Detection checks the MCPB layout; the Desktop app still requires user installation. */
 
 import { existsSync, rmSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -122,7 +110,7 @@ export const claudeDesktopAdapter: HostIntegration = {
     }
   },
   async uninstall(ctx: IntegrationContext): Promise<IntegrationReport> {
-    // Binding order (Reviewer R2): files first, marker last. Absent => ok:true
+    // Binding order: files first, marker last. Absent => ok:true
     // no-op before touching the marker. Removes the laid-out bundle directory
     // only; the extension itself is removed by the user in Claude Desktop >
     // Settings > Extensions (same wording as the CLI).

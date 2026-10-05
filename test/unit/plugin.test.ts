@@ -1,12 +1,3 @@
-/**
- * Plugin wiring tests.
- *
- * Unit tests cover the engine; these invoke the actual plugin factory with a
- * stub client and call the tool execute functions — catching wrong-function
- * wiring that engine-only tests cannot see (Reviewer R4 follow-up: a fix
- * once landed in opencomms_history instead of opencomms_status).
- */
-
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -42,8 +33,6 @@ async function makeHarness(): Promise<Harness> {
   })) as unknown as { tool: ToolMap }
   return { dir, tools: hooks.tool, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
-
-const ctxFor = (sessionID: string) => ({ sessionID }) as never
 
 test("opencomms_status tool scopes the roster to the calling session", async () => {
   const h = await makeHarness()

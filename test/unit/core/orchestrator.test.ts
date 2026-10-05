@@ -1,13 +1,8 @@
-/**
- * Orchestrator state tests (M1): persistence + fail-closed validation,
- * one-per-project designated-lead enforcement, redaction-by-value (the
- * password VALUE must appear in NO persisted field — Reviewer gate), event
- * ring cap, and trust-token gating for approve/revoke.
- */
+/** Persistence, fail-closed validation, exact identity, redaction and owner-token regressions. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, chmodSync } from "node:fs"
+import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ChildProcess } from "node:child_process"
@@ -263,7 +258,7 @@ test("orchestrator api: second designated:'lead' create is a 409-style conflict"
     assert.ok(agents.ok)
     const payload = agents.data as { agents: Array<{ designated: string | null }> }
     assert.equal(payload.agents.filter((a) => a.designated === "lead").length, 1)
-    // Every agents-list item carries the field (Frontend lead-or-ERROR rule).
+
     assert.ok(payload.agents.every((a) => "designated" in a))
     assert.ok(emitted.includes("agent_created"))
   } finally {
@@ -319,7 +314,7 @@ test("orchestrator api: model pinning is required and validated", async () => {
     const r = await apiNoModel.createAgent({ name: "w", host: "opencode", role: "Worker", role_prompt: "p" })
     assert.equal(r.ok, false)
     assert.match(r.message, /verified model pin is required/)
-    // Malformed pin => validation error.
+
     const api = new OrchestratorApi({ ...base, serveModel: () => undefined })
     const bad = await api.createAgent({
       name: "w",
@@ -370,7 +365,7 @@ test("M5 audit log: owner-only, append-only, secret-free, cursor-paginated", asy
     const store = new OrchestratorStore(dir)
     const deps = testDeps(store, dir)
     const api = new OrchestratorApi(deps)
-    // Generate a few audit-worthy events.
+
     await api.approveOrRevoke({ node_id: "node_x", confirm_token: "wrong" }, "approve")
     const token = store.load().trust.owner_confirm_token
     await api.createPairingCode({ node_name: "audit-box", confirm_token: token })
@@ -378,7 +373,7 @@ test("M5 audit log: owner-only, append-only, secret-free, cursor-paginated", asy
     const denied = api.auditLog({ confirm_token: "nope" })
     assert.equal(denied.ok, false)
     assert.match(denied.message, /Owner approval required/)
-    // Correct token: events + cursor + append_only marker.
+
     const audit = api.auditLog({ confirm_token: token })
     assert.ok(audit.ok, audit.message)
     const payload = audit.data as {
@@ -393,7 +388,7 @@ test("M5 audit log: owner-only, append-only, secret-free, cursor-paginated", asy
     assert.ok(payload.audit.some((e) => e.type === "pairing_code_created"))
     // SECRET-FREE: the confirm token appears in NO audit entry.
     assert.ok(!JSON.stringify(payload.audit).includes(token))
-    // Cursor pagination: a mid-ring cursor returns only newer events.
+
     const midCursor = payload.audit[0]?.seq ?? 0
     const page2 = api.auditLog({ confirm_token: token, since: midCursor })
     const payload2 = page2.data as { audit: Array<{ seq: number }>; cursor: number }
@@ -472,16 +467,15 @@ test("orchestrator restart preserves identity on failed resume; replacement requ
     const store = new OrchestratorStore(dir)
     const assigned = new Map<string, string>()
     let resumeCalls = 0
-    // resumeFails: the fake refuses resume ONLY for the pre-existing
-    // session; create() still issues fresh ids (counter keeps counting).
+
     const runtimeWithFailingResume: AgentRuntime = {
       ...fakeRuntime(assigned, { resumeFails: true }),
-      async resume(rec: AgentRecord) {
+      async resume(_rec: AgentRecord) {
         resumeCalls++
         return { ok: false as const, message: "session row gone" }
       },
     }
-    const deps = { ...testDeps(store, dir), createRuntime: () => resumeWithFailingResume(runtimeWithFailingResume) }
+    const deps = { ...testDeps(store, dir), createRuntime: () => runtimeWithFailingResume }
     const api = new OrchestratorApi(deps)
     const created = await api.createAgent({ name: "w", host: "opencode", role: "Worker", role_prompt: "p" })
     assert.ok(created.ok)
@@ -505,10 +499,6 @@ test("orchestrator restart preserves identity on failed resume; replacement requ
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
-function resumeWithFailingResume(rt: AgentRuntime): AgentRuntime {
-  return rt
-}
 
 test("orchestrator api M2: stop is graceful, lead-protected, and idempotent", async () => {
   const dir = tmpProject()
@@ -553,7 +543,7 @@ test("orchestrator state M2: restart_policy backfills to manual and validates", 
     const store = new OrchestratorStore(dir)
     const state = store.load()
     assert.equal(state.nodes[0]?.restart_policy, "manual")
-    // Tampered policy fails closed.
+
     const raw = JSON.parse(readFileSync(store.file, "utf8")) as Record<string, unknown>
     ;(raw["nodes"] as Array<Record<string, unknown>>)[0]!["restart_policy"] = "auto-whatever"
     const result = validateOrchestratorState(raw)
@@ -573,7 +563,7 @@ test("orchestrator state M3: node identity fields backfill; tampered tier/grants
     assert.equal(local.trust_tier, "persistent")
     assert.ok(local.grants.includes("spawn"))
     assert.equal(local.fingerprint, null)
-    // Tampered tier fails closed.
+
     const raw = JSON.parse(readFileSync(store.file, "utf8")) as Record<string, unknown>
     ;(raw["nodes"] as Array<Record<string, unknown>>)[0]!["trust_tier"] = "god-tier"
     assert.equal(validateOrchestratorState(raw).ok, false)
@@ -593,11 +583,11 @@ test("orchestrator api M3: pairing flow — owner generates code, node claims, o
     assert.equal(denied.ok, false)
     assert.match(denied.message, /Owner approval required/)
     assert.ok(store.load().events.some((e) => e.type === "trust_denied" && e.message.includes("Pairing-code")))
-    // Missing name => validation error.
+
     const noName = await api.createPairingCode({ confirm_token: store.load().trust.owner_confirm_token })
     assert.equal(noName.ok, false)
     assert.match(noName.message, /node_name is required/)
-    // Correct token => raw code returned EXACTLY ONCE.
+
     const created = await api.createPairingCode({
       node_name: "worker-box-1",
       confirm_token: store.load().trust.owner_confirm_token,
@@ -682,7 +672,7 @@ test("orchestrator api M3: revoke marks remote agents failed (never deleted) wit
     const created = await api.createAgent({ name: "remote-worker", host: "opencode", role: "Worker", role_prompt: "p" })
     assert.ok(created.ok)
     const data = created.data as { id: string }
-    // Repoint the agent to a remote node (simulating remote placement).
+
     await store.withLock(() => {
       const state = store.load()
       const remote: import("../../../src/orchestrator/state.js").NodeRecord = {
@@ -719,7 +709,7 @@ test("orchestrator api M3: revoke marks remote agents failed (never deleted) wit
     const agent = after.agents.find((a) => a.id === data.id)
     assert.ok(agent, "revoked node's agent was deleted (orphan-prevention violation)")
     assert.equal(agent.status, "failed")
-    // Audit evidence: agent states at revoke time recorded.
+
     assert.ok(
       after.events.some(
         (e) => e.type === "revoke_agents_marked" && e.node_id === "node_remote_m3" && e.message.includes(data.id),
@@ -753,32 +743,32 @@ test("M4 condition C: assertRemoteActionAllowed — the four deny cases + pass c
       credential_expires_at: Date.now() + 3_600_000,
       ...overrides,
     })
-    // PASS case: approved + valid credential + grants.
+
     const good = mkNode({})
     base.nodes.push(good)
     base.trust.approved_node_ids.push(good.id)
     assert.deepEqual(assertRemoteActionAllowed(base, { node_id: good.id, action: "spawn" }), { ok: true })
     assert.deepEqual(assertRemoteActionAllowed(base, { node_id: good.id, action: "tasks" }), { ok: true })
-    // DENY 1: UNAPPROVED (never approved).
+
     const unapproved = mkNode({ id: newNodeId(), approved_at: null, approved_by: null })
     base.nodes.push(unapproved)
     const d1 = assertRemoteActionAllowed(base, { node_id: unapproved.id, action: "spawn" })
     assert.equal(d1.ok, false)
     if (!d1.ok) assert.match(d1.reason, /not approved/)
-    // DENY 2: EXPIRED credential.
+
     const expired = mkNode({ id: newNodeId(), credential_expires_at: Date.now() - 1 })
     base.nodes.push(expired)
     base.trust.approved_node_ids.push(expired.id)
     const d2 = assertRemoteActionAllowed(base, { node_id: expired.id, action: "tasks" })
     assert.equal(d2.ok, false)
     if (!d2.ok) assert.match(d2.reason, /expired/)
-    // DENY 3: REVOKED (offline status post-revoke; approved list cleared).
+
     const revoked = mkNode({ id: newNodeId(), status: "offline" as const, approved_at: null, approved_by: null })
     base.nodes.push(revoked)
     const d3 = assertRemoteActionAllowed(base, { node_id: revoked.id, action: "spawn" })
     assert.equal(d3.ok, false)
     if (!d3.ok) assert.match(d3.reason, /not approved/)
-    // DENY 4: UNGRANTED (approved + valid credential, but the action's grant absent).
+
     const ungranted = mkNode({ id: newNodeId(), grants: ["spawn"] })
     base.nodes.push(ungranted)
     base.trust.approved_node_ids.push(ungranted.id)
@@ -790,11 +780,9 @@ test("M4 condition C: assertRemoteActionAllowed — the four deny cases + pass c
     base.nodes.push(both)
     const dBoth = assertRemoteActionAllowed(base, { node_id: both.id, action: "spawn" })
     if (!dBoth.ok) assert.match(dBoth.reason, /not approved/)
-    // Unknown node id is a deny (never a pass).
+
     assert.equal(assertRemoteActionAllowed(base, { node_id: "node_nope", action: "spawn" }).ok, false)
-    // DUAL-LAYER credential composition (Reviewer code-gate): a node whose
-    // timestamp is valid but whose cert is CA-REVOKED is still denied when
-    // the caller supplies the CA — the timestamp layer alone is NOT enough.
+    // CA revocation must reject even when the recorded expiry remains valid.
     const ca = new NodeCertificateAuthority(dir)
     const revokedButValid = mkNode({ id: newNodeId() })
     base.nodes.push(revokedButValid)
@@ -803,8 +791,7 @@ test("M4 condition C: assertRemoteActionAllowed — the four deny cases + pass c
     const d5 = assertRemoteActionAllowed(base, { node_id: revokedButValid.id, action: "spawn" }, { ca })
     assert.equal(d5.ok, false)
     if (!d5.ok) assert.match(d5.reason, /revoked/)
-    // Without the CA supplied, the timestamp layer alone passes for that node
-    // (documented: callers without the CA get the timestamp layer only).
+    // Callers without the CA check expiry only.
     const noCa = assertRemoteActionAllowed(base, { node_id: revokedButValid.id, action: "spawn" })
     assert.deepEqual(noCa, { ok: true })
   } finally {
@@ -818,7 +805,7 @@ test("M4 condition C: remote spawn + remote task assignment are gated with 403 +
     const store = new OrchestratorStore(dir)
     const deps = testDeps(store, dir)
     const api = new OrchestratorApi(deps)
-    // Seed an UNAPPROVED remote node.
+
     const state = store.load()
     const remote: import("../../../src/orchestrator/state.js").NodeRecord = {
       id: "node_unapproved_m4",
@@ -839,7 +826,7 @@ test("M4 condition C: remote spawn + remote task assignment are gated with 403 +
     }
     state.nodes.push(remote)
     store.save(state)
-    // Remote spawn on an unapproved node => denied + audited.
+
     const deniedSpawn = await api.createAgent({
       name: "remote-worker",
       host: "opencode",
@@ -852,12 +839,12 @@ test("M4 condition C: remote spawn + remote task assignment are gated with 403 +
     const audited = store.load().events.find((e) => e.type === "trust_denied" && e.node_id === "node_unapproved_m4")
     assert.ok(audited, "remote spawn denial was not audited")
     assert.match(audited.message, /Remote spawn denied/)
-    // Approve the node (without a live CA cert stamp — credential check fires).
+    // Approval alone cannot satisfy the issued-credential gate.
     await api.approveOrRevoke(
       { node_id: "node_unapproved_m4", confirm_token: store.load().trust.owner_confirm_token },
       "approve",
     )
-    // Now the credential check is the deny reason (no issued certificate).
+
     const deniedCred = await api.createAgent({
       name: "remote-worker",
       host: "opencode",
@@ -876,7 +863,7 @@ test("node-ca M3: issuance, verification, expiry, and LOAD-BEARING revocation (b
   const dir = tmpProject()
   try {
     const ca = new NodeCertificateAuthority(dir)
-    // CA generation is idempotent.
+
     const fp1 = ca.caFingerprint()
     assert.equal(ca.caFingerprint(), fp1)
     // The node generates its keypair; only the public key reaches the CA.
@@ -890,9 +877,7 @@ test("node-ca M3: issuance, verification, expiry, and LOAD-BEARING revocation (b
     })
     assert.equal(cert.fingerprint, fingerprintForPublicKeyPem(nodePublicPem))
     assert.ok(cert.expires_at > Date.now())
-    // Tier-validity mapping (Lead decision 2026-09-14): persistent = 12h,
-    // ephemeral = 1h (the exported constant is authoritative). Assert the
-    // EXACT hours so the enrollment copy never encodes a stale number.
+    // Assert exact validity windows so enrollment text cannot silently drift.
     const persistentValidity = NODE_CERT_VALIDITY_MS
     assert.ok(Math.abs(cert.expires_at - cert.issued_at - persistentValidity) < 5_000, "persistent cert must be 12h")
     const ephemeralCert = ca.issue({
@@ -907,24 +892,22 @@ test("node-ca M3: issuance, verification, expiry, and LOAD-BEARING revocation (b
       60,
       "ephemeral cert must be exactly 60 minutes",
     )
-    // Fresh cert verifies.
+
     assert.deepEqual(ca.verify(cert), { ok: true })
-    // A forged cert (different node_id under the same signature) FAILS.
+
     const forged = { ...cert, node_id: "node_other" }
     assert.equal(ca.verify(forged).ok, false)
-    // Expiry: a stale cert is rejected.
+
     const expired = { ...cert, issued_at: Date.now() - 20_000, expires_at: Date.now() - 10_000 }
     assert.equal(ca.verify(expired).ok, false)
     // LOAD-BEARING REVOCATION (binding B): revoked BEFORE expiry = DEAD.
     assert.equal(ca.isRevoked(cert.node_id), false)
     ca.revoke(cert.node_id)
     assert.equal(ca.isRevoked(cert.node_id), true)
-    // Even with valid signature + unexpired window, the revoked flag is the
-    // transport's auth gate: the node CANNOT reconnect (verify still passes
-    // cryptographically, so transport auth MUST also check isRevoked).
+    // Certificate verification does not check revocation; transport admission must.
     assert.deepEqual(ca.verify(cert), { ok: true })
     assert.equal(ca.isRevoked(cert.node_id), true)
-    // Persistence across instances (revoke list survives restarts).
+
     assert.equal(new NodeCertificateAuthority(dir).isRevoked(cert.node_id), true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -943,7 +926,7 @@ test("node-transport M3: bearer auth is nonce-bound, revocation-gated, and wss-o
     nonce,
   })
   assert.match(token, /^node-node_remote_x\./)
-  // Valid bearer verifies against THIS connection's nonce.
+
   assert.deepEqual(verifyNodeBearer({ token, nonce, nodeCertPem, isRevoked: false }), {
     ok: true,
     node_id: "node_remote_x",
@@ -951,7 +934,7 @@ test("node-transport M3: bearer auth is nonce-bound, revocation-gated, and wss-o
   // Replay on a DIFFERENT connection (new nonce) fails.
   const differentNonce = verifyNodeBearer({ token, nonce: newConnectionNonce(), nodeCertPem, isRevoked: false })
   assert.equal(differentNonce.ok, false)
-  // Tampered token fails.
+
   const tampered = verifyNodeBearer({
     token: `node-node_remote_x.${Buffer.from("forged", "utf8").toString("base64")}`,
     nonce,
@@ -964,12 +947,12 @@ test("node-transport M3: bearer auth is nonce-bound, revocation-gated, and wss-o
   const revoked = verifyNodeBearer({ token, nonce, nodeCertPem, isRevoked: true })
   assert.equal(revoked.ok, false)
   assert.match(revoked.reason, /revoked/)
-  // Malformed tokens fail.
+
   assert.equal(verifyNodeBearer({ token: "garbage", nonce, nodeCertPem, isRevoked: false }).ok, false)
   // WSS floor: ws:// is refused cross-network; wss:// builds.
   assert.throws(() => nodeWssUrl("ws://relay.example/x", "n", "t"), /wss:\/\//)
   assert.match(nodeWssUrl("wss://relay.example/x", "node_n", "t"), /node_id=node_n/)
-  // Bounded give-up constant (Remote Control ~10 min precedent).
+
   assert.equal(NODE_GIVE_UP_MS, 10 * 60_000)
   void createPrivateKey
 })
@@ -980,17 +963,17 @@ test("node-transport M3: cursor+ack window (P3-2 composition: redelivery bounded
     { seq: 2, node_id: "n", framed: "two", message_id: "m2" },
     { seq: 3, node_id: "n", framed: "three", message_id: "m3" },
   ]
-  // No cursor: everything is pending, in sequence order.
+
   assert.deepEqual(
     pendingForNode(envelopes, null).map((e) => e.seq),
     [1, 2, 3],
   )
-  // Cursor at 1: only 2+3 pending (redelivery of 1 would be a node-side no-op).
+
   assert.deepEqual(
     pendingForNode(envelopes, { acked_seq: 1 }).map((e) => e.seq),
     [2, 3],
   )
-  // Cursor at 3: nothing pending.
+
   assert.equal(pendingForNode(envelopes, { acked_seq: 3 }).length, 0)
   // Cursor advance is monotonic + idempotent (a stale ack cannot rewind).
   let cursor = { acked_seq: 1, updated_at: 0 }
@@ -1012,20 +995,20 @@ test("node-transport M3.5: dedupeForNode — node-side dedup (P2-A single implem
     dedupeForNode(envelopes, 2).map((e) => e.seq),
     [3],
   )
-  // Fresh node (acked 0): everything executes, in sequence order.
+
   assert.deepEqual(
     dedupeForNode(envelopes, 0).map((e) => e.seq),
     [1, 2, 3],
   )
-  // Fully-caught-up node: nothing executes.
+
   assert.equal(dedupeForNode(envelopes, 3).length, 0)
-  // Out-of-order input is normalized to sequence order.
+
   const shuffled: RemoteEnvelope[] = [envelopes[2]!, envelopes[0]!, envelopes[1]!]
   assert.deepEqual(
     dedupeForNode(shuffled, 0).map((e) => e.seq),
     [1, 2, 3],
   )
-  // Idempotent: running the dedup twice changes nothing.
+
   const once = dedupeForNode(envelopes, 1)
   assert.deepEqual(
     dedupeForNode(once, 1).map((e) => e.seq),
@@ -1042,20 +1025,20 @@ test("node-server M3.5: NodeTransportServer contract — auth gate, deliver, ack
   server.onAuthenticated((nodeId) => authenticated.push(nodeId))
   server.onAck((nodeId, seq) => acks.push({ node_id: nodeId, seq }))
   await server.start()
-  // Admit (post-auth) fires onAuthenticated exactly once.
+
   const session = server.admit("node_remote_s")
   assert.deepEqual(authenticated, ["node_remote_s"])
-  // deliver() routes through the session's send (captured in sentBatches).
+
   const outcome = await server.deliver("node_remote_s", "<framed>", 7)
   assert.equal(outcome, "sent")
   const batch = sentBatches.find((b) => b.node_id === "node_remote_s" && b.seq === 7)
   assert.ok(batch, "delivered batch did not reach the session send")
-  // Deliver to an unknown node fails honestly.
+
   assert.equal(await server.deliver("node_unknown", "x", 1), "failed")
-  // Ack routing reaches the registered handler.
+
   server.emitAck("node_remote_s", 7)
   assert.deepEqual(acks, [{ node_id: "node_remote_s", seq: 7 }])
-  // Close clears sessions; deliver then fails.
+
   await server.close()
   assert.equal(await server.deliver("node_remote_s", "x", 8), "failed")
   void session
@@ -1072,11 +1055,11 @@ test("node-server M3.5: watchdog speaker — READY after dial+heartbeat, derived
   assert.deepEqual(notified, [])
   speaker.notifyReady()
   assert.equal(notified[0], "READY=1")
-  // Derived interval = WATCHDOG_USEC/2 = 15s (never hardcoded).
+
   assert.equal(watchdogIntervalFromUsec(30_000_000), 15_000)
-  // Absent watchdog (non-systemd) => default heartbeat cadence, no unit coupling.
+
   assert.equal(watchdogIntervalFromUsec(undefined), 15_000)
-  // 1s floor: a 1s watchdog (1e6 usec) → 500ms derived → floored to 1s.
+
   assert.equal(watchdogIntervalFromUsec(1_000_000), 1_000)
   assert.equal(watchdogIntervalFromUsec(1_000), 1_000)
   speaker.stop()
@@ -1112,13 +1095,10 @@ test("node-wire M3.5: COMPOSED auth chain at admission — revoked node rejected
       nodePrivateKeyPem: nodePrivatePem,
       nonce,
     })
-    // (a) The three checks compose IN ORDER: cert → bearer → revocation.
-    // Fresh (non-revoked) cert: the chain passes end-to-end.
+    // Admission checks certificate, bearer and revocation in that order.
     const fresh = verifyCoordinatorAuth({ cert, certPem: nodePublicPem, token, nonce, ca })
     assert.deepEqual(fresh, { ok: true, node_id: "node_revoked" })
-    // (b) INTEGRATION: revoke, then run admission through the PRODUCTION
-    // verifyClient — the revoked node is rejected AT THE ADMISSION POINT
-    // (before onAuthenticated could ever fire).
+    // Revocation must fail admission before onAuthenticated can fire.
     ca.revoke("node_revoked")
     const verifyClient = createProductionVerifyClient({
       ca,
@@ -1134,15 +1114,12 @@ test("node-wire M3.5: COMPOSED auth chain at admission — revoked node rejected
     })
     assert.equal(admission.ok, false)
     assert.match(admission.reason, /revoked/)
-    // A revoked node whose cert is ALSO expired is still rejected with the
-    // cert reason first (order proven: cert → bearer → revocation).
+    // Expired certificates fail before the revocation check.
     const expired = { ...cert, issued_at: Date.now() - 20_000, expires_at: Date.now() - 10_000 }
     const certReason = verifyCoordinatorAuth({ cert: expired, certPem: nodePublicPem, token, nonce, ca })
     assert.equal(certReason.ok, false)
     assert.match(certReason.reason, /expired/)
-    // (c) STRUCTURAL no-gate-skipping: verifyCoordinatorAuth's body is the
-    // composed chain — every rejection names WHICH check fired (audit
-    // evidence), and a missing header can never reach admission.
+    // Missing auth headers cannot reach admission.
     const missing = verifyClient({ reqHeaders: {}, url: new URL("wss://relay.example/node") })
     assert.equal(missing.ok, false)
     assert.match(missing.reason, /missing auth headers/)
@@ -1162,8 +1139,7 @@ test("orchestrator feed: emit persists via locked mutate and broadcasts with seq
       store.save(state)
       return seq
     })
-    // Re-wrap feed.emit to observe the broadcast (transport is injected by
-    // the server; here we verify persistence + seq ordering directly).
+    // Observe persisted sequence ordering through the injected feed.
     let observed = 0
     const api = new OrchestratorApi({
       projectDir: dir,
@@ -1197,13 +1173,6 @@ test("orchestrator feed: emit persists via locked mutate and broadcasts with seq
 })
 
 test("opencode models catalog: parses provider/model lines into grouped providers", () => {
-  // CI root cause closed (Platform WSL reproduction, Lead GO 2026-09-13):
-  // the OLD fixture exec'd a script and relied on exec-bit + shebang, which
-  // fails on noexec mounts (drvfs) -> empty output -> parser saw nothing.
-  // The parser is now a PURE exported function (parseModelsOutput) — the
-  // test drives it directly with fixture text; the exec path
-  // (listModelsCatalog) is unchanged production behavior, exercised by the
-  // real binary when present (detect()).
   const catalog = parseModelsOutput(
     [
       "opencode/big-pickle",
@@ -1223,25 +1192,18 @@ test("opencode models catalog: parses provider/model lines into grouped provider
   assert.deepEqual(opencode.models.sort(), ["big-pickle", "ling-3.0-flash-fin-free"])
   assert.deepEqual(go.models.sort(), ["glm-5.2", "glm-5.3"])
   assert.equal(catalog.length, 2)
-  // CRLF-split input parses identically (Windows CLI output shape).
+
   const crlf = parseModelsOutput("opencode/big-pickle\r\nopencode-go/glm-5.3\r\n")
   assert.equal(crlf.length, 2)
   assert.deepEqual(crlf.find((c) => c.provider === "opencode")?.models.sort(), ["big-pickle"])
 })
 
 test("opencode runtime detect: execFileSync import is available (catalog helper wiring)", () => {
-  // Sanity: the real opencode binary on PATH answers --version; the detect
-  // path shells the same binary. This guards the import wiring used by
-  // listModelsCatalog (a typo would throw here, not at runtime).
   assert.equal(typeof execFileSync, "function")
 })
 
 test("resolveOpencodeBinary: checked path == returned path (regression: checked != returned)", () => {
-  // Frontend-found bug class: existsSync checked
-  // base/node_modules/opencode-ai/bin/opencode.exe but the function returned
-  // base/opencode-ai/bin/opencode.exe (missing node_modules) -> ENOENT at
-  // spawn. The invariant under test: the resolved path EXISTS whenever the
-  // APPDATA npm layout is present.
+  // The returned path must be the exact existing APPDATA npm executable.
   const resolved = resolveOpencodeBinary({})
   assert.ok(resolved.length > 0)
   if (process.platform === "win32" && process.env["APPDATA"] && !resolved.startsWith("opencode")) {
@@ -1254,7 +1216,7 @@ test("resolveOpencodeBinary: checked path == returned path (regression: checked 
       `returned path misses node_modules segment: ${resolved}`,
     )
   }
-  // Override env always wins verbatim.
+
   assert.equal(resolveOpencodeBinary({ OPENCOMMS_OPENCODE_BIN: "/custom/opencode" }), "/custom/opencode")
 })
 
@@ -1281,7 +1243,7 @@ test("orchestrator api M2: tasks/assign rides the engine and GET /tasks derives 
   const dir = tmpProject()
   try {
     const store = new OrchestratorStore(dir)
-    // Engine fake: records sends, returns state we can seed for derivation.
+
     const sentTasks: Array<{ channel: string; content: string; type: string; sender: string }> = []
     let engineMessages: Record<
       string,
@@ -1334,7 +1296,7 @@ test("orchestrator api M2: tasks/assign rides the engine and GET /tasks derives 
     const created = await api.createAgent({ name: "w", host: "opencode", role: "Worker", role_prompt: "p" })
     assert.ok(created.ok)
     const data = created.data as { id: string }
-    // Missing fields => validation errors.
+
     const noTitle = await api.assignTask({ agent_id: data.id, task: { body: "b", channel: "c" } })
     assert.equal(noTitle.ok, false)
     const noChannel = await api.assignTask({ agent_id: data.id, task: { title: "t", body: "b" } })
@@ -1353,11 +1315,11 @@ test("orchestrator api M2: tasks/assign rides the engine and GET /tasks derives 
     assert.equal(sentTasks[0]?.type, "review_request")
     assert.ok(sentTasks[0]?.content.includes(`[task ${assignedData.task_id}]`))
     assert.ok(sentTasks[0]?.content.includes("Fix the bug"))
-    // Feed event carried task_id.
+
     const events = api.listEvents(0)
     const eventList = (events.data as { events: Array<{ type: string; task_id: string | null }> }).events
     assert.ok(eventList.some((e) => e.type === "task_assigned" && e.task_id === assignedData.task_id))
-    // Derivation: queued while pending.
+
     const tasks = api.listTasks()
     assert.ok(tasks.ok)
     const list = (tasks.data as { tasks: Array<{ task_id: string; status: string }> }).tasks
@@ -1394,9 +1356,7 @@ test("orchestrator api M2: permissionsDrain surface is operator-only and honest 
     const store = new OrchestratorStore(dir)
     let respondCalls = 0
     const assigned = new Map<string, string>()
-    // handleExtras attaches the permission methods to BOTH the create- and
-    // resume-returned handles (Lead's identified gap: the handle-return path
-    // must not drop the methods).
+    // Both create and resume handles must retain host permission methods.
     const deps = {
       ...testDeps(store, dir),
       createRuntime: () =>
@@ -1416,25 +1376,25 @@ test("orchestrator api M2: permissionsDrain surface is operator-only and honest 
     const created = await api.createAgent({ name: "w", host: "opencode", role: "Worker", role_prompt: "p" })
     assert.ok(created.ok)
     const data = created.data as { id: string }
-    // List returns the pending prompt (supported=true).
+
     const list = await api.listPermissions(data.id)
     assert.ok(list.ok, list.message)
     const listData = list.data as { supported: boolean; pending: Array<{ permission_id: string; request: unknown }> }
     assert.equal(listData.supported, true)
     assert.equal(listData.pending.length, 1)
     assert.equal(listData.pending[0]?.permission_id, "perm_1")
-    // Respond requires a valid response value.
+
     const badResponse = await api.respondPermission(data.id, "perm_1", { response: "maybe" })
     assert.equal(badResponse.ok, false)
     assert.match(badResponse.message, /allow" or "deny/)
-    // Operator allow action works + is evented.
+
     const allowed = await api.respondPermission(data.id, "perm_1", { response: "allow" })
     assert.ok(allowed.ok, allowed.message)
     assert.equal(respondCalls, 1)
     const events = api.listEvents(0)
     const eventList = (events.data as { events: Array<{ type: string; message: string }> }).events
     assert.ok(eventList.some((e) => e.type === "agent_status" && e.message.includes("perm_1")))
-    // Unknown agent => 404-shape.
+
     const unknown = await api.listPermissions("agt_nope")
     assert.equal(unknown.ok, false)
   } finally {
@@ -1537,9 +1497,7 @@ test("ensureServe: startup timeout kills the child and fails cleanly (no open-en
 })
 
 test("ensureServe: a THROWING spawn (ENOENT class) fails cleanly without escaping the catch", async () => {
-  // v22 scheduling guard (Lead's fix order item 2): the bare-'opencode'
-  // fallback on a runner without the binary must settle the promise, never
-  // leak an unhandled rejection. This twin test proves the catch path.
+  // A missing executable must settle startup without an unhandled rejection.
   const dir = tmpProject()
   try {
     const result = await ensureServe({
@@ -1562,9 +1520,7 @@ test("ensureServe: a THROWING spawn (ENOENT class) fails cleanly without escapin
 test("ensureServe: an 'error'-event child (post-spawn error) settles without hanging", async () => {
   const dir = tmpProject()
   try {
-    // Child that fires 'error' immediately (v22 ENOENT can surface here, not
-    // as a spawn throw) and NEVER writes to stdout — the poll must settle via
-    // the error path or the timeout, never hang.
+    // An error-only child with no stdout must still settle through the timeout.
     const errorChild = {
       stdout: { on: () => {}, off: () => {} },
       stderr: { on: () => {}, off: () => {} },
@@ -1653,10 +1609,10 @@ test("bridge M4.5: run loop - handshake FIRST, pre-ack stdin ignored, one-line-p
     stdin.push('{"id":"1","cmd":"agents_list","args":{}}\n')
     await new Promise((r) => setTimeout(r, 50))
     assert.equal(written.length, 1, "command executed before handshake ack")
-    // Host acks the handshake.
+
     stdin.push('{"hello_ok":true}\n')
     await new Promise((r) => setTimeout(r, 50))
-    // Commands now dispatch: agents_list via OrchestratorApi.
+
     stdin.push('{"id":"r1","cmd":"agents_list","args":{}}\n')
     await new Promise((r) => setTimeout(r, 50))
     assert.ok(written.length >= 2)
@@ -1723,25 +1679,21 @@ test("bridge M5: hardening — oversized line rejected, partial line cannot wedg
     const tooBig = JSON.parse(written[written.length - 1]!)
     assert.equal(tooBig.ok, false)
     assert.match(tooBig.message, /too large/)
-    // PARTIAL LINE: a truncated JSON fragment followed by the complete line —
-    // readline CONCATENATES the fragment into the next line, so the merged
-    // line fails to parse and gets a typed parse error (the stream is never
-    // wedged; the NEXT complete line still works).
+    // A fragment joined to the next line is invalid; later complete frames must still work.
     stdin.push('{"id":"trunc","cmd":"agents_l')
     await new Promise((r) => setTimeout(r, 40))
     stdin.push('{"id":"ok1","cmd":"agents_list","args":{}}\n')
     await new Promise((r) => setTimeout(r, 50))
-    // The merged line was invalid JSON => typed parse-error response.
+
     const parseErr = written.find((l) => l.includes('"ok":false') && l.includes("invalid JSON request"))
     assert.ok(parseErr, "partial-line merge did not produce a typed parse error")
-    // The stream still serves the next complete request.
+
     stdin.push('{"id":"ok2","cmd":"agents_list","args":{}}\n')
     await new Promise((r) => setTimeout(r, 50))
     const ok2 = JSON.parse(written[written.length - 1]!)
     assert.equal(ok2.id, "ok2")
     assert.equal(ok2.ok, true)
-    // BACKPRESSURE/ORDER: two slow mutations issued back-to-back complete
-    // in ISSUE ORDER (sequential dispatch, responses never interleave).
+    // Sequential dispatch preserves issue order even for slow mutations.
     stdin.push('{"id":"c1","cmd":"session_create","args":{"name":"a"}}\n')
     stdin.push('{"id":"c2","cmd":"session_create","args":{"name":"b"}}\n')
     await new Promise((r) => setTimeout(r, 120))

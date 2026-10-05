@@ -56,9 +56,7 @@ pub fn read_line_bounded<R: BufRead>(reader: &mut R, limit: usize) -> Result<Str
 }
 
 pub fn response_reader<R: std::io::Read + Send + 'static>(source: R) -> Receiver<Result<String, String>> {
-    // One buffered response prevents an unsolicited sidecar flood from
-    // growing memory. Dropping the receiver ends the worker after the child
-    // is killed; neither timeouts nor failures retain a broken connection.
+    // One buffered response bounds unsolicited output; receiver drop ends the worker after child exit.
     let (sender, receiver) = sync_channel(1);
     std::thread::spawn(move || {
         let mut reader = BufReader::new(source);

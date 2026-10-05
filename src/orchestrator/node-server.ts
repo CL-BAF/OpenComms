@@ -1,39 +1,8 @@
 /**
- * M3.5 coordinator transport — WSS server + node daemon client contracts
- * (design §9c-4; the socket wiring increment over node-transport.ts).
- *
- * The contract is published HERE for Lead's review BEFORE Platform's daemon
- * slots in (same pattern as the M1 transport gate):
- *
- *   NodeTransportServer (coordinator side):
- *     start()                     — begin listening (injected server; tests
- *                                   pass a fake; production uses ws)
- *     onAuthenticated(node_id, s) — fired after cert+bearer verification
- *     deliver(node_id, framed)    — hand a framed batch to a connected node
- *     onAck(node_id, seq)         — remote-ack (cursor advance, P3-2)
- *     close()                     — stop accepting; close sessions
- *
- *   NodeDaemonClient (node side, Platform's daemon consumes):
- *     connect()                   — outbound dial (wss only), cert + bearer
- *     onDeliver(handler)          — receive framed batches
- *     ack(seq)                    — acknowledge receipt (remote-ack commit)
- *     heartbeat()                 — liveness + watchdog
- *     close()
- *
- * WATCHDOG CONTRACT (agreed with Platform, unit WatchdogSec=30s):
- *   - sd_notify("READY=1") AFTER the WSS dial succeeds AND the first
- *     heartbeat is sent (never before).
- *   - sd_notify("WATCHDOG=1") every max(1s, WATCHDOG_USEC/2) — derived from
- *     the environment, never hardcoded, so unit amendments propagate.
- *   - Absent WATCHDOG_USEC (non-systemd) = no pings, plain foreground.
- *   - The notify socket is INJECTED (notifySocket abstraction) so the
- *     READY/watchdog sequence is test-asserted without systemd.
- *
- * SECURITY: the handshake verifies the node CERT against the owner CA, then
- * the nonce-bound bearer, then the LOAD-BEARING revocation gate (binding B)
- * — a revoked node is rejected at the auth point even with a valid
- * signature. The server opens NO inbound anything except the wss listener;
- * nodes dial out (ADR-0001 floor).
+ * Remote contracts and in-memory test transport. Nodes dial outbound over WSS.
+ * Admission verifies certificate, nonce-bound bearer and explicit revocation.
+ * Watchdog READY follows dial and first heartbeat; pings use max(1s, WATCHDOG_USEC/2).
+ * Absent supervision means no watchdog pings.
  */
 
 import { createHash, randomBytes } from "node:crypto"
@@ -44,10 +13,6 @@ export interface NodeTransportSession {
   last_heartbeat: number
 }
 
-/**
- * The coordinator-side contract (Lead-reviewed interface; Platform's daemon
- * client consumes the mirror). Every method is injected-socket testable.
- */
 export interface NodeTransportServer {
   /** Begin accepting node connections. */
   start(): Promise<void>
@@ -71,10 +36,7 @@ export interface NodeSession {
 }
 
 export interface ServerDeps {
-  /**
-   * Injected WebSocket-server factory (tests pass a fake; production wires
-   * `ws`). Receives the port + the per-connection auth verifier.
-   */
+  /** Inject the socket server and per-connection auth verifier. */
   createWss?: (opts: {
     port: number
     verifyClient: (info: {
@@ -90,11 +52,7 @@ export interface ServerDeps {
   port: number
 }
 
-/**
- * Heartbeat/watchdog speaker (Platform's opencomms-node.service contract).
- * READY=1 after dial+first heartbeat; WATCHDOG=1 every max(1s, USEC/2).
- * The notify socket is INJECTED so the sequence is asserted without systemd.
- */
+/** READY follows dial and first heartbeat; watchdog cadence comes from WATCHDOG_USEC. */
 export interface WatchdogSpeakerDeps {
   /** systemd sets this; tests inject a fake (e.g. "unix:/run/notify.sock"). */
   notifySocketPath: string | undefined
@@ -108,11 +66,6 @@ export interface WatchdogSpeakerDeps {
 
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
 
-/**
- * The daemon's watchdog speaker (design: READY after dial+first heartbeat;
- * WATCHDOG pings at the derived cadence). Test-asserted via the injected
- * notify callback — no systemd needed to verify the sequence.
- */
 export class WatchdogSpeaker {
   private timer: ReturnType<typeof setInterval> | null = null
   constructor(private readonly deps: WatchdogSpeakerDeps) {}
@@ -149,10 +102,7 @@ export function watchdogIntervalFromUsec(watchdogUsec: number | undefined, overr
   return Math.max(1_000, Math.floor(watchdogUsec / 2 / 1_000))
 }
 
-/**
- * The daemon-side client contract (Platform's skeleton consumes this):
- * outbound dial only; credential = node cert + nonce-bound bearer.
- */
+/** Outbound WSS client authenticated with a certificate and nonce-bound bearer. */
 export interface NodeDaemonClient {
   connect(): Promise<void>
   onDeliver(handler: (framed: string, seq: number) => void): void
@@ -161,11 +111,7 @@ export interface NodeDaemonClient {
   close(): Promise<void>
 }
 
-/**
- * Enrollment output contract (Platform coordination 2026-09-14): the
- * daemon's enrollment/enrolled output prints the RESOLVED WSS base the
- * operator registered against (the @WSS_BASE@ substitution target).
- */
+/** Print the resolved coordinator WSS base in enrollment output. */
 export function enrollmentOutput(wssBase: string, nodeId: string): string {
   return `Node ${nodeId} enrolled. Coordinator: ${wssBase}`
 }
@@ -183,12 +129,7 @@ export function newHandshakeNonce(): string {
   return createHash("sha256").update(randomBytes(32)).digest("hex").slice(0, 32)
 }
 
-/**
- * Minimal in-memory NodeTransportServer for tests + the loopback path:
- * implements the contract with an injected message bus. The production WSS
- * server wraps THIS (same handler signatures) once Platform's socket
- * layer is wired; the auth gate (cert+bearer+revocation) is identical.
- */
+/** In-memory test transport; admit() assumes authentication already passed. */
 export interface InMemoryNodeTransportServer extends NodeTransportServer {
   sessions: Map<string, NodeSession>
   /** Test hook: simulate the node sending an ack. */
@@ -197,7 +138,7 @@ export interface InMemoryNodeTransportServer extends NodeTransportServer {
   admit(nodeId: string): NodeSession
 }
 
-export function createInMemoryNodeTransportServer(deps: {
+export function createInMemoryNodeTransportServer(_deps: {
   verifyClient: (info: {
     reqHeaders: Record<string, string | undefined>
     url: URL

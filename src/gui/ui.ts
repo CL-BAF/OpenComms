@@ -1,8 +1,4 @@
-/**
- * OpenComms local GUI. This intentionally stays a dependency-free embedded
- * document so the standalone executable works offline and can be packaged as
- * one file. The server remains the source of truth for all session actions.
- */
+/** Embedded offline document; session actions remain authoritative on the server. */
 import { ACTION_ROUTES, resolveAction } from "./contracts.js"
 import { WORKFLOW_SCRIPT } from "./workflows.js"
 import { TEAM_WORKFLOW_SCRIPT } from "./team-workflows.js"

@@ -1,51 +1,20 @@
 /**
- * Runtime path architecture (SEA fix, 2026-09-11; see docs/adr-sea-path-resolution.md).
- *
- * FIVE locations a CLI process can care about — NEVER conflated again:
- *   1. Executable location  — process.execPath (the SEA exe itself, or node).
- *   2. Packaged resources   — files shipped INSIDE/with the exe (SEA assets,
- *      embedded bundles). Under SEA these are part of the binary; there is
- *      no on-disk resource dir to "find".
- *   3. Source-repo location — the checkout with package.json (DEVELOPMENT
- *      ONLY). The packaged exe must never require it.
- *   4. Target project dir   — the user project a command operates on
- *      (--project flag, or CWD as the documented default for project
- *      commands like status/install).
- *   5. CWD                  — where the user happens to run the exe. Affects
- *      ONLY (4)'s default. Never used for resource/executable resolution.
- *
- * Why this module exists (reproduced field failure, Debian 13): the CJS SEA
- * bundle has NO import.meta, so the old repoRootForCli() fell back to CWD
- * and `opencomms version` from /tmp resolved `<cwd>/opencomms` -> ENOENT,
- * and `install opencode` misparsed a repo-relative install.mjs path as a
- * subcommand. In SEA the binary IS the resource (plugins are embedded);
- * in development (node dist/cli/main.js) import.meta still works. The
- * resolution below is platform-neutral (win32 POSIX identical).
+ * Resolve executable, bundled resources and development checkout separately.
+ * CWD supplies only the default target project; SEA never requires a checkout.
  */
 
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-// Single-source-of-truth fallback version (shared with src/version.ts —
-// Reviewer P3: never hand-sync two static copies).
 import { FALLBACK_VERSION } from "../version-constants.js"
 
 export type RuntimeMode = "sea-exe" | "node-source" | "unknown"
 
-/**
- * Detect the runtime mode. `isSea` import is lazy/optional so tests can call
- * these helpers on plain node without the SEA flag present.
- */
 export function runtimeMode(isSeaFn?: () => boolean): RuntimeMode {
   if (isSeaFn) return isSeaFn() ? "sea-exe" : "node-source"
   return "unknown"
 }
 
-/**
- * Locate the SOURCE-REPO root (package.json ancestor), starting from a
- * caller-supplied anchor. Returns null when there is no repo (packaged exe,
- * bare filesystem) — callers MUST treat that as "not available" instead of
- * falling back to CWD.
- */
+/** Return the checkout ancestor or null; callers must never substitute CWD. */
 export function findSourceRepoRoot(anchorDir: string | null): string | null {
   let dir = anchorDir
   while (dir) {
@@ -57,36 +26,14 @@ export function findSourceRepoRoot(anchorDir: string | null): string | null {
   return null
 }
 
-/**
- * Resolve a BUNDLED RESOURCE (a file that ships inside the package: the
- * opencode plugin bundle, manifest templates, etc.).
- *
- *   - sea-exe:  the resource is embedded (assets) or sits beside the exe;
- *     resolution anchors on the EXECUTABLE's directory (never CWD).
- *   - node:     anchors on this module's location via import.meta (available
- *     in the ESM dist; tests inject anchorDir to stay environment-free).
- *
- * The caller passes `sea` (whether we're running as the packaged exe) and an
- * anchorDir (its best local anchor). We return the first EXISTING path among
- * the candidate list, or the first candidate when none exists (so callers
- * produce actionable "missing resource" errors rather than path puzzles).
- */
+/** Resolution records its anchor; missing files retain an actionable candidate path. */
 export interface ResourceResolution {
   path: string | null
   /** How the path was resolved (for honest diagnostics + tests). */
   basis: "sea-asset" | "sea-beside-exe" | "repo" | "module" | "missing"
 }
 
-/**
- * Resolve a relative resource path against, in order:
- *   1. SEA: the executable's directory (dirname(process.execPath)) — the
- *      installer layout ships resources beside the exe (README, etc.).
- *   2. Development: the nearest package.json ancestor of the anchor (the
- *      repo root), where dist/ lives.
- * When `sea` is true, (2) is skipped entirely — the repo MUST NOT be
- * required; when no candidate exists the resolution reports "missing" with
- * the exe-relative candidate so error messages stay actionable.
- */
+/** Resolve from the executable for SEA or an anchored checkout for development; never CWD. */
 export function resolvePackagedResource(
   relativeResource: string[],
   opts: { sea: boolean; execPath: string; anchorDir: string | null },
@@ -108,15 +55,7 @@ export function resolvePackagedResource(
   return { path: null, basis: "missing" }
 }
 
-/**
- * Version string resolution (src/version.ts). Order:
- *   1. OPENCOMMS_VERSION env (release builds stamp it deterministically).
- *   2. Development: nearest package.json ancestor (repo checkout).
- *   3. SEA: embedded build stamp — the exe build script writes the version
- *      beside the binary (VERSION file) at package time; read it.
- *   4. Static fallback (never 0.0.0; mirrors package.json at build time).
- * CWD is never consulted.
- */
+/** Version precedence: environment, anchored package.json, SEA VERSION file, static fallback. */
 export function resolveVersion(opts: {
   sea: boolean
   execPath: string
@@ -143,18 +82,10 @@ export function resolveVersion(opts: {
   } catch {
     /* fall through */
   }
-  // Single source of truth for the static fallback (Reviewer P3: two
-  // hand-synced copies was the drift class that bit the 1.2.0 bump).
   return FALLBACK_VERSION
 }
 
-/**
- * The opencode PLUGIN resource (bundled plugin.js) location:
- *   - sea-exe:  embedded in the bundle itself (the installer copies the
- *     embedded asset), so the caller passes the ASSET CONTENTS through; this
- *     helper only reports WHERE a beside-exe copy would live.
- *   - node:     <repo>/dist/plugin.bundled.js.
- */
+/** Report the plugin bundle path; SEA installation reads its embedded asset instead. */
 export function pluginBundlePath(opts: {
   sea: boolean
   execPath: string

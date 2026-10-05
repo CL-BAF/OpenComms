@@ -1,10 +1,4 @@
-﻿/**
- * Claude Code hook integration tests (Reviewer Issues 1-3).
- *
- * Runs the COMPILED hook CLI as a child process with real stdin/stdout â€”
- * the only honest way to test hook delivery (in-process tests could never
- * catch the async spin-wait bug).
- */
+﻿/** Exercises compiled hook CLI I/O and identity binding in actual subprocesses. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -44,7 +38,6 @@ function runHookCli(
   return { status: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" }
 }
 
-/** Simulate the installer's member registration (writes a per-member pin). */
 function installPin(projectDir: string, memberId: string, host = "claude-code"): void {
   mkdirSync(join(projectDir, ".opencomms", "pins"), { recursive: true })
   writeFileSync(
@@ -52,12 +45,6 @@ function installPin(projectDir: string, memberId: string, host = "claude-code"):
     JSON.stringify({ member_id: memberId, host, saved_at: Date.now() }, null, 2),
     "utf8",
   )
-}
-
-interface SeedOpts {
-  memberId: string
-  hostSessionId: string | null
-  stale?: boolean
 }
 
 function seedState(
@@ -121,9 +108,6 @@ function seedState(
 function stateFileOf(dir: string): string {
   return join(dir, ".opencomms", "state.json")
 }
-const stateFile = stateFileOf
-
-/** Append a pending message for memberId from a peer. */
 function queueMessage(projectDir: string, memberId: string, content: string): void {
   const path = stateFileOf(projectDir)
   const state = JSON.parse(readFileSync(path, "utf8")) as {
@@ -160,12 +144,10 @@ test("hook CLI: SessionStart binds pinned member to the Claude session and drain
   try {
     seedState(dir, { memberId: "sess_pin_builder", hostSessionId: null })
     queueMessage(dir, "sess_pin_builder", "hook-delivery test payload")
-    // PRODUCTION WIRING (Reviewer Issue 9): pin comes from the installer's
-    // per-member pin file — the child env carries NO OPENCOMMS_MEMBER_ID.
     installPin(dir, "sess_pin_builder")
 
     // Hook fires with CLAUDE's session uuid — a different namespace from the
-    // pinned member id (Reviewer Issue 2). SessionStart must bind + deliver.
+    // pinned member id. SessionStart must bind + deliver.
     const res = runHookCli(dir, "session-start", { session_id: "claude-uuid-1", cwd: dir })
     assert.equal(res.status, 0, `hook failed: ${res.stderr}`)
     const out = JSON.parse(res.stdout || "{}") as {
@@ -311,7 +293,7 @@ test("two Claude sessions on one channel receive only their own messages", async
       errors: [],
     }
     writeFileSync(stateFileOf(dir), JSON.stringify(state), "utf8")
-    // One pin file per member (per-member pins, P1-1). Both members are
+    // One pin file per member. Both members are
     // already BOUND here, so pin ambiguity cannot arise; each hook receives
     // only its own queue. The env-override path is exercised explicitly to
     // prove pins never leak across members.
@@ -327,7 +309,6 @@ test("two Claude sessions on one channel receive only their own messages", async
     const outB = JSON.parse(resB.stdout || "{}")
     assert.equal(outB.hookSpecificOutput, undefined, "member B must not receive A's message")
 
-    // Builder's hook receives it (its pin via env override).
     const resA = runHookCli(
       dir,
       "session-start",
@@ -451,14 +432,12 @@ test("P1-1: two install-member runs + sequential SessionStarts bind each Claude 
   }
   const dir = mkdtempSync(join(tmpdir(), "oc-hook-pins1-"))
   try {
-    // Project has OpenComms state (possibly channel-less) before members register.
     mkdirSync(join(dir, ".opencomms"), { recursive: true })
     writeFileSync(
       stateFileOf(dir),
       JSON.stringify({ schema_version: 2, channels: {}, messages: {}, queues: {}, delivered_to: {}, errors: [] }),
       "utf8",
     )
-    // Install-member run 1: no pins yet -> mints member A.
     const regA = registerProjectMember(dir, { host: "claude-code" })
     assert.ok(regA.ok, `first registration must succeed: ${JSON.stringify(regA)}`)
     const idA = regA.ok ? regA.memberId : ""

@@ -1,31 +1,7 @@
 /**
- * OpenComms — live integration test.
- *
- * Exercises the full end-to-end acceptance flow against a real OpenCode
- * runtime. The test is GUARDED: it skips automatically when no OpenCode
- * server is reachable, so `npm run test:all` never fails in CI or on a
- * machine without OpenCode Desktop running.
- *
- * To run it for real:
- *   1. Start OpenCode Desktop with the OpenComms plugin installed and a
- *      deterministic local model configured (e.g. a local ollama model).
- *   2. Export the server URL and password:
- *        $env:OPENCODE_SERVER_URL = "http://127.0.0.1:4096"
- *        $env:OPENCODE_SERVER_PASSWORD = "<your password>"
- *        $env:OPENCOMMS_LIVE_PROJECT  = "C:\\path\\to\\project"
- *   3. npm run test:live
- *
- * Acceptance criteria covered:
- *   1-6  create two root sessions, register Builder + Reviewer, no extra sessions
- *   7-12 independent prompting + explicit send both directions
- *   13   busy-session queueing
- *   14   duplicate events do not duplicate messages
- *   15   pause prevents delivery
- *   16   resume continues delivery
- *   17   disconnect stops communication
- *   18   disconnect does not delete sessions
- *   19   state survives a restart
- *   20   missing sessions are reported, never auto-replaced
+ * Live OpenCode checks; skip when the configured server is unavailable.
+ * Set OPENCODE_SERVER_URL, OPENCODE_SERVER_PASSWORD and OPENCOMMS_LIVE_PROJECT.
+ * Autonomous delivery also needs OPENCODE_LIVE_MODEL=providerID/modelID.
  */
 
 import { test } from "node:test"
@@ -65,12 +41,6 @@ async function serverReachable(): Promise<boolean> {
   }
 }
 
-async function findOpenCommsToolSession(c: ReturnType<typeof client>, projectDir: string) {
-  const list = await c.session.list({})
-  const sessions = (list.data ?? []).filter((s) => s.directory === projectDir)
-  return sessions
-}
-
 async function promptSession(c: ReturnType<typeof client>, sessionId: string, text: string) {
   return c.session.prompt({
     path: { id: sessionId },
@@ -104,8 +74,6 @@ async function waitForToolResult(
   throw new Error(`Tool ${toolName} did not complete within ${timeoutMs}ms on session ${sessionId}`)
 }
 
-// All tests are guarded by server reachability so they no-op (skip) when the
-// runtime is absent. When present, they perform the full end-to-end flow.
 test("live: OpenCode server reachable, or suite skips", async (t) => {
   if (!(await serverReachable())) {
     t.skip("OpenCode server is unavailable or unauthenticated")
@@ -126,10 +94,7 @@ test("live: full Builder<->Reviewer acceptance flow", async (t) => {
   const c = client()
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-  // 1. Create two ordinary root sessions before OpenComms links anything.
-  //    Scope them to the project directory so the OpenComms plugin (which
-  //    resolves the project from the session's directory) sees the right
-  //    .opencode-comms/state.json.
+  // Scope both sessions to the project so their plugins share the same state.
   const bRes = await c.session.create({ body: { title: "ocm-live-builder" }, query: { directory: PROJECT_DIR } })
   const rRes = await c.session.create({ body: { title: "ocm-live-reviewer" }, query: { directory: PROJECT_DIR } })
   const builderId = bRes.data!.id
@@ -137,14 +102,12 @@ test("live: full Builder<->Reviewer acceptance flow", async (t) => {
   assert.ok(builderId, "builder session id recorded")
   assert.ok(reviewerId, "reviewer session id recorded")
 
-  // 2. Verify both are root (no parentID).
   const bInfo = await c.session.get({ path: { id: builderId } })
   const rInfo = await c.session.get({ path: { id: reviewerId } })
   assert.ok(!bInfo.data!.parentID, "builder is root")
   assert.ok(!rInfo.data!.parentID, "reviewer is root")
 
   try {
-    // 3. Register the first exact session as Builder via the tool.
     await promptSession(
       c,
       builderId,
@@ -153,12 +116,10 @@ test("live: full Builder<->Reviewer acceptance flow", async (t) => {
     const createRes = await waitForToolResult(c, builderId, "opencomms_create")
     assert.equal(createRes.ok, true, "create succeeded")
 
-    // 5. No additional sessions were created: list still has exactly the two.
     const listAfterCreate = await c.session.list({})
     const ocmSessions = (listAfterCreate.data ?? []).filter((s) => s.directory === PROJECT_DIR)
     assert.equal(ocmSessions.length, 2, "no extra sessions created")
 
-    // 4. Register the second exact session as Reviewer.
     await promptSession(
       c,
       reviewerId,
@@ -167,7 +128,6 @@ test("live: full Builder<->Reviewer acceptance flow", async (t) => {
     const joinRes = await waitForToolResult(c, reviewerId, "opencomms_join")
     assert.equal(joinRes.ok, true, "join succeeded")
 
-    // 6. Builder and Reviewer receive different role prompts (verified via status).
     await promptSession(c, builderId, "Call opencomms_status")
     const statusRes = await waitForToolResult(c, builderId, "opencomms_status")
     const members = (statusRes.data as any).channels[0].members
@@ -176,7 +136,6 @@ test("live: full Builder<->Reviewer acceptance flow", async (t) => {
     const reviewerMember = members.find((m: any) => m.session_id === reviewerId)
     assert.notEqual(builderMember.role_prompt, reviewerMember.role_prompt, "different role prompts")
 
-    // 7-8. User prompts Builder independently; Builder explicitly sends.
     await promptSession(
       c,
       builderId,
@@ -185,7 +144,6 @@ test("live: full Builder<->Reviewer acceptance flow", async (t) => {
     const sendRes = await waitForToolResult(c, builderId, "opencomms_send")
     assert.equal(sendRes.ok, true, "builder send succeeded")
 
-    // 9. Message appears in the existing Reviewer session's history.
     await promptSession(c, reviewerId, 'Call opencomms_inbox with channel="live-feature"')
     const inboxRes = await waitForToolResult(c, reviewerId, "opencomms_inbox")
     assert.ok(
@@ -193,7 +151,6 @@ test("live: full Builder<->Reviewer acceptance flow", async (t) => {
       "message reached reviewer inbox",
     )
 
-    // 10-11. Reviewer responds; response appears in Builder inbox.
     await promptSession(
       c,
       reviewerId,
@@ -208,23 +165,19 @@ test("live: full Builder<->Reviewer acceptance flow", async (t) => {
       "reply reached builder inbox",
     )
 
-    // 12. User can still prompt Reviewer independently.
     await promptSession(c, reviewerId, "Reply with the single word: OK")
     await sleep(3000)
     assert.ok(true, "reviewer independently promptable")
 
-    // 15. Pause prevents delivery.
     await promptSession(c, builderId, 'Call opencomms_pause with channel="live-feature"')
     await waitForToolResult(c, builderId, "opencomms_pause")
     await promptSession(c, builderId, 'Call opencomms_send with channel="live-feature", content="paused message"')
     const pausedSend = await waitForToolResult(c, builderId, "opencomms_send")
     assert.equal(pausedSend.ok, false, "send rejected while paused")
 
-    // 16. Resume continues delivery.
     await promptSession(c, builderId, 'Call opencomms_resume with channel="live-feature"')
     await waitForToolResult(c, builderId, "opencomms_resume")
 
-    // 17-18. Disconnect stops communication but does not delete sessions.
     await promptSession(c, builderId, 'Call opencomms_disconnect with channel="live-feature"')
     await waitForToolResult(c, builderId, "opencomms_disconnect")
     const bInfoAfter = await c.session.get({ path: { id: builderId } })
@@ -243,11 +196,8 @@ test("live: full Builder<->Reviewer acceptance flow", async (t) => {
 })
 
 /**
- * NO-MANUAL-WAKE acceptance scenario (brief goal #1): after A sends, NEITHER
- * session is prompted by the test again. The message must reach B
- * automatically (idle -> owner-side prompt), B must process it, and a reply
- * via opencomms_send must reach A automatically. Requires a model that can
- * actually call tools: set OPENCODE_LIVE_MODEL=providerID/modelID.
+ * After the initial send, the test never prompts either session again.
+ * The model must call tools; idle hooks own both automatic deliveries.
  */
 test("live: two sessions exchange >=2 turns autonomously (no manual wake)", async (t) => {
   if (!(await serverReachable())) {
@@ -292,7 +242,7 @@ test("live: two sessions exchange >=2 turns autonomously (no manual wake)", asyn
     })
     await waitForToolResult(c, b.id, "opencomms_join")
 
-    // THE SEND. From here on the test never prompts either session again.
+    // After this send, neither session receives a manual wake.
     const t0 = Date.now()
     await c.session.prompt({
       path: { id: a.id },

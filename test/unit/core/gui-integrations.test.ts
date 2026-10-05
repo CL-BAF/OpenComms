@@ -1,15 +1,3 @@
-/**
- * GUI integration API layer tests (M3, Lead slice).
- *
- * Covers: integrationsOverview shapes + per-status action availability,
- * integrationAction five-verb whitelist + unknown id/action rejection,
- * projectBootstrap mapping (fresh → install offer; stamped → continue;
- * outdated → update; broken → repair; legacy v1 + no v2 → migration_required;
- * v2 present + legacy dir → NEVER migration_required; malformed marker →
- * incompatible/repair), and the OFFER-ONLY no-write guarantee (calling
- * projectBootstrap on a fresh project mutates NOTHING).
- */
-
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs"
@@ -22,7 +10,6 @@ import {
   LIFECYCLE_ACTIONS,
   type IntegrationsOverview,
 } from "../../../src/gui/integrations.js"
-import { createDefaultManager } from "../../../src/integrations/registry.js"
 import { getInstalledVersion, updateIntegrationMarker } from "../../../src/integrations/versioning.js"
 import { VERSION } from "../../../src/version.js"
 
@@ -105,7 +92,6 @@ test("integrationAction: unknown verb and unknown id rejected BEFORE the manager
     assert.equal(badVerb.ok, false)
     assert.match(badVerb.warnings.join(" "), /Unknown action "explode"/)
     assert.deepEqual(badVerb.changedFiles, [])
-    // The five verbs are the whitelist.
     assert.deepEqual([...LIFECYCLE_ACTIONS].sort(), ["install", "repair", "uninstall", "update", "verify"])
 
     const badId = await integrationAction(dir, "not-a-host", "install")
@@ -143,7 +129,6 @@ test("bootstrap: current integration continues; outdated offers update", async (
     assert.equal(current.integration, "current")
     assert.equal(current.action, "continue")
 
-    // Simulate an older stamp: marker version < VERSION.
     updateIntegrationMarker(dir, "opencode", { version: "0.0.1" })
     const outdated = await projectBootstrap(dir)
     assert.equal(outdated.integration, "outdated")

@@ -1,15 +1,4 @@
-/**
- * Claude Code adapter (M1): wraps src/adapters/claude-code/install.ts.
- *
- * Detection artifacts (project scope):
- *   - .opencomms/claude-code-hooks.mjs + .opencomms/opencomms-mcp.mjs present?
- *   - .claude/settings.json hooks contain claude-code-hooks.mjs?
- *   - .mcp.json mcpServers.opencomms present?
- *   - marker version vs ctx.currentVersion?
- *
- * All present -> installed (or outdated); none -> absent; partial -> broken.
- * Capabilities stay honest: hook-boundary delivery, no mid-turn push (never FULL).
- */
+/** Detection checks project artifacts and configuration; it does not prove host execution. */
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -188,7 +177,7 @@ export const claudeCodeAdapter: HostIntegration = {
     }
   },
   async uninstall(ctx: IntegrationContext): Promise<IntegrationReport> {
-    // Binding order (Reviewer R2): files first, marker last. Absent => ok:true
+    // Binding order: files first, marker last. Absent => ok:true
     // no-op before touching the marker; both configs are parsed BEFORE any
     // mutation (parse-before-remove), so a malformed file yields ok:false with
     // zero writes and an untouched marker.

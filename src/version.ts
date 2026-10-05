@@ -1,11 +1,6 @@
 /**
- * Package version shared by CLI, GUI diagnostics, and release metadata.
- *
- * SEA path architecture (docs/adr-sea-path-resolution.md): resolution order
- * is (1) OPENCOMMS_VERSION env stamp (release builds), (2) development repo
- * package.json via the module anchor, (3) static fallback pinned to the
- * package version at build time. CWD is NEVER consulted — `opencomms
- * version` works identically from /, $HOME, /tmp, or a project dir.
+ * Version resolution: release environment stamp, anchored package.json, static
+ * fallback. CWD is never a resource anchor.
  */
 import { readFileSync } from "node:fs"
 import { join } from "node:path"

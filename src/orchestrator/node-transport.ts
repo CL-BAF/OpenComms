@@ -1,52 +1,15 @@
 /**
- * M3 remote transport — outbound-only WSS node→coordinator (design §9c-4).
- *
- * FLOOR (ADR-0001 + research batch-1 §2, unchanged by research-m3 §2):
- *   - The NODE dials out; the coordinator opens no inbound ports.
- *   - Bearer credentials over `wss://` ONLY (never `ws://` cross-network —
- *     Codex `--remote` rule). The bearer is the node's cert-derived token.
- *   - Message framing identical local vs remote: MessageEnvelope content
- *     moves verbatim (single protocol surface, M0 ground rule).
- *
- * SHAPE (Buildkite / Remote Control model): register → poll/heartbeat →
- * accept job → stream output → report status. Reconnect reuses our local
- * machinery:
- *   - per-recipient sequence cursors: "deliver everything after seq N"
- *     (JetStream idea; the Remote Control queue-on-drop precedent),
- *   - REMOTE-ACK delivery: cross-node, `delivered` is committed only AFTER
- *     the node ACKs receipt — never on prompt-success alone (research
- *     batch-1 §3),
- *   - bounded give-up (~10 min, Remote Control precedent) with clean
- *     re-registration on return.
- *
- * P3-2 COMPOSITION SPEC (remote-ack × two-phase commit, Reviewer M3 P3-2):
- *   Local two-phase: drain marks in_flight (persisted) → host accepts →
- *   commitDelivery marks delivered. Cross-node composition:
- *   1. drainForDelivery marks the envelope in_flight as today (crash-safe).
- *   2. The WSS send hands the framed batch to the node; the envelope STAYS
- *      in_flight until the node's ACK arrives ("ack seq N").
- *   3. ACK receipt → commitDelivery (delivered). No ACK within the ack
- *      window → requeueFailedDelivery (FIFO preserved) + retry, exactly the
- *      M1 failed-delivery path. Idempotency on the node: the cursor+ack
- *      pair makes redelivery a no-op (the node drops envelopes with seq ≤
- *      its cursor).
- *   4. Crashed-coordinator window: the node may have executed an envelope
- *      the coordinator considers un-acked. That is the SAME at-least-once
- *      class as M1's crash window (PROTOCOL.md: bias toward re-deliver).
- *      Cursor+ack bounds the replay to the ack window; framing + dedup
- *      make the replay safe.
- *   5. sweepInFlight semantics are unchanged: envelopes stranded in_flight
- *      by a coordinator crash are re-queued at startup; remote nodes
- *      re-receive them after reconnect (cursor dedups on the node).
+ * Remote helpers: outbound WSS, nonce-bound credentials and unchanged framing.
+ * Delivery commits after ACK; monotonic cursors suppress received sequences.
+ * A crash can leave accepted work unacknowledged, so replay remains at-least-once.
+ * Return after the bounded offline window requires a fresh authenticated handshake.
  */
 
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify } from "node:crypto"
 
 /**
- * Node-side auth token: cert-derived bearer (design §9c-3/§9c-4). The
- * bearer is a detached signature over the connection nonce + node id,
- * verifiable against the CA public key WITHOUT storing CA secrets on the
- * node (the node pins the CA public-key fingerprint from pairing).
+ * Sign the connection nonce and node id with the node private key.
+ * Verify with the node public key pinned by pairing.
  */
 export function nodeBearerToken(input: {
   node_id: string
@@ -67,7 +30,7 @@ export function verifyNodeBearer(input: {
   nonce: string
   /** The node's CERT PEM from this handshake (verified against the CA first). */
   nodeCertPem: string
-  /** Revocation check result — load-bearing (binding B): false = reject. */
+  /** True rejects authentication even with a valid signature. */
   isRevoked: boolean
 }): { ok: true; node_id: string } | { ok: false; reason: string } {
   const dot = input.token.indexOf(".")
@@ -75,8 +38,7 @@ export function verifyNodeBearer(input: {
   const node_id = input.token.slice(0, dot).replace(/^node-/, "")
   const signature = input.token.slice(dot + 1)
   if (!node_id) return { ok: false, reason: "malformed node token" }
-  // Load-bearing revocation gate: revoked certs CANNOT authenticate even
-  // with a valid signature (binding B, transport enforcement point).
+  // Revocation rejects otherwise valid credentials.
   if (input.isRevoked) return { ok: false, reason: "node certificate revoked" }
   // The nonce is bound to THIS connection (replay of a captured token on a
   // later connection fails the signature check).
@@ -96,7 +58,6 @@ export function verifyNodeBearer(input: {
   return { ok: true, node_id }
 }
 
-/** Per-recipient delivery cursor (JetStream idea, batch-1 §3). */
 export interface NodeDeliveryCursor {
   node_id: string
   /** Highest envelope sequence the node has ACKed. */
@@ -132,29 +93,16 @@ export function advanceCursor(
   return { acked_seq, updated_at: now }
 }
 
-/**
- * NODE-side dedup (P2-A single implementation point, Lead-owned seam): the
- * NODE drops envelopes at or below its own acked cursor — idempotent
- * redelivery is a no-op, out-of-order/stale envelopes are dropped before
- * execution. Platform's run loop CALLS this at the top of every batch; it
- * never re-implements the logic (cursor semantics live in exactly one
- * place per side: advanceCursor here for the coordinator, dedupeForNode
- * here for the node).
- */
+/** Drop node-side sequences at or below the cursor before execution. */
 export function dedupeForNode(envelopes: RemoteEnvelope[], nodeAckedSeq: number): RemoteEnvelope[] {
   return envelopes.filter((e) => e.seq > nodeAckedSeq).sort((a, b) => a.seq - b.seq)
 }
 
-/**
- * Bounded give-up (design §9c-4, Remote Control precedent ~10 min): a node
- * unreachable for longer than GIVE_UP_MS is marked offline by the
- * supervisor; re-registration on return is a fresh handshake (never silent
- * re-adopt).
- */
+/** After the bounded offline window, return requires fresh authenticated registration. */
 export const NODE_GIVE_UP_MS = 10 * 60_000
 
-/** WSS URL builder: wss ONLY (Codex rule — never ws:// across networks). */
-export function nodeWssUrl(base: string, nodeId: string, bearer: string): string {
+/** WSS only; credentials must never appear in the URL. */
+export function nodeWssUrl(base: string, nodeId: string, _bearer: string): string {
   if (!base.startsWith("wss://")) throw new Error("node transport requires wss:// (ws:// is refused cross-network)")
   const url = new URL(base)
   url.searchParams.set("node_id", nodeId)

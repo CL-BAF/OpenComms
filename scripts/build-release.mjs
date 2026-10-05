@@ -29,13 +29,6 @@ if (process.platform === "linux") {
 
 console.log(`[opencomms-release] executable: ${exe}`)
 
-/**
- * Linux release tarball (M1, Platform): exe + systemd user unit + installer +
- * README + SHA256SUMS. Zero new tooling — plain tar from a staging dir.
- * Layout:
- *   opencomms/opencomms  opencomms/opencomms.service  opencomms/install.sh
- *   opencomms/README-linux.txt  SHA256SUMS
- */
 function buildLinuxTarball(node, repoRoot, outDir) {
   const version = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version
   const staging = resolve(join(tmpdir(), `opencomms-stage-${process.pid}-${Date.now()}`))
@@ -43,10 +36,7 @@ function buildLinuxTarball(node, repoRoot, outDir) {
   mkdirSync(payloadDir, { recursive: true })
 
   copyFileSync(join(outDir, "opencomms"), join(payloadDir, "opencomms"))
-  // copyFileSync does NOT preserve the exec bit: without chmod, the staged
-  // exe and installer land 644 and the smoke test's direct exec (and real
-  // users running ./opencomms/install.sh) gets EACCES. Windows releases are
-  // unaffected (Inno Setup ACLs differ); this is tarball-layout specific.
+  // copyFileSync drops executable mode; restore it before creating the tarball.
   chmodSync(join(payloadDir, "opencomms"), 0o755)
   const unitSource = join(repoRoot, "installer", "linux", "opencomms.service")
   if (!existsSync(unitSource)) throw new Error("Missing installer/linux/opencomms.service (unit template)")
@@ -57,7 +47,6 @@ function buildLinuxTarball(node, repoRoot, outDir) {
   chmodSync(join(payloadDir, "install.sh"), 0o755)
   writeFileSync(join(payloadDir, "README-linux.txt"), readmeLinux(version), "utf8")
 
-  // Keyed by basename (Lead FIX 1) — no fragile index lookups.
   const payloadFiles = ["opencomms", "opencomms.service", "install.sh", "README-linux.txt"]
   const sums = payloadFiles
     .map((base) => {
@@ -65,13 +54,8 @@ function buildLinuxTarball(node, repoRoot, outDir) {
       return `${createHash("sha256").update(readFileSync(file)).digest("hex")}  opencomms/${base}`
     })
     .join("\n")
-  // SHA256SUMS ships INSIDE the payload; it cannot list itself (self-hash
-  // recursion), so the file carries exactly the four payload entries.
   writeFileSync(join(staging, "SHA256SUMS"), `${sums}\n`, "utf8")
-  // The smoke test and operators verify from the EXTRACTION dir — ship
-  // SHA256SUMS inside the payload (it cannot verify the tarball it is in,
-  // but the per-file hashes cover the payload; the tarball checksum lives
-  // beside the tarball as <name>.sha256 at the release root).
+  // Payload checksums live inside the tarball; its own checksum lives beside it.
   copyFileSync(join(staging, "SHA256SUMS"), join(payloadDir, "SHA256SUMS"))
 
   const tarball = join(outDir, `opencomms-linux-${version}.tar.gz`)

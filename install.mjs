@@ -1,24 +1,19 @@
 #!/usr/bin/env node
 /**
- * OpenComms installer.
- *
- * Usage:
- *   node install.mjs [target-project-dir]
- *
- * Defaults to the current working directory if no target is given.
- *
- * What it does:
- *   1. Builds the plugin (npm run build) if dist/ is missing.
- *   2. Copies dist/* into <target>/.opencode/plugins/.
- *   3. Patches <target>/opencode.json (or .jsonc) to register the plugin
- *      under the "plugin" key, preserving all existing config and avoiding
- *      duplicate entries.
- *
- * Run it from the OpenComms repo root:
- *   node install.mjs C:\Users\Cameron\Desktop\Shhhh
+ * Source installer: build a missing plugin bundle, copy it to the target and
+ * register it without duplicate configuration entries.
  */
 
-import { existsSync, mkdirSync, readdirSync, copyFileSync, statSync, readFileSync, writeFileSync, unlinkSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  copyFileSync,
+  statSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+} from "node:fs"
 import { join, resolve, dirname, basename } from "node:path"
 import { execSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
@@ -39,7 +34,6 @@ function fail(msg) {
   process.exit(1)
 }
 
-// 1. Ensure the bundled plugin exists (build if missing).
 const distDir = join(repoRoot, "dist")
 const bundledPath = join(distDir, "plugin.bundled.js")
 if (!existsSync(bundledPath)) {
@@ -48,10 +42,7 @@ if (!existsSync(bundledPath)) {
   if (!existsSync(bundledPath)) fail("build did not produce dist/plugin.bundled.js.")
 }
 
-// 2. Copy the self-contained bundled plugin into <target>/.opencode/plugins/.
-//    We ship a single bundled file (plugin.bundled.js, produced by esbuild
-//    with @opencode-ai/plugin and @opencode-ai/sdk marked external since
-//    OpenCode provides those at runtime) plus the dist sources as fallback.
+// OpenCode supplies the external SDK dependencies for the copied plugin bundle.
 log(`Target project: ${target}`)
 mkdirSync(pluginsDir, { recursive: true })
 
@@ -59,7 +50,9 @@ mkdirSync(pluginsDir, { recursive: true })
 for (const name of ["plugin.js", "engine.js", "store.js", "types.js"]) {
   const stale = join(pluginsDir, name)
   if (existsSync(stale)) {
-    try { unlinkSync(stale) } catch {}
+    try {
+      unlinkSync(stale)
+    } catch {}
   }
 }
 
@@ -70,11 +63,7 @@ if (!existsSync(bundledSrc)) {
 copyFileSync(bundledSrc, join(pluginsDir, "plugin.js"))
 log("copied plugin.bundled.js -> .opencode/plugins/plugin.js (self-contained)")
 
-// 3. Patch opencode.json (or .jsonc) in the target.
-const jsonCandidates = [
-  join(target, "opencode.json"),
-  join(target, "opencode.jsonc"),
-]
+const jsonCandidates = [join(target, "opencode.json"), join(target, "opencode.jsonc")]
 let configPath = jsonCandidates.find((p) => existsSync(p)) ?? jsonCandidates[0]
 const pluginRelPath = ".opencode/plugins/plugin.js"
 
@@ -98,7 +87,6 @@ function readConfig(path) {
 const config = readConfig(configPath)
 const pluginField = config.plugin
 
-// Normalize to an array and avoid duplicates.
 let arr
 if (pluginField === undefined) {
   arr = []

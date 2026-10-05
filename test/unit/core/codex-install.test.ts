@@ -1,16 +1,7 @@
-/**
- * Codex adapter tests (Stage 7).
- *
- * The installer registers [mcp_servers.opencomms] in the project
- * .codex/config.toml. Verified 2026-08-29 (developers.openai.com/codex):
- * stdio via {command, args, env}; hooks are trust-gated (/hooks review).
- * External injection into TUI sessions: NOT documented — never attempted.
- */
-
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { installCodex, detectCodex, CODEX_CAPABILITIES } from "../../../src/adapters/codex/install.js"
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from "node:fs"
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -23,10 +14,9 @@ test("codex capabilities distinguish usable PULL tools from an unimplemented App
 test("installCodex registers the MCP server section and copies the bundle", () => {
   const dir = mkdtempSync(join(tmpdir(), "oc-codex-"))
   try {
-    // dist bundle must exist for the copy path (built by test runbook).
     const distMain = join(process.cwd(), "dist", "mcp", "main.js")
     if (!existsSync(distMain)) {
-      return // skipped implicitly when no dist; CI always builds first
+      return
     }
     const report = installCodex(dir)
     assert.equal(report.ok, true, report.warnings.join("; "))
@@ -89,14 +79,12 @@ test("installCodex uses absolute paths + explicit cwd (no cwd assumptions)", () 
     const report = installCodex(dir)
     assert.equal(report.ok, true)
     const toml = readFileSync(join(dir, ".codex", "config.toml"), "utf8")
-    // args[0] absolute (escaped forward slashes), args[1] = absolute project dir.
     assert.ok(
       toml.includes(`"${join(dir, ".opencomms", "opencomms-mcp.mjs").replace(/\\/g, "/")}"`),
       "absolute server path in args",
     )
     assert.ok(toml.includes(`"${dir.replace(/\\/g, "/")}"`), "absolute project dir as args[1]")
     assert.ok(/cwd = "\."/.test(toml), "documented cwd option set explicitly")
-    // Trusted-project warning surfaced.
     assert.ok(
       report.warnings.some((w) => w.includes("TRUSTED")),
       "trusted-project caveat surfaced",

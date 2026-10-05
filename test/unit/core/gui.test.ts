@@ -1,10 +1,3 @@
-/**
- * GUI server tests (loopback-only): API round-trips for the session
- * console â€” create/list, members, save, resume-as-new, delete, member
- * removal, join-command, and the loopback bind refusal. Runs against a
- * REAL HTTP server on an ephemeral 127.0.0.1 port.
- */
-
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs"
@@ -160,13 +153,10 @@ test("GUI: native bridge bootstrap keeps runtime storage hidden until project se
 })
 
 test("GUI: embedded application shell uses modals and exposes project, diagnostics, and capability surfaces", () => {
-  // M1 IA: seven-surface nav (docs/gui-ia.md §2, Lead-approved).
   assert.match(GUI_HTML, /data-nav="overview"/)
   assert.match(GUI_HTML, /data-nav="team"/)
   assert.match(GUI_HTML, /data-nav="nodes"/)
   assert.match(GUI_HTML, /data-nav="activity"/)
-  // Saved sessions are a tab inside Sessions; Integrations/Diagnostics live
-  // under Settings tabs.
   assert.match(GUI_HTML, /data-stab="saved"/)
   assert.match(GUI_HTML, /data-tab="diagnostics"/)
   assert.match(GUI_HTML, /Choose Project/)
@@ -180,7 +170,6 @@ test("GUI: embedded application shell uses modals and exposes project, diagnosti
 
 test("GUI: members endpoint returns live roster with honest states; remove severs the link only", async () => {
   await withServer("gui2", async (base, dir) => {
-    // Seed via the engine (simulating agents joining).
     const storeState = emptyState()
     createChannel(storeState, {
       channel: "app",
@@ -202,7 +191,6 @@ test("GUI: members endpoint returns live roster with honest states; remove sever
       host_session_id: "claude-1",
     })
     sendMessage(storeState, { channel: "app", content: "queued mail for reviewer", to: "Reviewer" }, "u_builder")
-    // Persist through the SAME store the GUI server reads.
     const { StateStore } = await import("../../../src/core/store.js")
     const store = new StateStore(dir)
     await store.withLock(() => {
@@ -240,13 +228,11 @@ test("GUI: members endpoint returns live roster with honest states; remove sever
 
 test("GUI: save â†’ archived card; resume-as-new; delete is destructive", async () => {
   await withServer("gui3", async (base) => {
-    // Saving a nonexistent session fails cleanly.
     const nonexistent = (await (
       await fetch(`${base}/api/sessions/nonexistent/save`, { method: "POST", body: JSON.stringify({}) })
     ).json()) as { ok: boolean; message: string }
     assert.equal(nonexistent.ok, false, "saving a nonexistent session fails cleanly")
 
-    // Create a session, save it, then check archive listing.
     const created = (await (
       await fetch(`${base}/api/sessions`, { method: "POST", body: JSON.stringify({ name: "design2" }) })
     ).json()) as { ok: boolean; message: string }
@@ -278,7 +264,6 @@ test("GUI: save â†’ archived card; resume-as-new; delete is destructive", a
     assert.equal(arch.message_count, 0)
     assert.match(arch.summary, /Design settled/)
 
-    // Resume as new.
     const resumed = (await (
       await fetch(`${base}/api/sessions/design2/resume`, { method: "POST", body: JSON.stringify({}) })
     ).json()) as {
@@ -295,9 +280,6 @@ test("GUI: save â†’ archived card; resume-as-new; delete is destructive", a
     assert.equal(detail.data.lifecycle, "active")
     assert.match(detail.data.compact_context ?? "", /Design settled/)
 
-    // Delete (destructive, confirm built into the API as DELETE). Deleting
-    // the RESUMED session removes only its live state â€” the parent archive
-    // remains (session evolution keeps the chain).
     const deleted = (await (await fetch(`${base}/api/sessions/design2`, { method: "DELETE" })).json()) as {
       ok: boolean
       message: string
@@ -310,7 +292,6 @@ test("GUI: save â†’ archived card; resume-as-new; delete is destructive", a
     assert.equal(afterLive.ok, true, "the PARENT archive remains readable after deleting a resumed session")
     assert.equal(afterLive.data.lifecycle, "saved")
 
-    // Deleting again (no live channel) targets the archive itself.
     const deletedArchive = (await (await fetch(`${base}/api/sessions/design2`, { method: "DELETE" })).json()) as {
       ok: boolean
       message: string
@@ -340,27 +321,12 @@ test("join-command helper: real commands per host, fail-closed unknown host", ()
   assert.ok("error" in bad)
 })
 
-// ── Reviewer P0: operator-created sessions must accept REAL host identities ──
-
 test("P0 repro: GUI-created empty session joined by an MCP-style caller (sentinel id) succeeds", async () => {
   await withServer("gui-join", async (base) => {
     const created = (await (
       await fetch(`${base}/api/sessions`, { method: "POST", body: JSON.stringify({ name: "joins" }) })
     ).json()) as { ok: boolean }
     assert.equal(created.ok, true)
-    // MCP-style caller: project_id "local-project" (sentinel) — previously
-    // failed against the GUI's "gui-local-project" sentinel scheme.
-    const joined = joinChannel(emptyState(), {
-      channel: "x",
-      role: "x",
-      role_prompt: "x",
-      session_id: "x",
-      project_id: PROJECT,
-      worktree: WORKTREE,
-    })
-    void joined
-    // Join via public fetch is a browser op; drive the engine on the same
-    // file the GUI server owns:
     const { StateStore } = await import("../../../src/core/store.js")
     const store = new StateStore(dirOf(base))
     const result = await store.withLock(() => {
@@ -377,14 +343,12 @@ test("P0 repro: GUI-created empty session joined by an MCP-style caller (sentine
       return r
     })
     assert.equal(result.ok, true, `MCP sentinel join failed: ${result.message}`)
-    void created
   })
 })
 
 test("P0: empty operator session ADOPTS the first joiner's real host identity; later joiners compare strictly", () => {
   const state = emptyState()
   createSessionAsOperator(state, { channel: "adopt", project_id: "gui-local-project", worktree: "C:\\gui" })
-  // First joiner: an OpenCode-plugin-style caller with a REAL SDK project hash.
   const first = joinChannel(state, {
     channel: "adopt",
     role: "Builder",
@@ -397,7 +361,6 @@ test("P0: empty operator session ADOPTS the first joiner's real host identity; l
   const ch = state.channels["adopt"]!
   assert.equal(ch.project_id, "real-sdk-hash-abc", "channel adopted the real id")
   assert.equal(ch.worktree, "C:\\real\\worktree")
-  // Later joiner: same project + worktree → ok.
   const second = joinChannel(state, {
     channel: "adopt",
     role: "Reviewer",
@@ -407,7 +370,6 @@ test("P0: empty operator session ADOPTS the first joiner's real host identity; l
     worktree: "C:\\real\\worktree",
   })
   assert.equal(second.ok, true)
-  // Later joiner: DIFFERENT project (both real) → refused (fail-closed).
   const intruder = joinChannel(state, {
     channel: "adopt",
     role: "Tester",
@@ -441,7 +403,6 @@ test("P0: empty operator session ADOPTS the first joiner's real host identity; l
 
 test("P0: mixed-host round-trip from the join-command output (opencode ↔ MCP)", () => {
   const state = emptyState()
-  // OpenCode member creates the channel (real SDK hash).
   createChannel(state, {
     channel: "mix",
     role: "Builder",
@@ -450,7 +411,6 @@ test("P0: mixed-host round-trip from the join-command output (opencode ↔ MCP)"
     project_id: "sdk-hash-123",
     worktree: "C:\\proj",
   })
-  // MCP member joins with the "local-project" sentinel, same directory.
   const mcpJoin = joinChannel(state, {
     channel: "mix",
     role: "Reviewer",
@@ -460,15 +420,12 @@ test("P0: mixed-host round-trip from the join-command output (opencode ↔ MCP)"
     worktree: "C:\\proj",
   })
   assert.equal(mcpJoin.ok, true, `mixed-host join broken: ${mcpJoin.message}`)
-  // Message routing across the mixed-host pair.
   const sent = sendMessage(state, { channel: "mix", content: "hello cross-host", to: "Reviewer" }, "oc_builder")
   assert.equal(sent.ok, true)
   assert.deepEqual((sent.data as { recipients: string[] }).recipients, ["cc_reviewer"])
   const pulled = drainQueue(state, "cc_reviewer")
   assert.equal(pulled.length, 1)
 })
-
-// ── Reviewer P1: browser-surface hardening (Host + Origin) ──
 
 test("P1: spoofed (rebound/non-loopback) Host header is rejected with 403", async () => {
   await withServer("gui-h1", async (base) => {
@@ -500,17 +457,8 @@ test("P1: spoofed (rebound/non-loopback) Host header is rejected with 403", asyn
   })
 })
 
-function okRequest(x: unknown): { status: number } {
-  return x as { status: number }
-}
-
-function okStatus(x: { status: number }): number {
-  return x.status
-}
-
 test("SSE: archive-only changes (no state.json write) still fire refresh (stale-GUI regression)", async () => {
-  await withServer("gui-arch-watch", async (base, dir) => {
-    // Open the SSE stream like the browser does.
+  await withServer("gui-arch-watch", async (base) => {
     const controller = new AbortController()
     const events: string[] = []
     const streamPromise = (async () => {
@@ -532,8 +480,7 @@ test("SSE: archive-only changes (no state.json write) still fire refresh (stale-
     })()
 
     await new Promise((r) => setTimeout(r, 400))
-    // External archive mutation WITHOUT touching state.json — exactly what
-    // a CLI `session delete` of a SAVED session (or an MCP save) does.
+    // Archive-only mutations must wake the GUI without a state.json write.
     const archives = new ArchiveStore(dirOf(base))
     mkdirSync(archives.dir, { recursive: true })
     const archiveId = "chn_reg000000000000000000000000000a"
@@ -554,7 +501,6 @@ test("SSE: archive-only changes (no state.json write) still fire refresh (stale-
       messages: [],
       final_state_note: null,
     })
-    // The list must show it...
     const list = (await (await fetch(`${base}/api/sessions`)).json()) as {
       data: { archived: Array<{ name: string }> }
     }
@@ -563,8 +509,6 @@ test("SSE: archive-only changes (no state.json write) still fire refresh (stale-
       "archive appears in the session list",
     )
 
-    // ...and the SSE stream must have announced the change (watcher covers
-    // the archives dir, not just state.json).
     const deadline = Date.now() + 10_000
     while (!events.some((e) => e.includes("event: refresh")) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 200))
@@ -580,20 +524,17 @@ test("SSE: archive-only changes (no state.json write) still fire refresh (stale-
 
 test("P1: cross-site write (simulated simple-request CSRF) is rejected with 403", async () => {
   await withServer("gui-h2", async (base) => {
-    // Evil page DELETE with an evil Origin (browser simple-request signature).
     const res = await fetch(`${base}/api/sessions/whatever`, {
       method: "DELETE",
       headers: { Host: "127.0.0.1", Origin: "https://evil.site" },
     })
     assert.equal(res.status, 403)
-    // Evil Origin on a POST create.
     const post = await fetch(`${base}/api/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "https://evil.site" },
       body: JSON.stringify({ name: "evil" }),
     })
     assert.equal(post.status, 403)
-    // same-origin signal passes.
     const ok = await fetch(`${base}/api/sessions`, {
       method: "POST",
       headers: {

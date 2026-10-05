@@ -1,10 +1,3 @@
-/**
- * ChatGPT adapter tests (Stage 8) — honesty is the primary spec here.
- *
- * The adapter must never fake push, identity, or a working integration. The
- * scaffold must REFUSE unauthenticated public startup.
- */
-
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {

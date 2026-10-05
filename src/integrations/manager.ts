@@ -1,36 +1,7 @@
 /**
- * IntegrationManager (M1 + R1 hardening): registry + single entry point for
- * GUI/bridge/CLI.
- *
- * - Adapters are registered by id; register() overwrites on duplicate id so
- *   tests and late-binding hosts stay simple.
- * - Unknown ids on Report paths return ok:false (never throw). detect() with
- *   an unknown id throws (programmer error — the caller asked about a host
- *   that was never registered).
- * - Adapter throws are caught and mapped to Report{ok:false} / broken
- *   detections so one bad host can never crash listing or batch detection.
- * - update() is a smart dispatcher: absent -> install, broken -> repair,
- *   outdated (adapter status OR marker version < current) -> update,
- *   installed-but-marker-absent -> update (pre-1.x adoption, P2-4),
- *   otherwise a no-op ok Report. install/repair/verify delegate directly.
- *
- * Concurrency + marker discipline (R1/P2-3):
- * - Every mutating op (install/update/repair/verify) is serialized through
- *   an in-process async mutex AND invokes the adapter inside
- *   StateStore.withLock (cross-process `.state.lock`), so integration.json
- *   per-id updates take the same lock as project state. Adapter file
- *   mutations use synchronous FS calls throughout, hence they execute
- *   inside the lock's synchronous window (the codebase's withLock
- *   convention: sync bodies; async continuations are covered by the
- *   in-process mutex).
- * - Reads (detect/detectAll, dispatch-time marker checks) stay lock-free per
- *   the project's read convention (writes are atomic temp+rename).
- * - The manager itself only writes markers to ROLL BACK a failure: the
- *   pre-operation marker version is snapshotted under the lock, and when
- *   the adapter Report is ok:false (or the adapter throws) the snapshot is
- *   restored — so a failed op never leaves a success stamp, even if a
- *   misbehaving adapter stamped before failing. Untouched markers cause no
- *   write at all.
+ * Adapter operations share an in-process mutex and the project's state lock.
+ * Failure restores the previous version marker so an unsuccessful operation
+ * never leaves a success stamp. Detection stays lock-free.
  */
 
 import { StateStore } from "../core/store.js"
@@ -48,7 +19,6 @@ function adapterError(message: string, error: unknown): string {
   return detail ? `${message}: ${detail}` : message
 }
 
-/** Marker read that never throws (versioning readers are already total). */
 function safeInstalledVersion(projectDir: string, id: string): string | null {
   try {
     return getInstalledVersion(projectDir, id)
@@ -197,8 +167,6 @@ export class IntegrationManager {
     if (detection.status === "broken") {
       return this.runGuarded(ctx, id, "Repair", () => adapter.repair(ctx))
     }
-    // Artifacts present (installed/outdated): the marker decides between
-    // drift-update, pre-1.x adoption (marker absent), and no-op.
     const markerVersion = safeInstalledVersion(ctx.projectDir, id)
     const drift = markerVersion !== null && compareVersions(markerVersion, ctx.currentVersion) < 0
     const adoption = markerVersion === null

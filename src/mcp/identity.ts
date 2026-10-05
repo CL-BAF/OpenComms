@@ -1,19 +1,7 @@
 /**
- * Pinned member identity for OpenComms MCP servers and host hooks.
- *
- * One MCP server process serves exactly ONE channel member; hooks bind ONE
- * host session to ONE member. The installer pins the member's OpenComms id
- * in the process environment (OPENCOMMS_MEMBER_ID) and/or on disk under
- * .opencomms/pins/<member_id>.json. Identity is NEVER accepted from tool
- * arguments, and members removed from the roster lose access immediately
- * (fail closed).
- *
- * Per-member pin storage (Reviewer P1-1): the legacy single member-pin.json
- * could only ever hold ONE identity per project - a second `install-member`
- * silently destroyed the first member's identity, and SessionStart could
- * bind a Claude session to the WRONG member. Pins are now per-member files;
- * the legacy file is still READ for one-member installs written by older
- * installers (backward compatible), but never written again.
+ * Each MCP process serves one pinned member. Tool arguments cannot choose its
+ * identity, and protected calls fail closed after removal from the roster.
+ * Per-member pins avoid cross-session rebinding; the legacy pin is read-only.
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
@@ -55,11 +43,6 @@ export function pinnedMember(env: NodeJS.ProcessEnv = process.env): PinnedMember
 
 function pinsDir(projectDir: string): string {
   return join(projectDir, ".opencomms", MEMBER_PINS_DIR)
-}
-
-function pinFileFor(projectDir: string, memberId: string): string | null {
-  if (!isValidMemberId(memberId)) return null
-  return join(pinsDir(projectDir), `${memberId}.json`)
 }
 
 /**

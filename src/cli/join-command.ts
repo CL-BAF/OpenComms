@@ -1,8 +1,4 @@
-/**
- * The REAL, currently-valid join command for a session on a given host —
- * single source of truth shared by the CLI, the GUI, and docs (users never
- * copy UUIDs; the GUI displays exactly what these functions return).
- */
+/** Host-specific join commands shared by the CLI and GUI. */
 import { normalizeChannelName } from "../core/engine.js"
 
 export type JoinHost = "opencode" | "claude-code" | "codex" | "gemini-cli" | "claude-desktop" | "chatgpt"

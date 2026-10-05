@@ -1,18 +1,4 @@
-/**
- * Bridge parity tests (1.4.0 release/debug slice).
- *
- * 1. Drift gate: the Rust sidecar allowlist
- *    (desktop/src-tauri/src/main.rs ALLOWED_COMMANDS) must equal the TS
- *    command surface (src/orchestrator/bridge.ts BRIDGE_COMMANDS) EXACTLY.
- *    The 1.4.0 incident (stale 1.2.0 sidecar missing runtimes_list) was a
- *    bundled-binary drift failure; this gate catches the SOURCE drift class
- *    in CI instead of at runtime handshake refusal.
- * 2. Live sidecar probe (Windows only, skipped elsewhere or when the
- *    packaged binary is absent): spawn the coordinator exe, validate the
- *    handshake, ack it, then nodes_list -> runtimes_list. Acceptance:
- *    runtimes_list returns a catalog or an explicit unavailable-capability
- *    result with recovery and correlation — never a routing/protocol error.
- */
+/** Check source command parity and probe the packaged coordinator when available. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"

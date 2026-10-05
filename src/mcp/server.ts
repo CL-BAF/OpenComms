@@ -1,36 +1,7 @@
 /**
- * Minimal MCP (Model Context Protocol) stdio server.
- *
- * Dependency-free JSON-RPC 2.0 over newline-delimited stdin/stdout — the
- * documented transport for local MCP servers in Claude Code (.mcp.json),
- * Claude Desktop (.mcpb), and Codex (config.toml). No network listener:
- * the host spawns this process and speaks over stdio only.
- *
- * Implemented (all documented surface OpenComms needs):
- *   initialize / notifications/initialized / ping
- *   tools/list / tools/call
- * Everything else -> JSON-RPC error -32601.
- *
- * Tool authorization: every tool call resolves the caller from the PINNED
- * member identity in this process's environment (OPENCOMMS_MEMBER_ID,
- * written by the installer) and validates it against the live state roster,
- * failing closed. Tool arguments can never choose an identity.
+ * Newline-delimited JSON-RPC over stdio only. Tool handlers enforce pinned
+ * identity; unsupported methods return -32601.
  */
-
-import { isMember, joinChannel } from "../core/engine.js"
-import {
-  createChannel,
-  disconnectChannel,
-  history,
-  inbox,
-  kickChannel,
-  pauseChannel,
-  resumeChannel,
-  sendMessage,
-  status,
-  updateRole,
-} from "../core/engine.js"
-import type { HostSurface, SenderMessageType, State, ToolResult } from "../core/types.js"
 
 export interface McpToolDef {
   name: string
@@ -61,8 +32,7 @@ export class McpStdioServer {
   private running = false
 
   /** Max inbound JSON-RPC line size (memory-exhaustion DoS guard). */
-  private static readonly MAX_LINE_BYTES = 1_048_576 // 1 MiB
-  /** Silently swallowed buffer beyond which we hard-drop the connection. */
+  private static readonly MAX_LINE_BYTES = 1_048_576
   private static readonly MAX_BUFFER_BYTES = 2 * McpStdioServer.MAX_LINE_BYTES
 
   constructor(opts: { name: string; version: string; tools: McpToolDef[] }) {

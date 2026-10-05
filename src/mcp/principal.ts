@@ -1,14 +1,6 @@
 /**
- * M4.6 MCP principal classes (docs/mcp-orchestrator-tools.md §1-§2).
- *
- * Identity-scoped tool sets: the pin's class is FIXED at install time and
- * determines which MCP tools the instance sees — agent pins get the
- * channel tools only; operator pins get the orchestrator tools. No tool
- * can re-classify a pin (no self-escalation — Reviewer condition 4).
- *
- * The class travels in the per-member pin file (`pins/<id>.json`) under
- * `principal`, additive + backfilled (absent = "member", the legacy
- * default — existing installs are channel members by definition).
+ * Pin principal classes are fixed at installation and cannot self-escalate.
+ * Missing principal fields retain the legacy member class.
  */
 
 import { existsSync, readFileSync } from "node:fs"
@@ -40,7 +32,7 @@ const MEMBER_ID_PATTERN_CACHE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
 /**
  * Authorize a principal-classed MCP call, fail closed:
- *   - No pin => denied (identity never caller-supplied — M1 rule).
+ *   - No pin => denied (identity never caller-supplied).
  *   - Pinned member not on any channel roster => denied for MEMBER-class
  *     actions (operators may act without channel membership).
  *   - Required class > pin class => denied with the typed upgrade message.

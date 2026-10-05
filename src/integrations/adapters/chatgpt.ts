@@ -1,16 +1,4 @@
-/**
- * ChatGPT adapter (M2): wraps src/adapters/chatgpt/install.ts.
- *
- * Project artifacts (EXPERIMENTAL scaffold):
- *   - <project>/opencomms-chatgpt/mcp-streamable-server.mjs
- *   - <project>/opencomms-chatgpt/README.md
- *
- * Both present -> installed (or outdated via marker); neither -> absent;
- * partial -> broken. Capabilities stay honest: PULL ONLY scaffold,
- * "Platform setup required" — never installable to FULL.
- * ChatGPT Desktop is not directly detectable by design (no documented API);
- * scaffold presence is the project signal.
- */
+/** Installed means the experimental project scaffold exists, not that a connector is deployed. */
 
 import { existsSync, rmSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -120,7 +108,7 @@ export const chatgptAdapter: HostIntegration = {
     }
   },
   async uninstall(ctx: IntegrationContext): Promise<IntegrationReport> {
-    // Binding order (Reviewer R2): files first, marker last. Absent => ok:true
+    // Binding order: files first, marker last. Absent => ok:true
     // no-op before touching the marker. The scaffold is inert until deployed,
     // so removing its directory is the complete uninstall (same wording as
     // the CLI).

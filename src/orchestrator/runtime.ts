@@ -1,19 +1,7 @@
 /**
- * AgentRuntime abstraction (M1; docs/orchestrator-design.md §3).
- *
- * Host-neutral lifecycle contract for orchestrator-managed agents. Every
- * runtime implements the SAME op set — create (quiet, role prompt), resume
- * (existing session), deliver (framed batch), abort, status, stop — shaped
- * by the spike-proven OpenCode serve sequence and the documented claude-code
- * / codex CLIs (research report §1A–1C).
- *
- * Rules anchored in the M0 spike (docs/spike-spawn-opencode.md):
- *  - OpenCode models are explicitly pinned; ACP keeps its host's configured model.
- *  - Turn-waits are timeout-based (never open-ended).
- *  - Status comes from the host or a currently owned ACP request; never invented.
- *  - Child processes are spawned argv-only (no shell); secrets are env-only.
- *  - Delivery preserves OpenComms untrusted framing — one protocol surface
- *    local vs remote (MessageEnvelope content moves verbatim).
+ * Lifecycle contract for explicitly managed agents.
+ * Status comes from the host or an owned ACP request; delivery preserves untrusted framing.
+ * Processes use argv and env-only secrets. OpenCode models are pinned; ACP keeps its host model.
  */
 
 import type { AgentRecord, AgentRuntimeStatus } from "./state.js"
@@ -30,7 +18,6 @@ export interface SpawnRequest {
   provider_config?: Record<string, unknown>
 }
 
-/** Machine-readable result of create(). */
 export interface SpawnResult {
   /** Runtime-native session/thread id (persisted as AgentRecord.host_session_id). */
   host_session_id: string
@@ -38,11 +25,7 @@ export interface SpawnResult {
   spawn_cmd_redacted: string
 }
 
-/**
- * A live handle to ONE managed agent. Implementations must never fake
- * success: deliver/abort/stop report honest outcomes (same rule as the
- * adapter contract in src/hosts/contract.ts).
- */
+/** One managed agent; delivery, interruption and stop must report host outcomes. */
 export interface AgentHandle {
   /** Hand one FRAMED batch to the agent (OpenComms framing, envelope intact). */
   deliver(framed: string): Promise<"delivered" | "failed" | "uncertain">
@@ -50,15 +33,11 @@ export interface AgentHandle {
   abort(): Promise<void>
   /** Best-effort status snapshot (event stream remains the authority). */
   status(): Promise<{ status: AgentRuntimeStatus; detail?: string }>
-  /**
-   * Structured permission-prompt drain (M2 §9b-4). Returns null when the
-   * runtime's host exposes no permission API — callers must treat null as
-   * "unsupported", never as "no pending prompts".
-   */
+  /** null means unsupported host permissions, never an empty approval list. */
   permissionsDrain?(): Promise<PendingPermission[] | null>
   /** Answer ONE pending permission prompt (operator-only action upstream). */
   permissionsRespond?(permissionId: string, response: PermissionResponse): Promise<{ ok: boolean; message: string }>
-  /** Process-level termination; force escalates after a grace period. */
+  /** Stop this agent; force behavior depends on the host. */
   stop(force?: boolean): Promise<void>
 }
 
@@ -72,7 +51,6 @@ export interface PendingPermission {
   request: unknown
 }
 
-/** Response for a permission prompt ("allow" | "deny" per host vocabulary). */
 export type PermissionResponse = "allow" | "deny"
 
 export interface RuntimeDetectResult {
@@ -98,7 +76,7 @@ export interface AgentRuntime {
 type Factory = () => AgentRuntime
 const registry = new Map<string, Factory>()
 
-/** Register a runtime factory (idempotent; last wins is a test-only need). */
+/** Register a runtime factory, replacing any existing registration. */
 export function registerRuntime(runtime: string, factory: Factory): void {
   registry.set(runtime, factory)
 }

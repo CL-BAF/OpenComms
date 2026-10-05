@@ -1,9 +1,4 @@
-﻿/**
- * MCP server transport tests (Reviewer LOW follow-ups):
- * - oversize line -> -32700 error, process survives, initialize still works
- * - full JSON-RPC round-trip over a real stdio pipe:
- *   initialize -> tools/list -> tools/call(opencomms_pull)
- */
+﻿/** Exercise JSON-RPC through real stdio and verify recovery after oversized input. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -108,7 +103,6 @@ function seedState(dir: string, opts: SeedOpts = {}): void {
   writeFileSync(join(dir, ".opencomms", "state.json"), JSON.stringify(state), "utf8")
 }
 
-/** Run the MCP server with the given newline-delimited requests on stdin. */
 function runServer(
   dir: string,
   requests: string[],

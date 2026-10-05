@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { runDaemon, type DaemonRunDeps } from "../../../src/cli/daemon.js"
+import { runDaemon } from "../../../src/cli/daemon.js"
 
 interface FakeClientState {
   connected: boolean
@@ -100,9 +100,7 @@ test("daemon run: watchdog READY after connect + first heartbeat (P2-B-3)", asyn
     })
     // Give the loop one tick to dial + heartbeat + notifyReady.
     await new Promise((r) => setTimeout(r, 60))
-    // Drive the loop to exit via the stop hook (SIGTERM self-kill is
-    // unreliable inside node:test on Windows — Windows emulates SIGTERM
-    // as TerminateProcess; the flag-based hook is the portable path).
+    // The stop hook avoids Windows SIGTERM terminating the entire test process.
     stopHooked[0]?.()
     const result = await promise
     assert.equal(result.code, 0, result.output)
@@ -143,10 +141,6 @@ test("daemon run: ack-after-deliver with cursor dedup (P2-B-4 / P2-A)", async ()
         stopHooked.push(stop)
       },
     })
-    // Wait for onDeliver registration, then simulate the coordinator
-    // delivering: fresh envelope (seq 3) → ack; duplicate (seq 2 ≤ 3? no —
-    // cursor is 3 after the first ack) → dedup, NO second ack; lower seq 1 →
-    // dedup; higher (seq 7) → ack.
     await new Promise((r) => setTimeout(r, 60))
     assert.ok(state.deliverHandler, "onDeliver handler was not registered")
     state.deliverHandler?.("framed-3", 3)
@@ -157,7 +151,6 @@ test("daemon run: ack-after-deliver with cursor dedup (P2-B-4 / P2-A)", async ()
     await new Promise((r) => setTimeout(r, 20))
     state.deliverHandler?.("framed-7-new", 7)
     await new Promise((r) => setTimeout(r, 20))
-    // Cursor dedup: seq 3 acked once, seq 2 deduped, seq 7 acked.
     assert.deepEqual(state.acked, [3, 7])
     stopHooked[0]?.()
     const result = await promise
@@ -212,8 +205,6 @@ test("daemon run: cursor dedup via Backend's dedupeForNode (P2-A)", async () => 
     await new Promise((r) => setTimeout(r, 20))
     state.deliverHandler?.("framed-7-new", 7)
     await new Promise((r) => setTimeout(r, 20))
-    // Backend's dedupeForNode drops seq <= acked cursor: 3 acked once,
-    // redelivery + stale 2 dropped, 7 acked.
     assert.deepEqual(state.acked, [3, 7])
     const stop0 = stopHooked[0]
     assert.ok(stop0, "stopHook was not invoked after dial")

@@ -1,16 +1,7 @@
 /**
- * M4.6 orchestrator MCP tools (docs/mcp-orchestrator-tools.md §3).
- *
- * Thin wrappers on the existing OrchestratorApi — every trust gate
- * (confirm token, agent eligibility, condition C grant checks, Lead
- * protection) lives in the API fns and applies identically over MCP.
- * NO new enforcement surface.
- *
- * Principal classes gate the tool registry (§1): read/tools for everyone,
- * operator tools only for operator-class instances (--admin), and
- * human-present tools (node approve/revoke/pair) REQUIRE the confirm
- * token as a tool argument — apps can never self-supply it because the
- * token is never tool-readable (M1 design, transport-independent).
+ * The shared API enforces trust and eligibility over every transport.
+ * Operator tools require --admin. Human-present calls require a confirm token
+ * that is never tool-readable, so agents cannot approve themselves.
  */
 
 import type { OrchestratorApi, ApiResult } from "../orchestrator/api.js"
@@ -20,7 +11,7 @@ import type { TaskRecord } from "../orchestrator/tasks.js"
 export interface OrchestratorToolDeps {
   /** The SAME OrchestratorApi (constructed beside the HTTP/bridge core). */
   api: OrchestratorApi
-  /** MCP server flags (§1): admin enables operator-class tools. */
+  /** MCP server flags: admin enables operator-class tools. */
   admin: boolean
 }
 
@@ -31,7 +22,6 @@ export function orchestratorTools(
 ): Array<McpToolDef> {
   const tools: Array<McpToolDef> = []
 
-  // ---------- read ----------
   tools.push({
     name: "opencomms_agent_list",
     description: "List orchestrator-managed agents (id, name, role, status, node, designated Lead marker). Read-only.",
@@ -170,7 +160,6 @@ export function orchestratorTools(
   })
 
   if (admin) {
-    // ---------- operator (requires --admin MCP instance) ----------
     tools.push({
       name: "opencomms_agent_create",
       description:
@@ -242,7 +231,6 @@ export function orchestratorTools(
     })
   }
 
-  // ---------- human-present (confirm token REQUIRED as an argument) ----------
   tools.push({
     name: "opencomms_node_approve",
     description:

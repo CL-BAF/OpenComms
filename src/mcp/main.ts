@@ -1,13 +1,4 @@
-/**
- * OpenComms MCP stdio server entrypoint.
- *
- * One process serves ONE pinned channel member. The installer writes the pin:
- *   OPENCOMMS_MEMBER_ID=<member session id>   (required)
- *   OPENCOMMS_MEMBER_ROLE=<role label>        (informational)
- *   OPENCOMMS_CHANNEL=<channel>               (informational)
- *
- * JSON-RPC 2.0 over stdio only — no network listener, no LAN exposure.
- */
+/** Each stdio server serves one environment-pinned member; it opens no network listener. */
 
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -19,7 +10,6 @@ import { StateStore } from "../core/store.js"
 import { ArchiveStore } from "../core/archive.js"
 import { createSpawnDeliveryHook } from "../hosts/spawn-delivery.js"
 import type { State, ToolResult } from "../core/types.js"
-import type { McpToolDef } from "./server.js"
 
 /** Programmatic entry (used by tests and host launchers). */
 export function serve(opts: { projectDir: string; host: string; admin: boolean }): void {
@@ -65,9 +55,7 @@ export function serve(opts: { projectDir: string; host: string; admin: boolean }
         readState: () => store.load(),
       },
     ),
-    // M4.6: the orchestrator tool surface (principal-classed, thin wrappers
-    // on OrchestratorApi). Operator tools register only for --admin
-    // instances; human-present tools always list (token-gated at call).
+    // Operator tools require --admin; human-present tools remain confirm-token gated.
     ...orchestratorTools(buildOrchestratorApi(resolve(opts.projectDir), store), opts.admin, () => {
       const pin = pinnedMember()
       if (!pin) return null
@@ -99,19 +87,12 @@ function cli(argv: string[]): void {
   serve({ projectDir: resolve(projectDir), host, admin })
 }
 
-// Run the CLI only when executed directly (not when imported by tests).
-// Matches every shipped filename: dist/mcp/main.js, installed
-// opencomms-mcp.mjs, .mcpb bundle server/main.mjs.
 const invoked = process.argv[1]?.replace(/\\/g, "/") ?? ""
 
-/**
- * M4.6: the OrchestratorApi for the MCP tool surface. Constructed with the
- * same project-local state the channel tools use (one core, both surfaces).
- */
+/** Construct the orchestrator API over the same project state as channel tools. */
 import { OrchestratorApi } from "../orchestrator/api.js"
 import { OrchestratorStore } from "../orchestrator/state.js"
 import { createOrchestratorFeed } from "../orchestrator/events.js"
-import { startGuiServer } from "../gui/server.js"
 
 export function buildOrchestratorApi(projectDir: string, store: StateStore): OrchestratorApi {
   const orchStore = new OrchestratorStore(resolve(projectDir), store)

@@ -1,11 +1,3 @@
-/**
- * Cross-host communication tests (Stage 10).
- *
- * Proves compatible host combinations communicate through the shared core
- * with explicit delivery modes — and that the mixed PUSH<->PULL drain
- * semantics hold in realistic interleavings.
- */
-
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
@@ -91,13 +83,11 @@ test("OpenCode PUSH <-> Claude Code PULL: mixed channel delivers both ways", () 
   addHost(state, OPENCODE, "Builder")
   addHost(state, CLAUDE_CODE, "Reviewer")
 
-  // OpenCode sends; the PULL member's copy waits for their hook/pull.
   send(state, "sess_oc", "from opencode push")
   const ccPull = drainQueue(state, "sess_cc")
   assert.equal(ccPull.length, 1)
   assert.equal(ccPull[0]!.content, "from opencode push")
 
-  // Claude Code replies via its pinned member; PUSH member drains on idle.
   send(state, "sess_cc", "from claude code pull")
   const ocDrain = drainQueue(state, "sess_oc", { now: Date.now() })
   assert.equal(ocDrain.length, 1)
@@ -114,15 +104,14 @@ test("PUSH<->PULL staleness boundary: age kills PUSH copies, PULL copies survive
 
   send(state, "sess_oc", "to desktop")
   send(state, "sess_cd", "to opencode")
-  // Age 6 minutes.
   const past = Date.now() - 6 * 60_000
   for (const m of Object.values(state.messages)) m.timestamp = past
 
-  drainQueue(state, "sess_oc") // PUSH side: ages out
+  drainQueue(state, "sess_oc")
   const staleMsg = Object.values(state.messages).find((m) => m.recipient_session_id === "sess_oc")
   assert.equal(staleMsg!.delivery_status, "stale")
 
-  const pulled = drainQueue(state, "sess_cd") // PULL side: still delivers
+  const pulled = drainQueue(state, "sess_cd")
   assert.equal(pulled.length, 1)
   assert.equal(pulled[0]!.delivery_status, "in_flight")
   commitDelivery(
@@ -137,7 +126,6 @@ test("three-host channel: duplicate role rejected cross-host; targeted sends exa
   const state = emptyState()
   addHost(state, OPENCODE, "Builder")
   addHost(state, CLAUDE_DESKTOP, "Architect")
-  // Codex tries to join under the held role "Builder" — rejected cross-host.
   const join = joinChannel(state, {
     channel: "x-ch",
     role: "Builder",
@@ -153,14 +141,12 @@ test("three-host channel: duplicate role rejected cross-host; targeted sends exa
   })
   assert.equal(join.ok, false, "duplicate role must be rejected across hosts")
   assert.match(join.message, /already held/)
-  // A unique role joins fine.
   addHost(state, CODEX, "Coder")
 
   send(state, "sess_oc", "for architect", "Architect")
   const drainDesktop = drainQueue(state, "sess_cd")
   assert.equal(drainDesktop.length, 1)
 
-  // Codex never received anything.
   assert.equal(state.queues["sess_cx"], undefined)
 })
 
@@ -184,13 +170,11 @@ test("kick works cross-host: kicked MCP member's pin dies, PUSH side unaffected"
   addHost(state, CLAUDE_DESKTOP, "Reviewer")
   const kick = kickChannel(state, { channel: "x-ch", session_id: "sess_oc", target_role: "Reviewer" })
   assert.equal(kick.ok, true)
-  // Reviewer no longer in roster; Builder keeps the channel.
   const data = status(state, { channel: "x-ch" }).data as {
     channels: Array<{ members: Array<{ session_id: string }> }>
   }
   assert.equal(data.channels[0]!.members.length, 1)
   assert.equal(data.channels[0]!.members[0]!.session_id, "sess_oc")
-  // And the kicked member's inbox access is gone.
   const inboxAttempt = inbox(state, { channel: "x-ch", session_id: "sess_cd" })
   assert.equal(inboxAttempt.ok, false)
 })

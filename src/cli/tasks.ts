@@ -1,12 +1,4 @@
-/**
- * `opencomms task` + `opencomms members remove` + `opencomms session create`
- * (M4 CLI-parity verbs, Platform — docs/gui-cli-parity.md §3).
- *
- * Thin loopback HTTP clients over the Orchestrator API (contract v0.3 §3 +
- * the session engine operator routes) — never imports src/orchestrator/**
- * (contract §8 rule). Exit codes follow contract v0.2 §8: 0 ok · 1 generic ·
- * 2 validation · 3 conflict · 4 trust_denied · 5 unknown · 6 internal.
- */
+/** Loopback clients for task, member and session operations. */
 
 import { readFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
@@ -45,36 +37,6 @@ interface ApiResponse {
 
 const BASE = `http://127.0.0.1:${process.env["OPENCOMMS_ORCH_API_PORT"] ?? 4919}`
 
-async function callApi(
-  path: string,
-  init?: { method?: string; body?: unknown },
-): Promise<{ status: number; payload: ApiResponse }> {
-  let response: globalThis.Response
-  try {
-    response = await fetch(`${BASE}${path}`, {
-      method: init?.method ?? "GET",
-      headers: { "content-type": "application/json" },
-      body: init?.body === undefined ? undefined : JSON.stringify(init.body),
-      signal: AbortSignal.timeout(30_000),
-    })
-  } catch (error) {
-    return {
-      status: 0,
-      payload: {
-        ok: false,
-        message: `cannot reach the OpenComms console at ${BASE} (${(error as Error).message}). Is \`opencomms gui --server\` running?`,
-      },
-    }
-  }
-  let payload: ApiResponse
-  try {
-    payload = (await response.json()) as ApiResponse
-  } catch {
-    payload = { ok: false, message: `console returned non-JSON (HTTP ${response.status})` }
-  }
-  return { status: response.status, payload }
-}
-
 export interface TaskDeps {
   fetch?: typeof globalThis.fetch
   base?: string
@@ -82,13 +44,8 @@ export interface TaskDeps {
 
 let injectedDeps: TaskDeps | null = null
 
-/** Test hook: inject fetch/base before calling the task verbs. */
 export function setTaskDeps(deps: TaskDeps | null): void {
   injectedDeps = deps
-}
-
-function effectiveBase(): string {
-  return injectedDeps?.base ?? BASE
 }
 
 async function fetchJson(
@@ -122,7 +79,6 @@ async function fetchJson(
   }
 }
 
-/** `opencomms task list` — wraps GET /api/orchestrator/tasks. */
 export async function taskList(argv: string[]): Promise<TaskCliResult> {
   const asJson = argv.includes("--json")
   const { status, payload } = await fetchJson("/api/orchestrator/tasks")
@@ -140,7 +96,6 @@ export async function taskList(argv: string[]): Promise<TaskCliResult> {
   return ok(lines.join("\n"))
 }
 
-/** `opencomms task assign` — wraps POST /api/orchestrator/tasks/assign. */
 export async function taskAssign(argv: string[]): Promise<TaskCliResult> {
   const agentId = flagValue(argv, "--agent")
   const title = flagValue(argv, "--title")
@@ -190,7 +145,6 @@ export async function taskAssign(argv: string[]): Promise<TaskCliResult> {
   return ok(`${payload.message ?? `Task assigned to ${agentId}.`}\nrequest_id=${requestId}`)
 }
 
-/** Inspect durable execution and relevant messages using the shared API. */
 export async function taskShow(argv: string[]): Promise<TaskCliResult> {
   const id = flagValue(argv, "--id") ?? argv.find((t) => t.startsWith("tsk_"))
   if (!id) return fail(2, "Usage: opencomms task show <task_id> [--json]")
@@ -297,10 +251,6 @@ export async function taskContext(argv: string[]): Promise<TaskCliResult> {
   }
 }
 
-/**
- * `opencomms members remove <channel> <session_id>` — wraps the existing
- * operator remove route (POST /api/sessions/{name}/members/remove).
- */
 export async function membersRemove(argv: string[]): Promise<TaskCliResult> {
   const positional = argv.filter((t) => !t.startsWith("--"))
   const channel = positional[0]
@@ -319,13 +269,7 @@ export async function membersRemove(argv: string[]): Promise<TaskCliResult> {
   return ok(String(payload.message ?? `Member ${sessionId} removed from ${channel}.`))
 }
 
-/**
- * `opencomms session create` — HONEST PARTIAL (gui-cli-parity.md §3, Lead
- * decision M4): there is NO loopback HTTP route for channel creation in
- * src/gui/server.ts (the engine's create flow is engine-function-only),
- * so this verb intentionally returns the honest "API-only" answer instead
- * of inventing a route. If Backend adds /api/channels, wire it here.
- */
+/** Channel creation has no loopback route; report the API-only limitation explicitly. */
 export async function sessionCreate(argv: string[]): Promise<TaskCliResult> {
   const name = flagValue(argv, "--channel") ?? flagValue(argv, "--name")
   const as = flagValue(argv, "--as")

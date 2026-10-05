@@ -1,32 +1,9 @@
 /**
- * OpenCode adapter - owner-aware delivery controller.
- *
- * Extracted from plugin.ts (Reviewer: "avoid giant god files"). Everything
- * here is OpenCode-topology knowledge; the host-neutral core knows none of
- * it. See docs/OPENCODE.md "Topology & autonomy" for the evidence behind
- * the ownership rule.
- *
- * Why ownership matters: every `opencode` TUI / `serve` process runs its own
- * server + plugin instance + event bus, while session DATA is shared. A
- * cross-server `client.session.prompt` RESOLVES but executes the recipient's
- * turn on the WRONG server - the recipient's TUI never renders it and its
- * own bus stays silent. This controller therefore:
- *
- *  1. Learns which sessions are hosted on THIS server (`markLocal`: any
- *     session.* event on this bus, plus the system-prompt transform).
- *  2. Delivers (drain + prompt) ONLY to those local sessions.
- *  3. Wakes on state.json changes (fs.watchFile, `persistent:false` so the
- *     watcher never holds the host event loop) and drains queues that belong
- *     to local sessions - this is how mail queued by ANOTHER process
- *     reaches an idle recipient.
- *  4. Falls back to one cross-server prompt (5s) for PUSH members no
- *     instance owns (their TUI closed everywhere), so mail lands in shared
- *     storage instead of aging out. PULL members are never cross-prompted.
- *
- * Delivery is two-phase (crash-window fix): drain marks envelopes in_flight
- * (persisted BEFORE the prompt), commitDelivery marks delivered only after
- * the host accepted the prompt, and a startup sweep resurrects envelopes
- * stranded by a crash between the two.
+ * Prompt only sessions proven local to this plugin's server; cross-server
+ * prompts run on the wrong event bus and do not render in the owning TUI.
+ * State-file watches wake owners for mail queued by other processes. Ownerless
+ * push members receive a delayed fallback; pull members are never cross-prompted.
+ * Persist in_flight before prompting and commit only after host acceptance.
  */
 
 import { watchFile, type StatWatcher } from "node:fs"

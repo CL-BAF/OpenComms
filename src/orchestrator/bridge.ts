@@ -1,27 +1,7 @@
 /**
- * M4.5 bridge — line-based JSON-RPC over the sidecar's stdio
- * (docs/tauri-native-gui.md §8; ADR-0006 supersedes ADR-0004).
- *
- * The sidecar is spawned by the Rust host with the fixed argv
- * `bridge` and speaks FIRST (the handshake), then answers one line per
- * request. Every command maps 1:1 to the existing OrchestratorApi fns —
- * the same core the HTTP routes call, no logic duplication, and ALL
- * trust enforcement stays in the TS core (the Rust relay is shape +
- * routing only, per §3).
- *
- * Gate conditions implemented here:
- *   (A) HANDSHAKE TIMEOUT + IDEMPOTENCE: the adapter announces itself as
- *       its FIRST stdout line, then ignores stdin until the handshake is
- *       complete — no partial command execution pre-handshake. The RUST
- *       side kills on mismatch/timeout; the sidecar's own contribution is
- *       that it never treats pre-handshake input as commands.
- *   (C) IPC ALLOWLIST: only the §2 enumerated commands dispatch; unknown
- *       commands get a typed error, never a proxy.
- *   (D) token-over-IPC: token-bearing commands flow through the same
- *       OrchestratorApi gates; the adapter never logs args.
- *
- * One request line -> one response line. The sidecar NEVER writes
- * unprompted lines after the handshake (Phase 1: events via polling).
+ * Allowlisted stdio bridge to the same core operations as HTTP.
+ * Announce first; execute nothing before handshake acknowledgement.
+ * Requests run sequentially with bounded frames. Args and tokens are never logged.
  */
 
 import { StringDecoder } from "node:string_decoder"
@@ -33,13 +13,8 @@ export const BRIDGE_IDENTITY = "opencomms-coordinator"
 /** Wire protocol version (bump only on a breaking shape change). */
 export const BRIDGE_PROTOCOL = 1
 
-/**
- * The §2 IPC command surface — deny-by-default; unknown commands get a
- * typed error. Every entry maps to an OrchestratorApi call; the Rust
- * capabilities file must match this list EXACTLY (gate condition C).
- */
+/** Deny-by-default command list; the Rust allowlist must match exactly. */
 export const BRIDGE_COMMANDS = [
-  // Read-only
   "nodes_list",
   "agents_list",
   "tasks_list",
@@ -62,7 +37,7 @@ export const BRIDGE_COMMANDS = [
   "permissions_list",
   "integration_bootstrap",
   "team_template_list",
-  // Mutating (owner/operator actions)
+
   "session_create",
   "session_save",
   "session_resume",
@@ -109,11 +84,7 @@ export interface BridgeDeps {
   normalizeResult?: (result: ApiResult) => ApiResult
   /** Share mutation lifetime tracking with HTTP before project selection. */
   withMutation?: <T>(fn: () => Promise<T>) => Promise<T>
-  /**
-   * The GUI-server closures (sessions payload, workspace, integrations,
-   * diagnostics) live in the HTTP route file — the bridge consumes them via
-   * injected callables so BOTH transports share the same closures.
-   */
+  /** Inject active GUI closures so both transports share project-bound state. */
   guiReads: {
     sessions: () => ApiResult
     sessionMembers: (name: string) => ApiResult
@@ -150,10 +121,6 @@ export interface BridgeDeps {
   error: (message: string) => void
 }
 
-/**
- * The core-half of BridgeDeps that the GUI server provides (api + closures);
- * the CLI's `bridge` dispatch supplies write/error (stdout/stderr).
- */
 export type BridgeCoreDeps = Omit<BridgeDeps, "write" | "error" | "handshakeTimeoutMs">
 
 /** One enumerated command contract: no wildcard or URL/proxy dispatch. */
@@ -191,10 +158,7 @@ export function parseBridgeRequest(line: string): BridgeRequest | { error: strin
   return { id, cmd, args }
 }
 
-/**
- * Dispatch ONE request to the OrchestratorApi. Shape/routing only —
- * enforcement is in the core fns this delegates to.
- */
+/** Route one allowlisted request; the delegated core enforces authorization. */
 export async function dispatchBridgeCommand(deps: BridgeDeps, req: BridgeRequest): Promise<ApiResult> {
   if (!COMMAND_SET.has(req.cmd)) {
     return {
@@ -222,7 +186,6 @@ export async function dispatchBridgeCommand(deps: BridgeDeps, req: BridgeRequest
 async function dispatchResolvedCommand(deps: BridgeDeps, req: BridgeRequest): Promise<ApiResult> {
   const api = deps.api
   switch (req.cmd) {
-    // ---- read-only ----
     case "nodes_list":
       return api.listNodes()
     case "agents_list":
@@ -275,7 +238,7 @@ async function dispatchResolvedCommand(deps: BridgeDeps, req: BridgeRequest): Pr
       if (!nodeId) return { ok: false, message: "runtimes_list requires args.node_id" }
       return api.listRuntimes(nodeId)
     }
-    // ---- mutating ----
+
     case "session_create":
       return deps.guiWrites.sessionCreate(req.args)
     case "session_save":
@@ -407,23 +370,8 @@ function respond(deps: BridgeDeps, req: BridgeRequest, result: ApiResult): void 
 }
 
 /**
- * The bridge run loop: announce (handshake line), then one request line ->
- * one response line until stdin closes. Gate condition (A): stdin is
- * IGNORED until the handshake is written — no partial execution.
- * Gate condition (B): args are never logged — errors carry only the
- * command name and a typed reason.
- *
- * M5 (3) hardening:
- *  - PARTIAL LINES: requests are buffered per line (readline) and an
- *    oversized line (BRIDGE_MAX_LINE_CHARS) is rejected with a typed
- *    error — a truncated/hostile stream can never wedge the parser.
- *  - BACKPRESSURE: requests are processed SEQUENTIALLY (one at a time,
- *    await each dispatch before reading the next line) — the sidecar
- *    never interleaves responses or drops a request under load. The
- *    ordering guarantee matches the HTTP transport (one in-flight
- *    mutation per project at the lock level).
- *  - OVERSIZED PAYLOAD: args larger than the line cap are refused before
- *    dispatch (same class as the engine's 100k content cap).
+ * Announce first, then process one bounded request and response at a time.
+ * Pre-ack input cannot execute. Errors never include bodies or credentials.
  */
 export const BRIDGE_MAX_LINE_CHARS = 1_000_000
 
@@ -465,9 +413,7 @@ export async function runBridge(deps: BridgeDeps, input: NodeJS.ReadableStream):
   deps.write(handshakeAnnouncement())
   let handshakeDone = false
   const handshakeTimer = setTimeout(() => {
-    // Gate (A): if the host never speaks after the announcement, the
-    // sidecar stops serving (the Rust side also enforces its own timeout;
-    // this is the sidecar-side idempotence half).
+    // Stop if the host does not acknowledge the handshake within the timeout.
     deps.error(`bridge: no handshake validation within ${deps.handshakeTimeoutMs ?? 10_000}ms; exiting`)
     process.exit(2)
   }, deps.handshakeTimeoutMs ?? 10_000)
@@ -512,8 +458,6 @@ export async function runBridge(deps: BridgeDeps, input: NodeJS.ReadableStream):
         continue
       }
       try {
-        // Sequential dispatch = backpressure: slow core work naturally
-        // paces the read loop; responses stay ordered per connection.
         const result = await dispatchBridgeCommand(deps, req)
         respond(deps, req, result)
       } catch {
@@ -528,7 +472,6 @@ export async function runBridge(deps: BridgeDeps, input: NodeJS.ReadableStream):
   }
 }
 
-/** The handshake announcement line (exported for tests). */
 export function handshakeAnnouncementLine(): string {
   return handshakeAnnouncement()
 }

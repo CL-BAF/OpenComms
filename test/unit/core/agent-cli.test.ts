@@ -2,7 +2,6 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { runAgentCommand, setAgentCommandDeps } from "../../../src/cli/agent.js"
 
-/** Rejecting fetch: simulates the console being down WITHOUT real network. */
 function rejectingFetch(error: Error) {
   return async () => {
     throw error
@@ -36,10 +35,7 @@ test("agent CLI: stop/restart/status require a positional agent id (exit 2)", as
 })
 
 test("agent CLI: connection failure maps to exit 1 with the console hint (injected fetch)", async () => {
-  // CI-root-cause fix: the previous version of this test performed a REAL
-  // fetch against 127.0.0.1:4919; on v22 runners the ECONNREFUSED surfaced
-  // as an unhandled runner error. Injected fetch keeps the behavior covered
-  // without any network I/O.
+  // Inject failure so the test does not depend on a live loopback server.
   setAgentCommandDeps({
     fetch: rejectingFetch(new Error("connect ECONNREFUSED 127.0.0.1:4919")),
     base: "http://127.0.0.1:4919",

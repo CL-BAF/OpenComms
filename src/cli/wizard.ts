@@ -1,20 +1,7 @@
 /**
- * Windows install wizard (spec: Windows-first cross-platform installers).
- *
- * Double-clicking the standalone exe must DO something visible: the CLI's
- * no-args path on a Windows packaged executable launches this PowerShell/WinForms wizard,
- * which installs the exe into the user's programs directory, optionally adds
- * it to the user PATH, and creates Start Menu / desktop shortcuts. The same
- * script exposes headless core functions (-TestCore) so the install logic is
- * testable without a UI, and an uninstall core shared with `uninstall-self`.
- *
- * The script is EMBEDDED in the exe bundle (String.raw template) and passed
- * to powershell.exe via -EncodedCommand (UTF-16LE base64), which bypasses
- * execution policy without touching any global setting. No external
- * dependencies: WinForms + WScript.Shell + registry only.
- *
- * NOTE: the script deliberately avoids `backtick` escapes and ${ sequences
- * so it survives being a TypeScript template literal verbatim.
+ * Embedded PowerShell installer shared with headless install/uninstall checks.
+ * Environment defaults carry paths alongside -EncodedCommand. Avoid backtick
+ * escapes and ${ sequences inside the String.raw template.
  */
 
 export const WIZARD_PS1 = String.raw`param(
@@ -194,7 +181,6 @@ if ($Uninstall) {
   return
 }
 
-# ---------------- WinForms wizard UI (dark, per spec) ----------------
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
 Add-Type -AssemblyName System.Drawing | Out-Null
 

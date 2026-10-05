@@ -1,13 +1,4 @@
-/**
- * Doctor backend tests (M2).
- *
- * Covers doctorReport/doctorReportWithManager against tmp projects:
- * fresh-absent, all-installed, broken→fix→idempotent, outdated→fix,
- * corrupt marker + broken artifacts (fail → repair path), placeholder
- * unfixable (never auto-runs install-member), and adapter-throw safety.
- * Real installs need dist (guarded with skip); placeholder pin replacement
- * uses local helpers (mirrors the adapters suite, not imported from it).
- */
+/** Use real installers when dist exists; live vendor behavior is not exercised. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -50,7 +41,6 @@ function hostCheck(report: { checks: Array<{ id: string; status: string }> }, id
   return found.status
 }
 
-/** Replace the claude .mcp.json member placeholder with a real member id. */
 function replaceClaudePlaceholder(dir: string, memberId = "sess_test_member"): void {
   const path = join(dir, ".mcp.json")
   const parsed = JSON.parse(readFileSync(path, "utf8")) as {
@@ -60,7 +50,6 @@ function replaceClaudePlaceholder(dir: string, memberId = "sess_test_member"): v
   writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`, "utf8")
 }
 
-/** Replace the codex config.toml member placeholder with a real member id. */
 function replaceCodexPlaceholder(dir: string, memberId = "sess_test_member"): void {
   const path = join(dir, ".codex", "config.toml")
   const toml = readFileSync(path, "utf8")
@@ -280,8 +269,6 @@ test("doctor: throwing adapter becomes a fail check, never a crash", async () =>
     assert.ok(check, "throwing host still yields a check")
     assert.equal(check.status, "fail")
     assert.equal(report.ok, false)
-    // Broken is fixable, so --fix attempts repair; the throw maps to an
-    // honest ok:false Report which lands in unfixable[] — never a crash.
     assert.deepEqual(report.fixed, [])
     assert.ok(
       report.unfixable.some((u) => u.includes("boom") && u.includes("repair boom")),

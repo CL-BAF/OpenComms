@@ -31,7 +31,6 @@ test("StateStore persists and reloads state", () => {
     assert.ok(reloaded.channels["persist"])
     assert.equal(reloaded.channels["persist"]!.members[0]!.session_id, "s1")
     assert.equal(reloaded.schema_version, 2)
-    // Schema v2 member defaults (generic CLI-style PUSH member).
     const member = reloaded.channels["persist"]!.members[0]!
     assert.equal(member.host, "generic")
     assert.equal(member.delivery_mode, "push")
@@ -46,7 +45,6 @@ test("StateStore recovers from corrupt state", () => {
   try {
     const store = new StateStore(dir)
     store.save(emptyState())
-    // Corrupt the file.
     writeFileSync(store.file, "{not json", "utf8")
     const state = store.load()
     assert.equal(Object.keys(state.channels).length, 0)
@@ -65,15 +63,12 @@ test("StateStore writes atomically (temp file + rename)", () => {
     assert.ok(existsSync(store.file))
     const entries = readFileSync(store.file, "utf8")
     assert.ok(entries.includes('"schema_version"'))
-    // No leftover temp files.
     const leftovers = readdirSync(store.dir).filter((f) => f.endsWith(".tmp"))
     assert.equal(leftovers.length, 0)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
-// â”€â”€ Load-time validation (tampered / stale-schema rejection) â”€â”€
 
 function seedValidState(dir: string): void {
   const store = new StateStore(dir)
@@ -118,7 +113,6 @@ test("load rejects tampered member rows (bad shape / bad role label)", () => {
       const state = store.load()
       assert.equal(Object.keys(state.channels).length, 0)
       assert.ok(state.errors.length >= 1)
-      // Restore pristine state for the next mutation.
       seedValidState(dir)
     }
 
@@ -138,8 +132,6 @@ test("load rejects tampered member rows (bad shape / bad role label)", () => {
       raw.queues["s1"] = "not-an-array"
     })
 
-    // Key/name mismatch (aliasing attempt): entry stored under "valid" whose
-    // internal name claims to be "other".
     tamper((raw) => {
       raw.channels.valid.name = "other"
     })
@@ -172,7 +164,6 @@ test("load backfills max_members and migrates legacy role-keyed timers", () => {
     assert.equal(migrated.timer.active_member_id, "s1")
     assert.ok((migrated.timer.elapsed_ms["s1"] ?? 0) >= 4_000)
 
-    // Out-of-range persisted caps are clamped back into sane bounds.
     const clampDir = join(dir, "clamp")
     seedValidState(clampDir)
     const store2 = new StateStore(clampDir)
@@ -180,14 +171,11 @@ test("load backfills max_members and migrates legacy role-keyed timers", () => {
     raw2.channels.valid.max_members = 500
     writeFileSync(store2.file, JSON.stringify(raw2), "utf8")
     const clamped = store2.load().channels["valid"]!.max_members
-    // Tampered caps clamp into [2, MAX_MEMBERS_CEILING].
     assert.equal(clamped >= 2 && clamped <= 32, true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
-// â”€â”€ Cross-process locking (lost-update prevention) â”€â”€
 
 test("withLock serializes concurrent processes: no lost updates under contention", async () => {
   const dir = tmpProject()
@@ -215,7 +203,6 @@ for (let i = 0; i < 25; i++) {
         child.on("close", (code) => resolve({ code, stderr }))
       })
 
-    // Start both workers simultaneously so they contend for the lock.
     const [w1, w2] = await Promise.all([spawnWorker(), spawnWorker()])
     assert.equal(w1.code, 0, `worker1 failed: ${w1.stderr}`)
     assert.equal(w2.code, 0, `worker2 failed: ${w2.stderr}`)
@@ -228,8 +215,6 @@ for (let i = 0; i < 25; i++) {
   }
 })
 
-// â”€â”€ Regression R6: lock waiting must yield the event loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
 test("withLock waiting yields the event loop (regression R6)", async () => {
   const dir = tmpProject()
   try {
@@ -237,9 +222,7 @@ test("withLock waiting yields the event loop (regression R6)", async () => {
     const contender = new StateStore(dir)
     const holder = new StateStore(dir)
 
-    // Event-loop probe: must fire WHILE the contender is still waiting for
-    // the lock. The old blocking Atomics.wait delayed this timer until the
-    // lock released; the async poller lets it fire on schedule.
+    // The timer must fire while lock acquisition is still waiting, proving the poll yields.
     let probeFiredWhileWaiting = false
     const probe = new Promise<void>((resolve) => {
       setTimeout(resolve, 60)
@@ -247,8 +230,6 @@ test("withLock waiting yields the event loop (regression R6)", async () => {
       probeFiredWhileWaiting = true
     })
 
-    // Holder occupies the lock for 300ms (busy-hold inside the critical
-    // section), then releases.
     const holding = holder.withLock(() => {
       const until = Date.now() + 300
       while (Date.now() < until) {
@@ -257,7 +238,6 @@ test("withLock waiting yields the event loop (regression R6)", async () => {
       return null
     })
 
-    // Contender starts BEFORE the holder releases and must poll (yielding).
     const contending = contender.update((state) => {
       state.queues["probe"] = ["x"]
     })

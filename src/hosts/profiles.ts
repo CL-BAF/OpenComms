@@ -1,19 +1,7 @@
-/**
- * Host capability profiles — honest, evidence-backed declarations.
- *
- * Sources verified 2026-08-29 against official docs (see docs/CAPABILITIES.md
- * for the full matrix with citations). Values here are the single source of
- * truth for capability claims; Core reads these, never hardcodes host facts.
- */
+/** Host capability declarations; implementation and live limits are in docs/CAPABILITIES.md. */
 
 import type { HostCapabilities } from "../core/types.js"
 
-/**
- * OpenCode — the reference implementation. Plugin registers tools, hooks the
- * event bus (session.idle / session.deleted / session.status), injects
- * persistent role prompts via experimental.chat.system.transform, and pushes
- * into idle sessions via client.session.prompt.
- */
 export const OPENCODE_CAPABILITIES: HostCapabilities = {
   sessionIdentity: true, // ctx.sessionID on every tool call
   sessionDiscovery: true, // client.session.list
@@ -29,16 +17,9 @@ export const OPENCODE_CAPABILITIES: HostCapabilities = {
 }
 
 /**
- * Claude Code (CLI) — hooks + MCP + SPAWN-PUSH. Verified 2026-09-08:
- * - Hooks (SessionStart/UserPromptSubmit/Stop/SessionEnd...) receive
- *   session_id and can inject additionalContext at hook boundaries.
- * - The documented non-interactive resume (`claude --resume <session-id>
- *   --print "<msg>"`) continues an existing session from a child process —
- *   a REAL push channel without terminal automation (spawn_push mode).
- * - MCP servers (project .mcp.json, stdio) get NO session identity.
- * - Mid-turn push is impossible (no API); a live TUI turn cannot be
- *   interrupted, and resuming mid-turn may interleave (serialized per
- *   member, failures requeue).
+ * Hook context and explicit argv resume are distinct delivery paths. The host
+ * has no busy-check API; resuming a live turn may interleave. MCP has no native
+ * session identity, so lifecycle hooks bind the separate OpenComms member pin.
  */
 export const CLAUDE_CODE_CAPABILITIES: HostCapabilities = {
   sessionIdentity: true, // hooks receive session_id; MCP tools do NOT
@@ -54,11 +35,7 @@ export const CLAUDE_CODE_CAPABILITIES: HostCapabilities = {
   mcpSupport: true,
 }
 
-/**
- * Claude Desktop — Desktop Extensions (.mcpb), local stdio MCP. Verified
- * 2026-08-29: strictly PULL (model/user invokes tools); no conversation
- * identity, no push, no lifecycle, no role injection.
- */
+/** Desktop MCP is pull-only and exposes no conversation identity or lifecycle. */
 export const CLAUDE_DESKTOP_CAPABILITIES: HostCapabilities = {
   sessionIdentity: false, // no conversation id exposed to MCP servers
   sessionDiscovery: false,
@@ -73,14 +50,7 @@ export const CLAUDE_DESKTOP_CAPABILITIES: HostCapabilities = {
   mcpSupport: true,
 }
 
-/**
- * Codex CLI — MCP client via config.toml, hooks (trust-gated), SPAWN-PUSH
- * for exec-compatible sessions. Verified 2026-08-29 (hooks/MCP) and
- * 2026-09-08 (exec resume): `codex exec resume <SESSION_ID> "<prompt>"` is
- * the documented non-interactive continuation — a REAL push channel for
- * exec-compatible sessions (spawn_push mode). Resuming TUI-created
- * sessions is NOT verified (the resume docs target exec sessions).
- */
+/** Exec resume is documented; continuation of TUI-created sessions remains unverified. */
 export const CODEX_CLI_CAPABILITIES: HostCapabilities = {
   sessionIdentity: true, // hooks receive session_id; MCP tools do NOT
   sessionDiscovery: false,
@@ -95,12 +65,7 @@ export const CODEX_CLI_CAPABILITIES: HostCapabilities = {
   mcpSupport: true,
 }
 
-/**
- * Codex App Server — MANAGED_THREAD model (EXPERIMENTAL in v2). Verified
- * 2026-08-29: JSON-RPC over stdio; thread/start|resume, turn/start|steer,
- * turn/completed notifications. OpenComms owns/starts the threads it
- * delivers to — linking unrelated interactive TUI sessions is NOT claimed.
- */
+/** Platform primitives only: this build ships no Codex App Server client/runtime. */
 export const CODEX_APP_SERVER_CAPABILITIES: HostCapabilities = {
   sessionIdentity: true, // thread ids from app-server
   sessionDiscovery: true, // thread/list
@@ -115,12 +80,7 @@ export const CODEX_APP_SERVER_CAPABILITIES: HostCapabilities = {
   mcpSupport: true,
 }
 
-/**
- * ChatGPT (web/desktop) — Plugins/remote MCP. Verified 2026-08-29: strictly
- * PULL for third parties; requires public HTTPS endpoint + OAuth for
- * private servers; no conversation identity; no push into conversations.
- * Local MCP only through the Codex host (separate adapter).
- */
+/** Remote MCP pull requires public HTTPS and authentication; conversation identity is unavailable. */
 export const CHATGPT_CAPABILITIES: HostCapabilities = {
   sessionIdentity: false,
   sessionDiscovery: false,
@@ -135,14 +95,7 @@ export const CHATGPT_CAPABILITIES: HostCapabilities = {
   mcpSupport: true,
 }
 
-/**
- * Ollama / local-model agents — FIRST-CLASS members WITHOUT vendor session
- * ids (work order 2026-09-08). A local agent (any script/model server that
- * speaks MCP over stdio) joins via the shared OpenComms MCP server with a
- * pinned member id; its "native session" is implementation-specific and
- * never used for routing. Delivery is PULL (the agent calls opencomms_pull)
- * unless it fronts a spawn-capable CLI. Detection: `ollama` on PATH.
- */
+/** Local scripts use explicit member pins and pull tools; native session ids never route mail. */
 export const OLLAMA_CAPABILITIES: HostCapabilities = {
   sessionIdentity: false, // local agents have no vendor session ids (by design)
   sessionDiscovery: false,

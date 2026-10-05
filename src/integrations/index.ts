@@ -1,12 +1,4 @@
-/**
- * Integrations entry point (M3 reconciled).
- *
- * Canonical factory lives in `./registry.js` (all five hosts; shared by the
- * CLI doctor and the future GUI Integrations surface). This module is the
- * back-compat facade: same named adapter exports plus the canonical
- * `createDefaultManager` re-exported, so M1-era consumers keep working with
- * zero drift between the two paths.
- */
+/** Compatibility exports; new code uses the canonical registry directly. */
 export * from "./types.js"
 export * from "./versioning.js"
 export * from "./manager.js"

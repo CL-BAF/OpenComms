@@ -1,15 +1,3 @@
-/**
- * Canonical host-integration registry (M2).
- *
- * Single backend shared by the CLI doctor (`src/cli/doctor.ts`) and the
- * GUI Integrations surface (M3): both build their manager here, so
- * there is never a second diagnostics implementation to drift.
- *
- * `src/integrations/index.ts` is a thin back-compat facade over this
- * registry (createDefaultManager + named adapter exports); there are no
- * in-repo consumers of the facade — new code imports THIS module.
- */
-
 import { IntegrationManager } from "./manager.js"
 import { opencodeAdapter } from "./adapters/opencode.js"
 import { claudeCodeAdapter } from "./adapters/claude-code.js"

@@ -1,24 +1,8 @@
 ﻿/**
- * Claude Code adapter — hook handlers.
- *
- * Claude Code hooks (verified 2026-08-29 against code.claude.com/docs/en/hooks)
- * fire at lifecycle boundaries and can inject context via stdout JSON
- * (hookSpecificOutput.additionalContext on SessionStart / UserPromptSubmit /
- * Stop). Hooks receive { session_id, cwd, hook_event_name, ... } on stdin.
- *
- * DELIVERY HONESTY: hook-boundary injection is NOT mid-turn push. Messages
- * arrive at the next hook boundary — documented as PARTIAL in
- * CAPABILITIES.md, never "push".
- *
- * IDENTITY NAMESPACE (Reviewer Issue 2): MCP-joined members are keyed by
- * their pinned OPENCOMMS_MEMBER_ID, while hooks observe CLAUDE CODE session
- * ids (a different namespace). The bridge is host_session_id: the
- * SessionStart hook records hostSessionId -> memberId binding; delivery
- * hooks resolve the incoming Claude session id through that index
- * (fail-closed on ambiguity). See core memberIndexByHostSession.
- *
- * All handlers are ASYNC end-to-end: Node keeps a CLI alive while promises
- * and timers are pending, so there is no blocking/spinning anywhere.
+ * Context arrives at hook boundaries, not mid-turn. Native host session ids
+ * differ from OpenComms member pins; host_session_id binds those namespaces.
+ * Resolve bindings fail-closed when ambiguous, and never block the host session
+ * because OpenComms delivery failed.
  */
 
 import { readFileSync } from "node:fs"
@@ -30,7 +14,6 @@ import {
   commitDelivery,
   drainForDelivery,
   formatDeliveryBatch,
-  isMember,
   markStale,
   resolveMemberByHostSession,
 } from "../../core/engine.js"
@@ -146,15 +129,6 @@ function resolveOpenCommsMember(state: State, hostSessionId: string, host = "cla
   return resolveMemberByHostSession(state, host, hostSessionId)
 }
 
-/**
- * Core boundary logic shared by all delivery hooks.
- *
- * 1. Resolve the incoming Claude session_id -> OpenComms member (binding it
- *    first when asked — SessionStart records host_session_id for the pinned
- *    member whose binding is missing).
- * 2. Clear staleness (the session is demonstrably live).
- * 3. Drain that member's queue and frame every envelope as untrusted.
- */
 async function drainForHook(
   dir: string,
   hostSessionId: string,
@@ -167,9 +141,6 @@ async function drainForHook(
     const linked = await store.withLock(() => {
       const state = store.load()
 
-      // 1. Bind host identity: SessionStart associates the live Claude
-      //    session with its OpenComms member (env pin, per-member pin files,
-      //    or the legacy single-member pin).
       const host = opts.host ?? "claude-code"
       let memberId = resolveOpenCommsMember(state, hostSessionId, host)
       let guidance: string | undefined
@@ -178,16 +149,13 @@ async function drainForHook(
         memberId = bound.memberId
         guidance = bound.guidance
         if (memberId) {
-          // Binding recorded — persist immediately.
           store.save(state)
         }
       }
       if (!memberId) return { pairs: [] as Array<{ id: string; channelName: string }>, guidance }
       boundMemberId = memberId
 
-      // 2. The session is live: clear staleness (mirrors OpenCode's
-      //    clearStale-on-idle; without this a member stays stale forever
-      //    after its first SessionEnd — Reviewer Issue 3).
+      // A live hook clears SessionEnd staleness so the member can receive mail again.
       clearStaleIfMember(state, memberId)
 
       // 3. Drain + frame, then persist the delivery marks (in_flight state,
@@ -244,7 +212,7 @@ async function drainForHook(
  *      multi-instance setups): binds (or REBINDS) exactly that member.
  *   2. Per-member pin files (.opencomms/pins/<member_id>.json, written by the
  *      installer): bind only when EXACTLY ONE claude-code member is both
- *      pinned and unbound (Reviewer P1-1: the old single pin file could bind
+ *      pinned and unbound (the old single pin file could bind
  *      the WRONG member or destroy another member's identity).
  *   3. Legacy member-pin.json (v2.0 single-member installs): same
  *      exactly-one-unbound rule, honored only when no per-member pins exist.
@@ -271,7 +239,6 @@ function bindPinnedMemberToHostSession(
     return { memberId: null, guidance: `OPENCOMMS_MEMBER_ID ${envPin} is not a ${host} member of any channel.` }
   }
 
-  // Pin-file path: candidates are pinned claude-code members with no binding.
   const pins = listMemberPins(projectDir, host)
   const legacyPin = pins.length === 0 ? loadProjectPin(projectDir) : null
   const pinnedIds = [...pins.map((p) => p.member_id), ...(legacyPin ? [legacyPin.member_id] : [])]

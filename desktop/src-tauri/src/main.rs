@@ -1,7 +1,4 @@
-// OpenComms Tauri Desktop GUI — the owner-facing desktop shell. Owns NO
-// business logic and NO policy: it relays Tauri IPC commands to the Node
-// coordinator sidecar over a handshake-validated stdio JSON-RPC bridge
-// (desktop/README.md; enforcement lives in the TypeScript core).
+// Native IPC relays to the coordinator; backend validation remains authoritative.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde_json::Value;
@@ -14,8 +11,7 @@ use std::time::{Duration, Instant};
 
 mod bridge_io;
 
-/// Coordinator child: process + the two stdio halves the bridge drives.
-/// Killed on shell exit via Drop.
+/// Owns the child lifetime; dropping kills and reaps it.
 struct Coordinator {
     child: Child,
     stdin: SyncSender<bridge_io::WriteRequest>,
@@ -32,7 +28,6 @@ impl Drop for Coordinator {
 /// Explicit operation surface mirrored by src/orchestrator/bridge.ts.
 /// Unknown commands and arbitrary URLs are refused; no generic proxy.
 const ALLOWED_COMMANDS: &[&str] = &[
-    // reads
     "nodes_list",
     "agents_list",
     "tasks_list",
@@ -55,7 +50,6 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "permissions_list",
     "integration_bootstrap",
     "team_template_list",
-    // mutations
     "session_create",
     "session_save",
     "session_resume",
@@ -81,8 +75,7 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "permission_respond",
 ];
 
-/// The sidecar's FIRST stdout line must announce
-/// this identity + protocol before ANY command is relayed.
+/// The first stdout frame must announce this identity and protocol before commands.
 const HANDSHAKE_ID: &str = "opencomms-coordinator";
 const PROTOCOL_VERSION: u64 = 1;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -123,16 +116,7 @@ impl BridgeError {
     }
 }
 
-/// Spawn the sidecar (beside this exe) or the dev coordinator (repo node),
-/// then read + validate the handshake BEFORE any command can flow. On
-/// mismatch or the native deadline the child is killed and reaped. Stdin
-/// receives no command until the fixed identity, protocol and operation
-/// surface are validated. Each side independently bounds the handshake.
-
-/// Connection diagnostics (stderr is hidden in installed builds). Write failures
-/// in per-user app data (installation directories can be read-only), capped
-/// to keep the file small. Command BODIES are never logged (requests must
-/// never reach a log file); only connection lifecycle events.
+/// Log connection lifecycle only in per-user app data; never log command bodies.
 fn bridge_log(exe_dir: &std::path::Path, message: &str) {
     use std::io::Write as _;
     let directory = fallback_project_dir(exe_dir).join("logs");
@@ -147,7 +131,6 @@ fn bridge_log(exe_dir: &std::path::Path, message: &str) {
         message
     );
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    // Keep the last ~50 lines.
     let mut lines: Vec<&str> = existing.lines().collect();
     lines.push(entry.trim_end());
     if lines.len() > 50 {
@@ -159,6 +142,8 @@ fn bridge_log(exe_dir: &std::path::Path, message: &str) {
     }
 }
 
+/// Validate identity, protocol and operation surface before relaying commands.
+/// The native handshake deadline is independent of the sidecar's deadline.
 fn connect_coordinator() -> Result<Coordinator, String> {
     let exe_dir = std::env::current_exe()
         .map_err(|e| format!("resolve exe: {e}"))?
@@ -195,7 +180,6 @@ fn connect_coordinator() -> Result<Coordinator, String> {
         if !cfg!(debug_assertions) {
             return Err("Bundled coordinator is missing. Repair or reinstall OpenComms.".into());
         }
-        // Dev path: repo coordinator (node dist/cli/main.js).
         let root = repo_root();
         let script = root.join("dist").join("cli").join("main.js");
         if !script.exists() {
@@ -233,9 +217,7 @@ fn connect_coordinator() -> Result<Coordinator, String> {
             return Err("coordinator stdio unavailable".into());
         }
     };
-    // Construct the owner BEFORE validation: every failure below drops it,
-    // killing and reaping the process. The native deadline is independent
-    // of the sidecar timer, including a child that never announces itself.
+    // Own the child before validation so every failure kills and reaps it.
     let coordinator = Coordinator {
         child,
         stdin: bridge_io::request_writer(pipes.0),
@@ -267,9 +249,7 @@ fn connect_coordinator() -> Result<Coordinator, String> {
         }
     }
 
-    // Handshake ack: the sidecar's bridge WAITS for {"hello_ok":true} before
-    // serving ANY command (its pre-ack stdin is dropped without execution).
-    // Without this acknowledgement the sidecar exits after its deadline.
+    // The sidecar discards pre-ack commands and exits without this acknowledgement.
     bridge_io::write_frame(&coordinator.stdin, "{\"hello_ok\":true}\n".into(), HANDSHAKE_TIMEOUT)?;
 
     Ok(coordinator)
@@ -285,8 +265,6 @@ fn hide_coordinator_window(command: &mut Command) {
     let _ = command;
 }
 
-/// Relay one command. Shape validation only — NO policy decisions here;
-/// the TS core enforces trust exactly as it does over HTTP.
 fn relay(coordinator: &mut Coordinator, request_id: &str, cmd: &str, args: &Value) -> Result<Value, BridgeError> {
     if !ALLOWED_COMMANDS.contains(&cmd) {
         return Err(BridgeError::new("unsupported", "Native operation is not supported.", request_id, cmd, "not_executed"));
@@ -309,8 +287,6 @@ fn relay(coordinator: &mut Coordinator, request_id: &str, cmd: &str, args: &Valu
 }
 
 fn installed_project_dir(install_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    // The installer may seed a project beside the app; else the owner picks
-    // one in the GUI and the sidecar remembers it (its own state dir).
     let seeded = install_dir.join(".opencomms");
     if seeded.is_dir() {
         return Some(install_dir.to_path_buf())
@@ -318,13 +294,8 @@ fn installed_project_dir(install_dir: &std::path::Path) -> Option<std::path::Pat
     None
 }
 
-/// Installed-context fallback when no .opencomms is seeded beside the exe:
-/// use the per-user app-data directory (NOT a compile-time repo path, which
-/// is meaningless on a clean install).
+/// Keep bootstrap storage outside the installation directory and selected project.
 fn fallback_project_dir(install_dir: &std::path::Path) -> std::path::PathBuf {
-    // Keep bootstrap state outside the installation directory. The GUI server
-    // treats this as storage-only until the owner chooses a real project, so
-    // uninstalling/updating the app cannot become a project-state operation.
     let local_app_data = if cfg!(windows) { std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
         .or_else(|| {
@@ -345,9 +316,7 @@ fn fallback_project_dir(install_dir: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
-/// Open the host-native project directory picker. This is a UI affordance,
-/// not a project validator; the TypeScript core validates the returned path
-/// when `workspace_select` is relayed over the audited bridge.
+/// The picker returns a candidate; workspace_select validates it in the backend.
 #[tauri::command]
 async fn pick_project() -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -366,8 +335,7 @@ fn repo_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
-/// One thin IPC command. Shape-validation + forward — no policy, no logging
-/// of bodies (token-bearing requests must never reach a log file).
+/// Forward validated request shapes without logging token-bearing bodies.
 #[tauri::command]
 async fn orchestrator_invoke(
     state: tauri::State<'_, Arc<Mutex<Option<Coordinator>>>>,
@@ -391,8 +359,7 @@ async fn orchestrator_invoke(
         }
         let result = relay(guard.as_mut().expect("coordinator connected"), &id, &operation, &args);
         if result.is_err() {
-            // Reconnect on the NEXT explicit request. Never automatically
-            // replay a mutation whose result could have been committed.
+            // Reconnect only on an explicit request; uncertain mutations must not replay.
             guard.take();
         }
         result
@@ -400,8 +367,7 @@ async fn orchestrator_invoke(
 }
 
 fn main() {
-    // The webview loads BUNDLED assets (frontendDist) — no loopback URL.
-    // The bridge connects lazily on the first IPC command.
+    // Bundled assets use coordinator IPC; the webview does not load a loopback page.
     tauri::Builder::default()
         .manage(Arc::new(Mutex::<Option<Coordinator>>::new(None)))
         .invoke_handler(tauri::generate_handler![orchestrator_invoke, pick_project])

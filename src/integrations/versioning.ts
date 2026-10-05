@@ -1,17 +1,3 @@
-/**
- * Project integration version marker (M1).
- *
- * File: <project>/.opencomms/integration.json
- * Shape: { schema_version: 1, integrations: Record<id, Marker> }
- * Marker: { version, installed_at, updated_at, host_meta? }
- *
- * - Travels with the project (next to state.json), NOT in user preferences.
- * - Writes are atomic (temp file in the same directory + rename).
- * - Reads never throw: missing file, malformed JSON, or wrong shape all
- *   return null so callers fall back to the repair path instead of bricking.
- * - Per-id updates preserve every other id's marker.
- */
-
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { randomBytes } from "node:crypto"
@@ -89,11 +75,7 @@ export function readIntegrationMarkers(projectDir: string): IntegrationFile | nu
   return { schema_version: CURRENT_INTEGRATION_SCHEMA_VERSION, integrations: clean }
 }
 
-/**
- * Compat alias for readIntegrationMarkers (same contract: null when
- * missing/malformed, never throws). Retained so adapter-layer tests and
- * older call sites keep compiling against one canonical reader.
- */
+/** Compatibility alias; missing or malformed markers return null. */
 export function readIntegrationFile(projectDir: string): IntegrationFile | null {
   return readIntegrationMarkers(projectDir)
 }
@@ -190,8 +172,6 @@ export function removeIntegrationMarker(projectDir: string, id: string): Integra
 }
 
 function parseVersionParts(value: string): [number, number, number] {
-  // Leading "v" strip (Reviewer P3-1): GitHub tags like "v1.3.1" must
-  // compare equal to "1.3.1" — same semantics src/cli/update.ts relied on.
   const core = value.trim().replace(/^v/, "").split("-")[0]?.split("+")[0] ?? ""
   const parts = core.split(".").map((p) => {
     const n = Number.parseInt(p, 10)
@@ -201,10 +181,8 @@ function parseVersionParts(value: string): [number, number, number] {
 }
 
 /**
- * Semver-ish major/minor/patch comparison — SINGLE SOURCE OF TRUTH (Reviewer
- * P3-1; src/cli/update.ts imports this). Non-numeric segments and missing
- * parts count as 0 (NaN->0 parity with the old update.ts copy); prerelease/
- * build suffixes are ignored. Returns -1 | 0 | 1.
+ * Compare major/minor/patch, treating missing or non-numeric parts as zero.
+ * Prerelease/build suffixes are ignored. Returns -1, 0 or 1.
  */
 export function compareVersions(a: string, b: string): -1 | 0 | 1 {
   const [aMajor, aMinor, aPatch] = parseVersionParts(a)

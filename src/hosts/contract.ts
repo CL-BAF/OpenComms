@@ -1,9 +1,6 @@
 /**
- * Host-neutral adapter contract (Stage 2).
- *
- * Adapters implement this interface and contain ONLY host translation logic.
- * Core never imports adapters; adapters import Core. Every capability is
- * explicit — Core degrades gracefully instead of assuming parity.
+ * Adapters translate host operations into explicit capabilities and outcomes.
+ * Core remains independent of host adapters.
  */
 
 import type { HostCapabilities, MessageEnvelope } from "../core/types.js"

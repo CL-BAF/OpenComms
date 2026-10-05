@@ -1,31 +1,18 @@
 /**
- * Session archive (Save Session, work order 2026-09-08).
- *
- * A SAVED session moves OUT of the live state into a per-session archive
- * file: `.opencomms/archives/<channel_id>.json`. Archiving is NOT deleting:
- * everything OpenComms legitimately received is preserved (metadata, final
- * roster, role prompts, full message history within the retention cap), so
- * future agents can QUERY the archive — compact context first, full
- * messages on demand, never auto-dumped into a model context.
- *
- * Layered structure (not one giant transcript): summary + purpose +
- * members + message history + final-state note. Hidden chain-of-thought is
- * never assumed — OpenComms only ever saw tool calls and messages.
- *
- * Files are machine-local (same trust boundary as state.json), written
- * atomically, and sized by the same retention cap as live state.
+ * Saved sessions preserve received metadata, roster and bounded message history.
+ * Archives share state.json's local trust boundary. Resumed prompts use compact
+ * context; full messages remain available through explicit archive reads.
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync, renameSync } from "node:fs"
 import { join } from "node:path"
 import { randomBytes } from "node:crypto"
 import { MAX_PERSISTED_MESSAGES } from "./engine.js"
-import type { Channel, Member, MessageEnvelope, SessionLifecycle } from "./types.js"
+import type { Member, MessageEnvelope, SessionLifecycle } from "./types.js"
 
 export const ARCHIVES_DIR = "archives"
 export const ARCHIVE_SCHEMA = 1
 
-/** What the first agent is asked to return at save time (≤2000 chars). */
 export interface SessionArchive {
   schema: number
   channel_id: string
@@ -228,7 +215,6 @@ export function mechanicalSummary(archive: SessionArchive): string {
   return `Session "${archive.name}" archived. ${archive.description ?? "No description recorded."} Participants: ${roles}. ${archive.message_count} message(s) preserved in this archive.`
 }
 
-/** Lifecycle helper for views. */
 export function lifecycleLabel(l: SessionLifecycle): string {
   return l === "active" ? "Active" : l === "saved" ? "Saved" : "Deleted"
 }

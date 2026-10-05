@@ -1,15 +1,4 @@
-/**
- * Common integration/installer abstraction (M1).
- *
- * All host integrations (OpenCode, Claude Code, Codex, Claude Desktop,
- * ChatGPT) share one lifecycle: detect / install / update / repair / verify.
- * Adapters wrap the EXISTING per-host installers — never rewrite them —
- * and map native reports into the common Report shape.
- *
- * Scope split (INTEGRATIONS_PLAN.md decision 4):
- *   - "project": install/update/repair surface (files inside the project).
- *   - "machine":  DETECTION-ONLY from the GUI (CLI presence, app install).
- */
+/** Project scope permits file changes; machine scope is detection-only in the GUI. */
 
 export type IntegrationScope = "project" | "machine"
 
@@ -59,7 +48,7 @@ export interface HostIntegration {
 
 /**
  * The ENTIRE issue string adapters emit for the unreplaced member-env
- * placeholder (Reviewer R2 structural contract): doctor checks
+ * placeholder (structural contract): doctor checks
  * `issues.includes(PLACEHOLDER_ISSUE)` — never text matching against
  * arbitrary content. Adapters MUST emit this constant verbatim; doctor's
  * /placeholder/i test survives only as a legacy fallback.

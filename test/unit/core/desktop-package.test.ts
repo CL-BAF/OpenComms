@@ -1,13 +1,4 @@
-﻿/**
- * Claude Desktop packaging smoke test (Stage 6, Reviewer-mandated).
- *
- * Proves the .mcpb bundle layout would actually work: build the bundle
- * exactly as `mcpb pack` would zip it, then drive its self-contained server
- * over stdio as Claude Desktop would â€” initialize -> tools/call(pull) â€” and
- * verify the delivered message is framed untrusted and marked delivered.
- */
-
-import { test } from "node:test"
+﻿import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
   buildDesktopBundle,
@@ -38,8 +29,6 @@ test("desktop capability claims stay honest (PULL-only, no push/identity/roleInj
 test("bundle layout + self-contained server end-to-end pull (packaging smoke)", async () => {
   const project = mkdtempSync(join(tmpdir(), "oc-desktop-e2e-"))
   try {
-    // Target project state: an Architect (claude-desktop, PULL member) with
-    // a queued message from a peer.
     const now = Date.now()
     const state = {
       schema_version: 2,
@@ -110,21 +99,18 @@ test("bundle layout + self-contained server end-to-end pull (packaging smoke)", 
     }
     mkdirSync(join(project, ".opencomms"), { recursive: true })
     writeFileSync(join(project, ".opencomms", "state.json"), JSON.stringify(state), "utf8")
-    // Installer writes the pin file (opencomms install-member equivalent).
     writeFileSync(
       join(project, ".opencomms", "member-pin.json"),
       JSON.stringify({ member_id: "sess_pin_dt", host: "claude-desktop", saved_at: now }),
       "utf8",
     )
 
-    // Build the bundle (manifest + self-contained server).
     const bundle = buildDesktopBundle({ projectDir: repoRoot, outDir: join(project, "bundle") })
     assert.equal(bundle.ok, true, bundle.warnings.join("; "))
     assert.ok(existsSync(join(bundle.bundleDir!, "manifest.json")))
     const serverPath = join(bundle.bundleDir!, "server", "main.mjs")
     assert.ok(existsSync(serverPath))
 
-    // Drive the packaged server over stdio exactly as Claude Desktop would.
     const res = spawnSync(process.execPath, [serverPath, project, "--host", "claude-desktop"], {
       input:
         [
@@ -164,7 +150,6 @@ test("bundle layout + self-contained server end-to-end pull (packaging smoke)", 
     assert.ok(framed.includes("desktop pull e2e payload"), "queued message must arrive through the packaged server")
     assert.ok(framed.includes("UNTRUSTED_PEER_MESSAGE"), "pull output must carry untrusted framing")
 
-    // Delivered-on-read persisted in the target project.
     const after = JSON.parse(readFileSync(join(project, ".opencomms", "state.json"), "utf8")) as {
       messages: Record<string, { delivery_status: string }>
     }
@@ -173,7 +158,3 @@ test("bundle layout + self-contained server end-to-end pull (packaging smoke)", 
     rmSync(project, { recursive: true, force: true })
   }
 })
-
-function callRes(x: unknown) {
-  return x
-}

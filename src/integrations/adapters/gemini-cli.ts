@@ -1,4 +1,3 @@
-/** Gemini CLI project configuration: documented stdio MCP and lifecycle hooks. */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { readAdapterResource } from "../../cli/adapter-resources.js"

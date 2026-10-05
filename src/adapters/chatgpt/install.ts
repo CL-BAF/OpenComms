@@ -1,26 +1,7 @@
 ﻿/**
- * ChatGPT adapter â€” remote MCP connector scaffold.
- *
- * Verified 2026-08-29 (developers.openai.com/plugins, platform.openai.com/docs/mcp,
- * learn.chatgpt.com/docs):
- * - Third-party integration = remote MCP server at a PUBLIC HTTPS endpoint
- *   (streamable HTTP at /mcp), reachable from OpenAI's infrastructure.
- * - Developer mode (Pro/Plus/Business/Enterprise/Education, chatgpt.com/plugins)
- *   allows adding a custom MCP server URL. Public directory submission requires
- *   review + verified identity + domain verification.
- * - OAuth 2.1 + PKCE (S256 mandatory) for private data; no machine-to-machine
- *   grants. ChatGPT presents an OpenAI-managed mTLS cert + documented egress.
- * - STRICTLY PULL: the model/user invokes tools; NO documented push into
- *   conversations; no conversation identity; Workspace Agents API is the only
- *   documented external->conversation delivery (published agents only).
- * - ChatGPT Desktop: plugins work in the app; LOCAL MCP servers only through
- *   the Codex host (that's the codex adapter's surface, NOT this one).
- *
- * THIS ADAPTER SCOPE (v2): the state/protocol side of a streamable-HTTP MCP
- * endpoint + honest capability labeling + documentation of the supported
- * connection path. NOT included: a production OAuth provider (requires a
- * registered domain, TLS, and OpenAI review) â€” that is exactly the part we
- * refuse to fake. No local broker is ever exposed to the internet.
+ * Remote MCP scaffold only: hosting, TLS and authentication remain operator
+ * responsibilities. No unauthenticated local broker is exposed publicly.
+ * Conversation identity and server-initiated conversation delivery are unavailable.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs"

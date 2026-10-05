@@ -1,19 +1,4 @@
-﻿/**
- * Codex adapter.
- *
- * Verified 2026-08-29 against official docs (developers.openai.com/codex):
- * - MCP client config: [mcp_servers.<name>] in ~/.codex/config.toml or
- *   project .codex/config.toml â€” stdio via { command, args, env }.
- * - Hooks exist (SessionStart/UserPromptSubmit/Stop/...) but are
- *   TRUST-GATED (user must review via /hooks) â€” the installer can only
- *   REGISTER them; first use requires /hooks review by the user.
- * - External injection into a TUI-owned interactive session: NOT documented.
- *   OpenComms does NOT attempt it. MCP tools are PULL.
- *
- * The adapter therefore: registers the MCP server (PULL) + optional hooks
- * file, marks delivery PULL (hook-boundary where the user opts in), and
- * never touches the terminal UI.
- */
+﻿/** Project-scoped MCP pull registration; interactive TUI injection is not claimed. */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { execFileSync } from "node:child_process"
@@ -75,8 +60,6 @@ export function installCodex(
   const target = resolve(projectDir)
   const configPath = join(target, ".codex", "config.toml")
 
-  // 1. Copy the MCP server bundle into .opencomms/. Compiled tests resolve
-  //    the repo root by package.json (works from dist/ and dist-test/).
   let mcpServer: string
   try {
     mcpServer = readAdapterResource(
@@ -98,10 +81,7 @@ export function installCodex(
   mkdirSync(opencommsDir, { recursive: true })
   writeFileSync(join(opencommsDir, "opencomms-mcp.mjs"), mcpServer, "utf8")
 
-  // 2. Append/patch the [mcp_servers.opencomms] section (idempotent).
-  //    Launch cwd is EXPLICIT (documented `cwd` option; Codex docs do not
-  //    guarantee the cwd for project-scope stdio servers), and the project
-  //    path is absolute — never rely on relative-path assumptions.
+  // Pin cwd and absolute paths; project-scoped MCP launch cwd is not guaranteed.
   let toml = existsSync(configPath) ? readFileSync(configPath, "utf8") : ""
   if (!toml.includes("[mcp_servers.opencomms]")) {
     const absProject = JSON.stringify(target.replace(/\\/g, "/"))

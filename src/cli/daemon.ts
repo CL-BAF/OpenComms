@@ -1,43 +1,13 @@
 /**
- * OpenComms node daemon (M3, Platform) — the remote-node runner.
- *
- * Buildkite-shaped lifecycle (design §9c-4, node-transport.ts floor):
- *   enroll    — generate keypair (private key NEVER leaves this node) →
- *               claim a pairing code → poll until owner-approved → pin
- *               the cert + CA fingerprint (verify-then-trust).
- *   serve     — outbound WSS dial with the nonce-bound bearer; heartbeat;
- *               job pull; output streaming; per-recipient cursor+ACK dedup.
- *               The daemon dials OUT; the coordinator never connects in.
- *
- * Security shape (binding, Reviewer M3):
- *   - The private key is generated locally and only the public key crosses
- *     the wire (ADR-0001).
- *   - The bearer token is a detached signature over node_id + connection
- *     nonce (replay-safe; wss:// ONLY — ws:// is refused cross-network).
- *   - Enrollment PRINTS the CA-loss blast radius and retention properties
- *     (binding A / P3-1 — the caller surfaces the property).
- *   - claimPairingCode's key cache is in-memory on the coordinator: after a
- *     coordinator restart, re-claiming requires a NEW operator code. The
- *     daemon retries claims with backoff and surfaces that honestly.
- *
- * Transport is INJECTED (createWssClient) so every wire behaviour is
- * unit-testable without a live coordinator — the same pattern as the
- * agent CLI's injected fetch. Backend's WSS server slots in against the
- * same interface when it lands (node-transport.ts contract).
+ * Outbound node enrollment and injected transport loop. Private keys stay
+ * local; enrollment pins the coordinator fingerprint before trusting it.
  */
 
-import { createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto"
+import { generateKeyPairSync, randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { randomBytes } from "node:crypto"
 import { fingerprintForPublicKeyPem } from "../orchestrator/node-ca.js"
-import {
-  NODE_GIVE_UP_MS,
-  nodeBearerToken,
-  nodeWssUrl,
-  dedupeForNode,
-  type RemoteEnvelope,
-} from "../orchestrator/node-transport.js"
+import { NODE_GIVE_UP_MS, dedupeForNode } from "../orchestrator/node-transport.js"
 import { WatchdogSpeaker, type NodeDaemonClient } from "../orchestrator/node-server.js"
 
 export interface DaemonCliResult {
@@ -57,7 +27,6 @@ function flagValue(tokens: string[], name: string): string | undefined {
   return idx >= 0 ? tokens[idx + 1] : undefined
 }
 
-/** Node identity: keypair + coordinator-pinned anchors (persisted locally). */
 export interface NodeIdentity {
   node_id: string | null
   /** SPKI fingerprint of this node's public key (pinned at claim). */
@@ -115,7 +84,7 @@ export interface EnrollDeps {
   }>
   /** Interval override for tests (approval poll cadence, ms). */
   pollIntervalMs?: number
-  /** Give-up override for tests (design §9c-4: ~10 min in production). */
+  /** Give-up timeout override; production defaults to approximately ten minutes. */
   giveUpMs?: number
   /** Non-interactive test hook: suppress the consent print + stdin gate. */
   quiet?: boolean
@@ -137,10 +106,6 @@ function defaultFetch(): NonNullable<EnrollDeps["fetch"]> {
   }
 }
 
-/**
- * The node's key material. The private key NEVER leaves this machine —
- * only the public key travels to the coordinator (ADR-0001).
- */
 export function generateNodeKeypair(projectDir: string): {
   privateKeyPem: string
   publicKeyPem: string
@@ -165,7 +130,6 @@ export function generateNodeKeypair(projectDir: string): {
   return { ...keypair, fingerprint: fingerprintForPublicKeyPem(keypair.publicKeyPem), keyFile }
 }
 
-/** Enroll: claim the pairing code, then poll for owner approval. */
 export async function enrollDaemon(argv: string[], deps: EnrollDeps): Promise<DaemonCliResult> {
   const code = (flagValue(argv, "--code") ?? "").trim().toUpperCase()
   const nodeName = (flagValue(argv, "--name") ?? "").trim()
@@ -174,8 +138,7 @@ export async function enrollDaemon(argv: string[], deps: EnrollDeps): Promise<Da
   const giveUpMs = deps.giveUpMs ?? NODE_GIVE_UP_MS
   const pollIntervalMs = deps.pollIntervalMs ?? 5_000
 
-  // Binding A / P3-1: the property is SHOWN at pairing time (informed
-  // consent), never buried in a flag default.
+  // Show pairing trust and retention properties before claiming the code.
   if (!deps.quiet) {
     console.log("Enrolling this machine as an OpenComms remote node.\n")
     console.log("What this means:")
@@ -195,8 +158,7 @@ export async function enrollDaemon(argv: string[], deps: EnrollDeps): Promise<Da
 
   const keypair = generateNodeKeypair(deps.projectDir ?? process.cwd())
 
-  // Claim (with the P4 tolerance: coordinator restarts invalidate the
-  // in-memory claim cache — the claim may need a NEW operator code).
+  // Coordinator restarts lose pending claims and may require a new operator code.
   const claim = await fetchFn(`${deps.coordinatorHttpBase}/api/orchestrator/nodes/pairing/claim`, {
     method: "POST",
     body: JSON.stringify({ pairing_code: code, platform: process.platform, node_public_key_pem: keypair.publicKeyPem }),
@@ -212,7 +174,6 @@ export async function enrollDaemon(argv: string[], deps: EnrollDeps): Promise<Da
   }
   const nodeId = String((claimBody.data as { node_id?: string })?.node_id ?? "")
 
-  // Poll for owner approval (design §9c-4: bounded give-up, clean exit).
   const deadline = Date.now() + giveUpMs
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollIntervalMs))
@@ -234,12 +195,6 @@ export async function enrollDaemon(argv: string[], deps: EnrollDeps): Promise<Da
   )
 }
 
-/**
- * The `daemon run` supervisor loop: dial the coordinator, register, then
- * loop heartbeat + deliver/ack. The WSS CLIENT is injected (the mirror of
- * Backend's NodeTransportServer — NodeDaemonClient contract in
- * node-server.ts) so the loop is unit-testable without a live coordinator.
- */
 export async function runDaemon(argv: string[], deps: DaemonRunDeps): Promise<DaemonCliResult> {
   const wssBase = flagValue(argv, "--wss") ?? deps.coordinatorWssBase
   if (!wssBase || !wssBase.startsWith("wss://")) {
@@ -254,12 +209,8 @@ export async function runDaemon(argv: string[], deps: DaemonRunDeps): Promise<Da
     node_id: string
     ca_fingerprint: string
   }
-  const keypair = JSON.parse(readFileSync(join(identityDir, "node-keypair.json"), "utf8")) as {
-    privateKeyPem: string
-    publicKeyPem: string
-  }
+  JSON.parse(readFileSync(join(identityDir, "node-keypair.json"), "utf8"))
 
-  // Dial + supervise: injected client (tests) or Backend's production client.
   const client = deps.createClient?.() ?? null
   if (!client) {
     return fail(
@@ -270,35 +221,26 @@ export async function runDaemon(argv: string[], deps: DaemonRunDeps): Promise<Da
   const watchdog = new WatchdogSpeaker({
     notifySocketPath: process.env["NOTIFY_SOCKET"],
     watchdogUsec: process.env["WATCHDOG_USEC"] ? Number(process.env["WATCHDOG_USEC"]) : undefined,
-    notify: (message) => {
-      /* sd_notify via socket — injected in tests; production uses the socket */
-    },
+    notify: () => {},
   })
   try {
     await client.connect()
     await client.heartbeat()
     watchdog.notifyReady()
-    // P3-2 cursor dedup: envelopes at or below the ACKed cursor are
-    // redelivery no-ops — Backend's dedupeForNode (node-transport.ts) is
-    // the single implementation point; the loop consults the local acked
-    // cursor for the accept→ack gate and advances it ONLY after the ack.
+    // Advance the local deduplication cursor only after acknowledgement.
     let ackedSeq = 0
     let running = true
     const stop = (): void => {
       running = false
     }
     deps.stopHook?.(stop)
-    // Real signals set the same flag (production); SIGTERM/POSIX-only.
     const signalHandler = (): void => {
       running = false
     }
     process.on("SIGTERM", signalHandler)
     process.on("SIGINT", signalHandler)
     client.onDeliver((framed, seq) => {
-      // P3-2 composition: Backend's dedupeForNode is the single dedup
-      // implementation point — the loop builds the one-envelope batch,
-      // dedupes against the local acked cursor, and acks only survivors
-      // (monotonic cursor advance after the ack).
+      // Redelivered envelopes at or below the acknowledged cursor are no-ops.
       const accepted = dedupeForNode([{ seq, node_id: identity.node_id, framed, message_id: `seq-${seq}` }], ackedSeq)
       if (accepted.length === 0) return
       ackedSeq = Math.max(ackedSeq, accepted[0]!.seq)
@@ -331,12 +273,6 @@ export interface DaemonRunDeps {
   stopHook?: (stop: () => void) => void
 }
 
-/**
- * `opencomms daemon` — subcommand surface:
- *   enroll [--code <CODE>] [--name <label>]   claim + poll (prints the copy)
- *   run    [--wss <base>]                     supervisor loop (post-approval)
- *   status                                    daemon state summary
- */
 export async function runDaemonCommand(
   tokens: string[],
   deps: EnrollDeps & Partial<DaemonRunDeps>,

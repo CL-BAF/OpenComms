@@ -1,13 +1,6 @@
-﻿/**
- * MCP pull semantics tests (Reviewer Issue 4).
- *
- * opencomms_pull drains + marks delivered; opencomms_inbox previews without
- * consuming; output carries the untrusted framing note.
- */
-
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { createChannel, joinChannel, sendMessage, history } from "../../../src/core/engine.js"
+import { createChannel, joinChannel, sendMessage } from "../../../src/core/engine.js"
 import { emptyState } from "../../../src/core/store.js"
 import { StateStore } from "../../../src/core/store.js"
 import type { State, ToolResult } from "../../../src/core/types.js"
@@ -29,7 +22,6 @@ function setup(opts: { admin?: boolean; env?: Record<string, string> } = {}) {
     stale_policy: { mode: "none", window_ms: null },
   })
   assert.equal(created.ok, true)
-  // The PULL member (MCP-joined with a pin).
   process.env["OPENCOMMS_MEMBER_ID"] = PIN
   const joined = joinChannel(state, {
     channel: "pull-ch",
@@ -45,12 +37,11 @@ function setup(opts: { admin?: boolean; env?: Record<string, string> } = {}) {
   })
   assert.equal(joined.ok, true)
 
-  // Backing store so io.mutate persists.
   const dir = mkdtempSync(join(tmpdir(), "oc-pulltest-"))
   const store = new StateStore(dir)
   store.save(state)
 
-  let live = store.load()
+  store.load()
   const io = {
     mutate: async (mutate: (s: State) => ToolResult): Promise<ToolResult> =>
       store.withLock(() => {
@@ -61,7 +52,6 @@ function setup(opts: { admin?: boolean; env?: Record<string, string> } = {}) {
       }),
     readState: () => store.load(),
   }
-  /** Locked send as the peer (persisted like the real write path). */
   const sendAsPeer = async (content: string): Promise<ToolResult> =>
     io.mutate((s) => sendMessage(s, { channel: "pull-ch", content }, "sess_peer"))
   const tools = buildMcpToolDefs(

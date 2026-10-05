@@ -1,17 +1,4 @@
-/**
- * OpenComms local GUI server (work order 2026-09-08: "backend-ready now,
- * frontend later" — this IS the backend + a first frontend).
- *
- * SECURITY: binds to the loopback interface ONLY (127.0.0.1). No auth is
- * required for a loopback-only socket (same trust boundary as state.json —
- * any local process can already read/write the project state). Refuses any
- * non-loopback hostname. No provider credentials pass through this server.
- *
- * The API is provider-independent: it exposes sessions (live + archived),
- * members, lifecycle operations (create/save/delete/resume), member
- * removal (OpenComms link ONLY — never touches provider processes), the
- * real per-host join commands, and an SSE event stream for live updates.
- */
+/** Loopback API with Host and same-origin write guards. Provider secrets stay in memory. */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { watchFile, unwatchFile, appendFileSync, mkdirSync, existsSync, type StatWatcher } from "node:fs"
@@ -28,13 +15,12 @@ import {
   resumeSession,
   effectiveEndpointCapabilities,
   setSessionPausedAsOperator,
-  sendMessage,
   sendMessageAsOperator,
   joinChannel,
 } from "../core/engine.js"
 import { ArchiveStore, buildArchiveContext, type SessionArchive } from "../core/archive.js"
 import { StateStore, emptyState } from "../core/store.js"
-import type { Member, State } from "../core/types.js"
+import type { State } from "../core/types.js"
 import { GUI_HTML } from "./ui.js"
 import { joinCommandFor } from "../cli/join-command.js"
 import {
@@ -54,6 +40,12 @@ import { ensureServe, createOpencodeRuntime } from "../orchestrator/runtimes/ope
 import { ACTION_ROUTES, knownFailureState, redactDiagnostic, type ActionCapability } from "./contracts.js"
 import { createManagedDelivery } from "../orchestrator/managed-delivery.js"
 import type { ApiResult } from "../orchestrator/api.js"
+import type { BridgeCoreDeps } from "../orchestrator/bridge.js"
+
+type ProjectBridgeDeps = Omit<BridgeCoreDeps, "guiReads" | "guiWrites"> & {
+  guiReads: Omit<BridgeCoreDeps["guiReads"], "sessions" | "sessionMembers">
+  guiWrites: Omit<BridgeCoreDeps["guiWrites"], "sessionCreate">
+}
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"])
 
@@ -79,11 +71,7 @@ export function memberState(member: { stale: boolean }, queueLength: number): "Q
 
 export interface GuiDeps {
   projectDir?: string
-  /**
-   * Sidecar-only storage used before the owner chooses a project. It keeps
-   * the bridge alive for workspace_state/workspace_select without exposing
-   * the install/runtime directory as the current project.
-   */
+  /** Sidecar bootstrap storage; never exposed as the selected project. */
   bridgeStorageDir?: string
   port: number
   hostname: string
@@ -93,13 +81,8 @@ export interface GuiServerHandle {
   server: Server
   port: number
   close(): Promise<void>
-  /**
-   * M4.5 bridge: the SAME OrchestratorApi + GUI closures the HTTP routes
-   * use, exposed for the stdio bridge (cli main wires `bridge` to
-   * runBridge with these + stdout/stderr). Null before a project is
-   * selected.
-   */
-  bridgeDeps: () => import("../orchestrator/bridge.js").BridgeCoreDeps | null
+  /** Current project dependencies shared by HTTP and the stdio bridge. */
+  bridgeDeps: () => BridgeCoreDeps | null
 }
 
 export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
@@ -112,14 +95,11 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   let storageProjectDir = projectDir ?? (deps.bridgeStorageDir ? resolve(deps.bridgeStorageDir) : null)
   let store = storageProjectDir ? new StateStore(storageProjectDir) : null
   let archives = storageProjectDir ? new ArchiveStore(storageProjectDir) : null
-  // Orchestrator core (M1): in-process in THIS server (ADR-0005 leaning);
-  // Tauri sidecar argv stays exactly `gui --port N --server --project dir`.
   let orchestratorStore: OrchestratorStore | null = null
   if (storageProjectDir && store) {
     orchestratorStore = new OrchestratorStore(storageProjectDir, store)
   }
-  // Serve password + model are in-memory only (never persisted, never
-  // returned, never logged; Reviewer redaction-by-value gate).
+  // Credentials must not be persisted, returned or logged.
   const servePassword = (): string => {
     const env = process.env["OPENCOMMS_ORCH_SERVE_PASSWORD"]
     return env?.trim() ? env : ""
@@ -129,11 +109,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     return env?.trim() ? env.trim() : undefined
   }
   let servePort = 0
-  // Managed shared serve (M1 ensureServe): ONE child per project, spawned
-  // lazily on the first agent create; password is generated here, held in
-  // memory + the child's env only (never logged, never persisted). Killed
-  // on server close � no orphans. authHeader lives in process memory only
-  // and is handed to the runtime env for transport authentication.
+  // One lazily started serve child per project; authentication stays in memory.
   let serveChild: import("node:child_process").ChildProcess | null = null
   let serveAuthHeader: string | null = null
   const instanceId = randomUUID()
@@ -173,7 +149,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       serveChild = result.child
       servePort = result.port
       if (result.authHeader) serveAuthHeader = result.authHeader
-      // Record port + serve_started_at on the local node record (locked).
       if (startupStore) {
         const activeStore = startupStore
         await activeStore
@@ -212,7 +187,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     )
   }
   let orchestratorApi: OrchestratorApi | null = null
-  let bridgeDepsProvider: (() => import("../orchestrator/bridge.js").BridgeCoreDeps | null) | null = null
+  let bridgeDepsProvider: (() => ProjectBridgeDeps | null) | null = null
   const handlePortRef = (): number => {
     try {
       return (server?.address() as { port: number } | null)?.port ?? 4919
@@ -225,9 +200,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     const apiOrchestratorStore = orchestratorStore
     const apiStore = store
     const apiFeed = feed
-    // servePassword serves BOTH roles: when the env pin is set, it is the
-    // operator-provided password; after ensureServe bootstraps, the in-memory
-    // serveAuthHeader carries the generated credential for the transports.
     const orchestratorServePassword = (): string => resolvedServePassword()
     orchestratorApi = new OrchestratorApi({
       projectDir: initialStorageProjectDir,
@@ -240,7 +212,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       feed: apiFeed,
       projectId: () => null,
       loadChannelEngineState: () => apiStore.load(),
-      engineSend: (state, input, senderSessionId) =>
+      engineSend: (state, input) =>
         sendMessageAsOperator(state as never, {
           channel: input.channel,
           content: input.content,
@@ -249,57 +221,11 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
         }),
       saveChannelEngineState: (state) => apiStore.save(state as never),
     })
-    // M4.5 bridge deps: the SAME api + closures the HTTP routes use, so the
-    // stdio bridge (cli main's `bridge` dispatch) shares one core.
     const currentOrchestratorApi = orchestratorApi
     if (currentOrchestratorApi) {
-      bridgeDepsProvider = () => ({
+      bridgeDepsProvider = (): ProjectBridgeDeps => ({
         api: currentOrchestratorApi,
         guiReads: {
-          sessions: () => {
-            const sp = sessionsPayload()
-            return { ok: true, message: "ok", data: sp.data }
-          },
-          sessionMembers: (name: string) => {
-            const live = findLive(name)
-            if (live) {
-              const st = load()
-              return {
-                ok: true,
-                message: "ok",
-                data: {
-                  name: live.name,
-                  lifecycle: live.lifecycle,
-                  description: live.description ?? "No description yet",
-                  agents: live.members.map((m: Member) => ({
-                    session_id: m.session_id,
-                    role: m.role,
-                    host: m.host,
-                    delivery_mode: m.delivery_mode,
-                    state: memberState(m, (st.queues[m.session_id] ?? []).length),
-                  })),
-                },
-              }
-            }
-            const archive = archives?.findByName(name) ?? archives?.get(name)
-            if (archive) {
-              return {
-                ok: true,
-                message: "ok",
-                data: {
-                  name: archive.name,
-                  lifecycle: "saved",
-                  agents: archive.members.map((m) => ({
-                    session_id: m.session_id,
-                    role: m.role,
-                    host: m.host,
-                    state: "Offline",
-                  })),
-                },
-              }
-            }
-            return { ok: false, message: `No live or archived session matches "${name}".` }
-          },
           workspaceState: () => ({ ok: true, message: "ok", data: workspaceSummary(projectDir) }),
           integrationsList: () => ({ ok: true, message: "ok", data: integrationsListSync(projectDir) }),
           diagnostics: () => {
@@ -320,20 +246,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           },
         },
         guiWrites: {
-          sessionCreate: async (body) => {
-            const st = load()
-            const created = createSessionAsOperator(st, {
-              channel: String(body["name"] ?? ""),
-              project_id: "gui-local-project",
-              worktree: projectDir ?? "",
-              max_members: typeof body["max_members"] === "number" ? body["max_members"] : undefined,
-              rate_limit: typeof body["rate_limit"] === "number" ? body["rate_limit"] : undefined,
-              max_hops: typeof body["max_hops"] === "number" ? body["max_hops"] : undefined,
-              budgets: body["budgets"] as { max_runtime_ms?: number; max_delivered_messages?: number } | undefined,
-            })
-            if (created.ok) apiStore.save(st)
-            return created
-          },
           sessionSave: async (body) => {
             const st = load()
             const built = buildSessionArchive(st, {
@@ -477,9 +389,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       }
     }
   }
-  // Live-state change detection (P3-1): real mtime watch on state.json �
-  // change-driven events, not wall-clock ticks. persistent:false never
-  // holds the host event loop open (same pattern as the delivery wake).
   let statWatcher: StatWatcher | null = null
   let statWatcherFile: string | null = null
   let refreshTimer: NodeJS.Timeout | null = null
@@ -499,12 +408,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     })
   }
   ensureStatWatcher()
-  // The GUI shows ARCHIVED sessions too: archive files are written/deleted
-  // by OTHER processes (CLI session save/delete, MCP save) without touching
-  // state.json, so a state.json-only watcher leaves the saved-sessions list
-  // STALE. stat-poll the archives DIRECTORY as well: entry creates/replaces
-  // (temp+rename saves) and deletions (unlink) update a directory's mtime,
-  // so every archive mutation fires.
+  // Other processes can change archives without touching state.json.
   let statWatcherArchives: StatWatcher | null = null
   let statWatcherArchivesDir: string | null = null
   const ensureArchivesWatcher = (): void => {
@@ -587,8 +491,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     )
     const activeStoreRef = store
     const activeFeedRef = feed
-    // Same credential resolution as the initial wiring: env pin wins, else
-    // the in-memory serveAuthHeader from the managed bootstrap.
     const projectServePassword = (): string => resolvedServePassword()
     orchestratorApi = new OrchestratorApi({
       projectDir: normalized,
@@ -601,7 +503,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       feed: activeFeedRef,
       projectId: () => null,
       loadChannelEngineState: () => activeStoreRef.load(),
-      engineSend: (state, input, senderSessionId) =>
+      engineSend: (state, input) =>
         sendMessageAsOperator(state as never, {
           channel: input.channel,
           content: input.content,
@@ -610,56 +512,11 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
         }),
       saveChannelEngineState: (state) => activeStoreRef.save(state as never),
     })
-    // Rebuild the bridge deps for the newly selected project (same closures).
     if (orchestratorApi) {
       const apiRef = orchestratorApi
-      bridgeDepsProvider = () => ({
+      bridgeDepsProvider = (): ProjectBridgeDeps => ({
         api: apiRef,
         guiReads: {
-          sessions: () => {
-            const sp = sessionsPayload()
-            return { ok: true, message: "ok", data: sp.data }
-          },
-          sessionMembers: (name: string) => {
-            const live = findLive(name)
-            if (live) {
-              const st = load()
-              return {
-                ok: true,
-                message: "ok",
-                data: {
-                  name: live.name,
-                  lifecycle: live.lifecycle,
-                  description: live.description ?? "No description yet",
-                  agents: live.members.map((m: Member) => ({
-                    session_id: m.session_id,
-                    role: m.role,
-                    host: m.host,
-                    delivery_mode: m.delivery_mode,
-                    state: memberState(m, (st.queues[m.session_id] ?? []).length),
-                  })),
-                },
-              }
-            }
-            const archive = archives?.findByName(name) ?? archives?.get(name)
-            if (archive) {
-              return {
-                ok: true,
-                message: "ok",
-                data: {
-                  name: archive.name,
-                  lifecycle: "saved",
-                  agents: archive.members.map((m) => ({
-                    session_id: m.session_id,
-                    role: m.role,
-                    host: m.host,
-                    state: "Offline",
-                  })),
-                },
-              }
-            }
-            return { ok: false, message: `No live or archived session matches "${name}".` }
-          },
           workspaceState: () => ({ ok: true, message: "ok", data: workspaceSummary(projectDir) }),
           integrationsList: () => ({ ok: true, message: "ok", data: integrationsListSync(projectDir) }),
           diagnostics: () => {
@@ -680,19 +537,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           },
         },
         guiWrites: {
-          sessionCreate: async (body) => {
-            const st = load()
-            const created = createSessionAsOperator(st, {
-              channel: String(body["name"] ?? ""),
-              project_id: "gui-local-project",
-              worktree: projectDir ?? "",
-              max_members: typeof body["max_members"] === "number" ? body["max_members"] : undefined,
-              rate_limit: typeof body["rate_limit"] === "number" ? body["rate_limit"] : undefined,
-              max_hops: typeof body["max_hops"] === "number" ? body["max_hops"] : undefined,
-            })
-            if (created.ok) activeStoreRef.save(st)
-            return created
-          },
           sessionSave: async (body) => {
             const st = load()
             const built = buildSessionArchive(st, {
@@ -840,17 +684,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     )
   }
 
-  /**
-   * BROWSER-SURFACE GUARD (Reviewer P1): loopback binding protects against
-   * NETWORK exposure but NOT against the user's browser. DNS rebinding
-   * makes a remote page same-origin with our port; CORS-simple POSTs (no
-   * preflight) can mutate state from any site. Defense:
-   *   1. Host header must be loopback (with optional :port) � kills
-   *      rebinding (the browser sends the rebound name as Host).
-   *   2. Non-GET requests must carry Origin/Referer that is ABSENT (curl,
-   *      same-process clients) or matches this loopback origin, or
-   *      Sec-Fetch-Site: same-origin/none � kills simple-request CSRF.
-   */
+  /** Host validation blocks DNS rebinding; browser writes require same-origin signals to prevent CSRF. */
   const MUTATING = new Set(["POST", "PUT", "DELETE", "PATCH"])
   const guard = (req: IncomingMessage): string | null => {
     const host = (req.headers["host"] ?? "").toLowerCase().trim()
@@ -896,7 +730,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     }
   }
 
-  /** Snapshot both views for the main screen (cards). */
   const sessionsPayload = () => {
     const state = load()
     const currentArchives = archives
@@ -1073,8 +906,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   const linkManagedAgent = async (body: Record<string, unknown>): Promise<ApiResult> => {
     if (!projectDir || !store || !orchestratorStore) return { ok: false, message: "Select a project first." }
     const activeStore = store,
-      activeOrchestrator = orchestratorStore,
-      activeProject = projectDir
+      activeOrchestrator = orchestratorStore
     return activeStore.withLock(() => {
       const state = activeStore.load(),
         managed = activeOrchestrator.load()
@@ -1283,7 +1115,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   }, 1500)
   managedTimer.unref()
 
-  const sharedBridgeDeps = (): import("../orchestrator/bridge.js").BridgeCoreDeps | null => {
+  const sharedBridgeDeps = (): BridgeCoreDeps | null => {
     const base = bridgeDepsProvider?.()
     if (!base) return null
     const locked =
@@ -1431,9 +1263,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" })
       res.write(`event: hello\ndata: {}\n\n`)
       sseClients.add(res)
-      // Additive orchestrator topic (contract v0.3 �9): the feed's emit()
-      // broadcasts `event: orchestrator` through this same client set;
-      // generic `refresh` semantics stay unchanged.
       const ping = setInterval(() => {
         for (const client of sseClients) {
           try {
@@ -1451,7 +1280,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       return
     }
 
-    // Orchestrator routes (contract v0.3): dispatch via the in-process API.
     const orchMatch = path.match(/^\/api\/orchestrator(\/.*)?$/)
     if (orchMatch) {
       const activeApi = orchestratorApi
@@ -1666,9 +1494,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       return
     }
 
-    // M3: Integrations surface — backed by the SAME manager as the CLI
-    // doctor (no second diagnostics implementation). GET is read-only
-    // detection; POST actions are mutating and pass the guard above.
     if (method === "GET" && path === "/api/integrations") {
       if (!projectDir) {
         json(res, 409, { ok: false, message: "Select a project before inspecting integrations." })
@@ -1676,9 +1501,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       }
       const selected = projectDir
       const overview = await integrationsOverview(selected)
-      // Machine-level CLI presence stays separate from project integrations
-      // (plan decision #4); detection-only, never off the sync path — all
-      // host detections here are filesystem reads.
       json(res, 200, { ok: true, data: overview })
       return
     }
@@ -1784,8 +1606,6 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           activeStore.save(state)
           return { ok: true, message: `Session ${channelId} DELETED.` }
         }
-        // Non-live phase: the decided id may be a NAME � resolve it to the
-        // archive id (chn_*) before touching files.
         const archiveId = channelId.startsWith("chn_")
           ? channelId
           : (activeArchives.findByName(channelId)?.channel_id ?? null)
@@ -1943,15 +1763,12 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
         close: () =>
           new Promise<void>((resolveClose) => {
             closing = true
-            // The refresh timer is unref'd; unwind the stat watchers too.
             if (refreshTimer) clearTimeout(refreshTimer)
             clearInterval(managedTimer)
             deliveryController?.close()
             stopWatchers()
             for (const res of sseClients) res.end()
             sseClients.clear()
-            // Managed serve shutdown (ensureServe spec): SIGTERM the shared
-            // serve so no orphan survives the GUI process.
             try {
               if (serveChild && !serveChild.killed && serveChild.exitCode === null) {
                 serveChild.kill("SIGTERM")

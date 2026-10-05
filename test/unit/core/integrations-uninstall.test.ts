@@ -1,19 +1,4 @@
-/**
- * Integrations uninstall tests (M3, IntegrationBuilder slice).
- *
- * Per-host lifecycle closure for the optional HostIntegration.uninstall
- * member (Reviewer R2 binding: files first, marker last; absent => ok:true
- * no-op before touching the marker; malformed config => ok:false with zero
- * writes and an untouched marker):
- * - fresh -> install -> uninstall -> detect absent -> re-uninstall no-op
- * - changedFiles fidelity (exactly what was removed)
- * - marker removed for the id only; other ids' markers preserved
- * - state.json + pins/ survive every uninstall
- * - unrelated user config preserved
- * - opencode foreign plugin.js left in place with a warning (never deleted)
- * - malformed config => ok:false, marker untouched, zero writes
- * - manager uninstall delegation, unsupported-member refusal, unknown id
- */
+/** Uninstall removes owned files before markers and preserves shared project state. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -56,7 +41,6 @@ function distReady(): boolean {
   )
 }
 
-/** Seed shared project state that uninstall must never touch. */
 function seedSharedState(dir: string): void {
   mkdirSync(join(dir, ".opencomms", "pins"), { recursive: true })
   writeFileSync(
@@ -75,8 +59,6 @@ function assertSharedStateSurvives(dir: string): void {
   assert.ok(existsSync(join(dir, ".opencomms", "state.json")), "state.json must survive uninstall")
   assert.ok(existsSync(join(dir, ".opencomms", "pins", "sess_keep.json")), "pins must survive uninstall")
 }
-
-// ---------- opencode ----------
 
 test("opencode uninstall: fresh->install->uninstall->absent->re-uninstall no-op", async (t) => {
   if (!distReady()) {
@@ -129,7 +111,6 @@ test("opencode uninstall: preserves unrelated keys + other markers; foreign plug
     assert.deepEqual(cfg["plugin"], ["other-plugin"])
     assert.equal(getInstalledVersion(dir, "codex"), CURRENT, "other ids preserved")
 
-    // Foreign bundle: left in place with a warning, never deleted.
     writeFileSync(join(dir, ".opencode", "plugins", "plugin.js"), "// user custom plugin\n", "utf8")
     const foreign = await uninstall(opencodeAdapter, mkCtx(dir))
     assert.equal(foreign.ok, true)
@@ -158,8 +139,6 @@ test("opencode uninstall: malformed config => ok:false, marker untouched, zero w
     cleanup(dir)
   }
 })
-
-// ---------- claude-code ----------
 
 test("claude-code uninstall: removes hooks + mcp entry + bundles; state/pins survive", async (t) => {
   if (!distReady()) {
@@ -223,8 +202,6 @@ test("claude-code uninstall: malformed settings => ok:false, marker untouched, z
   }
 })
 
-// ---------- codex ----------
-
 test("codex uninstall: removes ALL opencomms sections + bundle; others survive", async (t) => {
   if (!distReady()) {
     t.skip("dist missing")
@@ -271,8 +248,6 @@ test("codex uninstall: orphan env block is fully removed (no reinstall ghost)", 
   }
 })
 
-// ---------- desktop + chatgpt ----------
-
 test("claude-desktop uninstall: bundle dir removed; re-uninstall no-op", async (t) => {
   if (!distReady()) {
     t.skip("dist missing")
@@ -315,8 +290,6 @@ test("chatgpt uninstall: scaffold dir removed; re-uninstall no-op", async () => 
     cleanup(dir)
   }
 })
-
-// ---------- manager layer ----------
 
 test("manager uninstall: delegates, refuses member-less adapters, rejects unknown ids", async (t) => {
   if (!distReady()) {
@@ -377,7 +350,6 @@ test("uninstall removes only its own marker (other ids preserved)", async (t) =>
     await uninstall(opencodeAdapter, mkCtx(dir))
     assert.equal(getInstalledVersion(dir, "opencode"), null)
     assert.equal(getInstalledVersion(dir, "chatgpt"), CURRENT)
-    // Cleanup the second marker so tmp state is consistent.
     unlinkSync(join(dir, ".opencomms", "integration.json"))
   } finally {
     cleanup(dir)

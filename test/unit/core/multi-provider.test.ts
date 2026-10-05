@@ -1,23 +1,7 @@
-﻿/**
- * Multi-provider + budget + retry-cap tests (work orders 2026-09-08).
- *
- * Scenario coverage: (1) Claude+Codex one session, (4) TWO Claude agents,
- * (5) TWO Codex agents, (6) multiple providers -> one target, (7)
- * broadcast across providers, (8) direct member-to-member, (9)
- * PUSH+PULL+spawn coexisting, (16) rate limiting, (17) concurrent
- * different members, plus the budget guards (max_runtime /
- * max_delivered_messages) and the dead-letter retry cap.
- *
- * All at the engine boundary with realistic member rows â€” the transports
- * themselves are exercised in spawn-delivery.test.ts and the cross-host
- * suites; the broker never needs provider identities.
- */
-
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
   createChannel,
-  joinChannel,
   sendMessage,
   drainQueue,
   commitDelivery,
@@ -53,7 +37,6 @@ function member(
   }
 }
 
-/** Six-provider session: 2 Claude + 2 Codex + 1 OpenCode + 1 PULL (desktop). */
 function seedSixProviders(state: Parameters<typeof createChannel>[0]) {
   const created = createChannel(state, {
     channel: "mp",
@@ -65,7 +48,6 @@ function seedSixProviders(state: Parameters<typeof createChannel>[0]) {
   })
   assert.equal(created.ok, true)
   const channel = state.channels["mp"]!
-  // The creator is an opencode push member.
   channel.members[0]!.host = "opencode"
   channel.members[0]!.delivery_mode = "push"
   const joins: Array<[string, string, string, Member["delivery_mode"], string | null]> = [
@@ -99,7 +81,6 @@ test("(1)(4)(5) two Claude + two Codex members coexist in one session", () => {
 test("(6)(8) multiple providers -> one target; direct member-to-member", () => {
   const state = emptyState()
   seedSixProviders(state)
-  // Three different-provider senders target SecurityReview directly.
   for (const sender of ["m_arch", "m_backend", "m_frontend"]) {
     const sent = sendMessage(
       state,
@@ -109,11 +90,9 @@ test("(6)(8) multiple providers -> one target; direct member-to-member", () => {
     assert.equal(sent.ok, true, sent.message)
     assert.deepEqual((sent.data as { recipients: string[] }).recipients, ["m_sec"])
   }
-  // Direct member-to-member by session id (codex -> claude).
   const direct = sendMessage(state, { channel: "mp", content: "backend asks reviewer", to: "m_rev2" }, "m_backend")
   assert.equal(direct.ok, true)
   assert.deepEqual((direct.data as { recipients: string[] }).recipients, ["m_rev2"])
-  // Queues: exactly one envelope per targeted member.
   assert.equal(state.queues["m_sec"]!.length, 3)
   assert.equal(state.queues["m_rev2"]!.length, 1)
 })
@@ -141,7 +120,6 @@ test("(9) PUSH + PULL + spawn_push coexist; drains respect the mode (PULL surviv
   sendMessage(state, { channel: "mp", content: "to desktop", to: "DesktopWatch" }, "m_arch")
   sendMessage(state, { channel: "mp", content: "broadcast for everyone", broadcast: true }, "m_arch")
 
-  // PUSH member drain works normally (broadcast copy).
   const frontendDrain = drainQueue(state, "m_frontend")
   assert.equal(frontendDrain.length, 1)
   commitDelivery(
@@ -180,7 +158,6 @@ test("(16)(17) rate limit counts logical sends; concurrent different members pro
   const ch = state.channels["rl"]!
   ch.members.push(member("p1", "P1", "claude-code", "spawn_push", "u1"))
   ch.members.push(member("p2", "P2", "codex", "spawn_push", "u2"))
-  // Two senders alternate; the rate window counts 4 logical sends then blocks.
   let okCount = 0
   for (let i = 0; i < 6; i++) {
     const r = sendMessage(
@@ -210,7 +187,6 @@ test("budgets: max_delivered_messages caps lifetime handovers (retries included)
     const r = sendMessage(state, { channel: "bud", content: `m${i}` }, "b0")
     assert.equal(r.ok, true)
   }
-  // Drain 3 (budget consumed at handover).
   const drained = drainQueue(state, "b1")
   assert.equal(drained.length, 3)
   assert.equal(ch.delivered_total, 3)
@@ -233,7 +209,6 @@ test("budgets: max_runtime_ms stops a conversation past its runtime cap", () => 
   const ch = state.channels["runtime"]!
   ch.members.push(member("r1", "Peer", "opencode", "push", "r1"))
   assert.equal(sendMessage(state, { channel: "runtime", content: "in time" }, "r0").ok, true)
-  // Age the conversation past the cap.
   ch.created_at = Date.now() - 120_000
   const blocked = sendMessage(state, { channel: "runtime", content: "too late" }, "r0")
   assert.equal(blocked.ok, false)
@@ -274,7 +249,6 @@ test("retry cap: failed deliveries dead-letter after MAX_DELIVERY_ATTEMPTS (no a
       assert.equal((state.queues["d1"] ?? []).length, 0, "removed from the queue")
     }
   }
-  // No further drain possible.
   assert.equal(drainQueue(state, "d1", { now: Date.now() + 10_000 }).length, 0)
 })
 
@@ -320,7 +294,6 @@ test("max_members: 8 is the DEFAULT, not the ceiling (configurable up to 32)", (
   })
   assert.equal(created.ok, true)
   assert.equal(state.channels["big"]!.max_members, 16, "above-default caps are honored up to the ceiling")
-  // Over-ceiling clamps to MAX_MEMBERS_CEILING (32), not the 8 default.
   const clamped = createChannel(state, {
     channel: "biggest",
     role: "Coordinator",

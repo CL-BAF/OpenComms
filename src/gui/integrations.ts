@@ -1,17 +1,4 @@
-/**
- * GUI integration API layer (M3, Lead-owned after Builder reassignment).
- *
- * Pure functions consumed by the GUI HTTP routes (src/gui/server.ts) and the
- * stdio bridge (guiReads.integrationsList) — NO HTTP here, NO filesystem
- * mutation outside the manager's own operations. The manager (runGuarded)
- * owns locking; this layer adds none.
- *
- * projectBootstrap() is the project-open hook: it MAPS detection to a
- * suggested action and is strictly OFFER-ONLY — calling it never mutates
- * the project (tested). Migration detection mirrors src/core/store.ts's
- * one-time v1->v2 logic: v2 state present => never "migration_required",
- * even when the legacy directory also exists.
- */
+/** Shared HTTP/stdio integration layer. The manager owns mutation locking. */
 
 import { existsSync, readFileSync } from "node:fs"
 import { delimiter, join, resolve } from "node:path"
@@ -67,10 +54,6 @@ function ctxFor(projectDir: string): IntegrationContext {
   return { projectDir: resolve(projectDir), currentVersion: VERSION }
 }
 
-/**
- * Overview of all five hosts against one project. Per-host failures are
- * already mapped to broken detections by the manager — this never throws.
- */
 export async function integrationsOverview(projectDir: string): Promise<IntegrationsOverview> {
   const manager = createDefaultManager()
   const ctx = ctxFor(projectDir)
@@ -120,8 +103,6 @@ export async function integrationsOverview(projectDir: string): Promise<Integrat
         update: detection.status === "outdated",
         repair: detection.status === "broken",
         verify: detection.status === "installed",
-        // Uninstall is offered whenever the adapter has the member and the
-        // integration exists (absent has nothing to remove).
         uninstall: hasUninstall && detection.status !== "absent",
       },
     })
@@ -146,13 +127,7 @@ function applicationPresence(id: string): "detected" | "not_detected" | "unknown
   return found ? "detected" : "not_detected"
 }
 
-/**
- * SYNC bridge variant (guiReads.integrationsList is synchronous in the
- * bridge contract): marker-backed, never throws, no async adapter calls.
- * Full live detection stays on the HTTP overview (GET /api/integrations);
- * the bridge surfaces install state only, with an honest "unknown" status
- * and a pointer to the full view when no marker exists.
- */
+/** Marker-only synchronous view; use integrationsOverview for full detection. */
 export function integrationsListSync(projectDir: string | null): Array<{
   id: string
   name: string
@@ -186,11 +161,7 @@ export function integrationsListSync(projectDir: string | null): Array<{
   return out
 }
 
-/**
- * Run ONE lifecycle verb against ONE host. The five-verb whitelist is
- * enforced HERE (server-side) before anything reaches the manager; unknown
- * ids/actions never touch adapter code.
- */
+/** Validate host and lifecycle action before invoking adapter code. */
 export async function integrationAction(projectDir: string, id: string, action: string): Promise<IntegrationReport> {
   if (!(LIFECYCLE_ACTIONS as readonly string[]).includes(action)) {
     return {
@@ -212,8 +183,6 @@ export async function integrationAction(projectDir: string, id: string, action: 
     }
   }
   const ctx = ctxFor(projectDir)
-  // The whitelist switch is exhaustive over LIFECYCLE_ACTIONS; the trailing
-  // throw is unreachable by construction (satisfies the strict return check).
   switch (action) {
     case "install":
       return manager.install(ctx, id)
@@ -255,18 +224,7 @@ function readStateSchema(projectDir: string): { v2Present: boolean; legacyPresen
   return { v2Present, legacyPresent, legacySchemaOne }
 }
 
-/**
- * Project-open bootstrap decision (OFFER-ONLY: never mutates anything).
- *
- * Mapping (Reviewer-amended spec):
- * - v2 state ABSENT + legacy v1 state PRESENT => migration_required (the
- *   plugin's next load performs the one-time migration; the GUI only tells
- *   the user). v2 PRESENT => never migration_required, legacy dir or not.
- * - integration.json marker with a rejected schema (malformed/foreign
- *   schema_version) => broken/repair — the SAME repair path, no third route.
- * - Otherwise the OpenCode adapter's detection decides (OpenCode is the
- *   reference project integration).
- */
+/** Offer guidance without mutations; valid v2 state takes precedence over legacy state. */
 export async function projectBootstrap(projectDir: string): Promise<BootstrapDecision> {
   const target = resolve(projectDir)
   const { v2Present, legacyPresent, legacySchemaOne } = readStateSchema(target)
@@ -279,7 +237,6 @@ export async function projectBootstrap(projectDir: string): Promise<BootstrapDec
     }
   }
 
-  // Marker schema mismatch => the marker file cannot be trusted => repair.
   const markerFile = join(target, STATE_DIR, INTEGRATION_FILE)
   if (existsSync(markerFile)) {
     const markers = readIntegrationMarkers(target)

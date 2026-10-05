@@ -1,21 +1,7 @@
 /**
- * M3 node identity — owner-rooted CA + short-lived node certs (design §9c-3).
- *
- * SPIFFE pattern per the M3 design addendum (926aa05):
- *   - A per-project owner-rooted CA signs SHORT-LIVED node certs (hours).
- *   - Revocation = expiry BY CONSTRUCTION + the server-side revoked list;
- *     a revoked cert CANNOT reconnect even before expiry (load-bearing,
- *     Reviewer binding B — see isCertRevoked).
- *   - Pairing code authorizes issuance; the CERT is the node identity.
- *   - Private keys never leave the node: the node generates its keypair +
- *     CSR; the coordinator signs the CSR and returns only the CERT.
- *   - CA private key lives beside the orchestrator state (secret-storage
- *     tiering lands with Platform's daemon); CA loss = full re-pairing
- *     (documented blast radius, surfaced in the pairing UX by the caller).
- *
- * Skeleton scope (this commit): CA generation, CSR signing, fingerprint
- * (SPKI hash), issuance bound to the pairing flow, revocation list. The
- * WSS transport wiring (§9c-4) consumes these via tls options.
+ * Project CA for pairing-authorized, short-lived node certificates.
+ * Node private keys stay on the node; the coordinator signs their pinned public keys.
+ * Expiry and explicit revocation gate authentication. CA loss requires full re-pairing.
  */
 
 import { createHash, createPrivateKey, generateKeyPairSync, sign, verify, createPublicKey } from "node:crypto"
@@ -25,7 +11,7 @@ import { randomBytes } from "node:crypto"
 
 export const NODE_CERT_VALIDITY_MS = 12 * 60 * 60_000
 export const EPHEMERAL_NODE_CERT_VALIDITY_MS = 60 * 60_000
-/** Revoked certs are dead regardless of expiry (load-bearing, binding B). */
+/** Explicit revocation rejects certificates before expiry. */
 export const REVOKED_CERTS_FILE = "revoked-certs.json"
 
 export interface NodeCertificate {
@@ -70,11 +56,7 @@ export function fingerprintForPublicKeyPem(publicKeyPem: string): string {
     .digest("hex")
 }
 
-/**
- * The owner CA: one keypair per project, persisted beside orchestrator
- * state. Generation is idempotent (an existing CA is reused — a second
- * CA would invalidate every issued cert). Loss = full re-pairing (P3-1).
- */
+/** Reuse the project CA: a replacement invalidates every issued certificate. */
 export class NodeCertificateAuthority {
   private caDir: string
   private caFile: string
@@ -87,7 +69,7 @@ export class NodeCertificateAuthority {
     this.revokedFile = join(this.caDir, "revoked.json")
   }
 
-  /** Load or create the CA. NEVER returns the private key to callers. */
+  /** Load or create the internal CA keypair. */
   ensure(): CaKeypair {
     if (this.ca) return this.ca
     mkdirSync(this.caDir, { recursive: true })
@@ -102,7 +84,7 @@ export class NodeCertificateAuthority {
         /* fall through to regeneration */
       }
     }
-    // Generate (Node keypair generation; ed25519 — fast, small, modern).
+
     const { privateKey, publicKey } = generateKeyPairSync("ed25519")
     const keypair: CaKeypair = {
       privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
@@ -120,11 +102,7 @@ export class NodeCertificateAuthority {
     return fingerprintForPublicKeyPem(this.ensure().publicKeyPem)
   }
 
-  /**
-   * Issue a node cert from a pairing-authorized request. The node's PUBLIC
-   * key (PEM) arrives with the pairing code; its fingerprint is pinned on
-   * the node record. The PRIVATE key never crosses this boundary.
-   */
+  /** Issue a certificate for the public key pinned by an authorized pairing claim. */
   issue(input: {
     node_id: string
     node_name: string
@@ -134,11 +112,7 @@ export class NodeCertificateAuthority {
     const ca = this.ensure()
     const fingerprint = fingerprintForPublicKeyPem(input.nodePublicKeyPem)
     const issued_at = Date.now()
-    // Lead decision 2026-09-14: the exported EPHEMERAL constant is
-    // AUTHORITATIVE (1h) — a distinctly short ephemeral window keeps the
-    // tier meaningfully short-lived (design §9c-1 bounded-window) and the
-    // enrollment copy honest ("60-minute certificate"). A tier-validity
-    // mapping test asserts the exact hours for both tiers.
+
     const validity = input.trust_tier === "ephemeral" ? EPHEMERAL_NODE_CERT_VALIDITY_MS : NODE_CERT_VALIDITY_MS
     const expires_at = issued_at + validity
     const tbs = certTbs({ node_id: input.node_id, fingerprint, issued_at, expires_at, trust_tier: input.trust_tier })
@@ -194,10 +168,7 @@ export class NodeCertificateAuthority {
     }
   }
 
-  /**
-   * Revocation check (load-bearing for binding B): a revoked cert is DEAD
-   * regardless of its expiry — checked on every transport auth.
-   */
+  /** Check explicit revocation on every transport authentication. */
   isRevoked(nodeId: string): boolean {
     if (!existsSync(this.revokedFile)) return false
     try {

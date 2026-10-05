@@ -1,14 +1,4 @@
-/**
- * Codex adapter (M1): wraps src/adapters/codex/install.ts.
- *
- * Detection artifacts (project scope):
- *   - .opencomms/opencomms-mcp.mjs present?
- *   - .codex/config.toml contains [mcp_servers.opencomms]?
- *   - marker version vs ctx.currentVersion?
- *
- * Both present -> installed (or outdated); neither -> absent; partial -> broken.
- * Capabilities stay honest: PULL only, no TUI push (never FULL).
- */
+/** Detection checks project MCP configuration; it does not prove host execution. */
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -144,7 +134,7 @@ export const codexAdapter: HostIntegration = {
     }
   },
   async uninstall(ctx: IntegrationContext): Promise<IntegrationReport> {
-    // Binding order (Reviewer R2): files first, marker last. Absent => ok:true
+    // Binding order: files first, marker last. Absent => ok:true
     // no-op before touching the marker. Removes ALL [mcp_servers.opencomms*]
     // sections (same cut rule as the CLI, so no orphan env block survives).
     const target = resolve(ctx.projectDir)

@@ -1,29 +1,8 @@
 /**
- * `opencomms agent` CLI (contract v0.2 §8, Platform).
- *
- * Thin HTTP client over the Orchestrator API on the loopback GUI server —
- * NEVER imports src/orchestrator/** (contract §8 rule: CLI consumes the same
- * API as the GUI). Verbs:
- *
- *   opencomms agent list     [--project <dir>] [--json]
- *   opencomms agent create --name <n> --host <h> --role <r> [--prompt <text>]
- *                          [--model <provider/model>] [--node <node_id>]
- *                          [--project <dir>] [--json]
- *   opencomms agent stop    <agent_id> [--force] [--json]
- *   opencomms agent restart <agent_id> [--json]
- *   opencomms agent status  <agent_id> [--json]
- *
- * Exit codes (contract v0.2 §8, adopted verbatim):
- *   0 ok · 1 generic failure (connection refused → hints the console may be
- *   down) · 2 CLI validation (pre-flight, no HTTP roundtrip) · 3 conflict
- *   (409) · 4 trust_denied (403) · 5 unknown (404) · 6 internal (500).
- * --json emits the raw API envelope verbatim (single line).
+ * Loopback client for the shared GUI agent API. Exit codes: 0 success,
+ * 1 connection/failure, 2 validation, 3 conflict, 4 denied, 5 missing, 6 internal.
  */
 
-import { readFileSync } from "node:fs"
-import { join, resolve } from "node:path"
-
-/** The GUI server's default port (opencomms gui). */
 const DEFAULT_PORT = 4919
 const BASE = `http://127.0.0.1:${process.env["OPENCOMMS_ORCH_API_PORT"] ?? DEFAULT_PORT}`
 
@@ -44,7 +23,6 @@ function flagValue(tokens: string[], name: string): string | undefined {
   return idx >= 0 ? tokens[idx + 1] : undefined
 }
 
-/** Map an HTTP status to the contract's exit code. */
 function exitCodeForStatus(status: number): number {
   if (status === 400 || status === 422) return 2
   if (status === 403) return 4
@@ -74,7 +52,6 @@ export interface AgentCommandDeps {
 
 let injectedDeps: AgentCommandDeps | null = null
 
-/** Test hook: inject fetch/base before calling runAgentCommand. */
 export function setAgentCommandDeps(deps: AgentCommandDeps | null): void {
   injectedDeps = deps
 }
@@ -97,7 +74,6 @@ async function callApi(
       signal: AbortSignal.timeout(30_000),
     })
   } catch (error) {
-    // Connection-level failure (server down): generic failure + hint.
     return {
       status: 0,
       payload: {
@@ -119,7 +95,6 @@ function jsonEnvelope(payload: ApiResponse): string {
   return JSON.stringify(payload)
 }
 
-/** Human renderer for the agents list (GET /api/orchestrator/agents). */
 function renderAgentsList(data: unknown): string {
   const agents = (data as { agents?: Array<Record<string, unknown>> })?.agents ?? []
   if (agents.length === 0) return "No agents."
@@ -134,7 +109,6 @@ function renderAgentsList(data: unknown): string {
   return lines.join("\n")
 }
 
-/** Human renderer for a single agent (GET /agents/{id} or mutation result). */
 function renderAgent(data: unknown): string {
   const a = data as Record<string, unknown>
   const fields: Array<[string, unknown]> = [
@@ -155,7 +129,6 @@ function renderAgent(data: unknown): string {
     .join("\n")
 }
 
-/** Pre-flight validation (exit 2 before any HTTP call). */
 function preValidate(sub: string, tokens: string[]): { ok: true; positional?: string } | { ok: false; usage: string } {
   switch (sub) {
     case "list":
@@ -192,11 +165,7 @@ function preValidate(sub: string, tokens: string[]): { ok: true; positional?: st
   }
 }
 
-/**
- * Entry: `opencomms agent <sub> ...`. Async (HTTP). The GUI server's project
- * selection drives which orchestrator store is behind the API; --project is
- * accepted for CLI symmetry (the console resolves it from its workspace).
- */
+/** The GUI server owns project selection; --project is accepted for CLI symmetry. */
 export async function runAgentCommand(tokens: string[], projectDirFlag?: string): Promise<AgentCliResult> {
   const sub = (tokens[0] ?? "").toLowerCase()
   void projectDirFlag // the loopback API resolves the project server-side

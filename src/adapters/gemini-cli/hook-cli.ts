@@ -1,4 +1,3 @@
-/** Documented Gemini SessionStart/BeforeAgent context injection. */
 import { readFileSync } from "node:fs"
 import { hookFromInput, type ClaudeHookInput } from "../claude-code/hooks.js"
 

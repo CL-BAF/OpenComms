@@ -1,10 +1,4 @@
-/**
- * Core host-neutrality guard (Reviewer Item 7).
- *
- * Core must never contain host-specific concepts: no OpenCode, no parentID,
- * no Claude/Codex/ChatGPT. Enforced by grep so a future host hack cannot
- * slip into core silently.
- */
+/** Keep host-specific adapters out of the shared core. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -49,17 +43,14 @@ test("host capability profiles cover every supported host and are internally con
   }
   const { HOST_CAPABILITY_PROFILES } = profiles
   for (const [host, caps] of Object.entries(HOST_CAPABILITY_PROFILES)) {
-    // A host claiming push delivery must observe lifecycle events.
     if (caps.promptDelivery) {
       assert.ok(caps.lifecycleEvents || host === "opencode", `${host} claims push without lifecycle observation`)
     }
-    // Role injection enum values only.
     assert.ok(
       ["system-prompt", "hook-boundary", "none"].includes(caps.roleInjection),
       `${host} has invalid roleInjection ${String(caps.roleInjection)}`,
     )
   }
-  // Reference surfaces all present.
   for (const required of ["opencode", "claude-code", "claude-desktop", "codex", "chatgpt"]) {
     assert.ok(HOST_CAPABILITY_PROFILES[required], `missing capability profile: ${required}`)
   }

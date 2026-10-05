@@ -1,16 +1,3 @@
-﻿/**
- * OpenComms â€” core types.
- *
- * All persisted state lives under `<project>/.opencomms/` and is written
- * atomically (temp file + rename) so a crash mid-write can never corrupt a
- * channel definition or a message queue.
- *
- * Roles are an OPEN vocabulary: any short human-readable label ("Builder",
- * "Reviewer", "Architect", ...). They are validated structurally by
- * normalizeRole and kept unique per channel (one role per member), not drawn
- * from a fixed union. Channels support N members up to max_members.
- */
-
 export const STATE_DIR = ".opencomms"
 export const STATE_FILE = "state.json"
 export const SCHEMA_VERSION = 2
@@ -31,11 +18,7 @@ export const MIGRATION_MARKER = "MIGRATED_FROM_V1"
 
 /** Default per-channel membership cap (channels hold N members). */
 export const DEFAULT_MAX_MEMBERS = 8
-/**
- * HARD CEILING for max_members (work order: "never hardcode 8 deep into
- * the broker"). 8 is the DEFAULT; larger channels may be configured up to
- * this ceiling at create/resume time.
- */
+/** Hard membership ceiling; DEFAULT_MAX_MEMBERS remains the default. */
 export const MAX_MEMBERS_CEILING = 32
 
 /** Legacy default roles, kept for docs/fallbacks only â€” not a closed set. */
@@ -124,7 +107,7 @@ export interface Member {
 export type DeliveryMode = "push" | "spawn_push" | "pull" | "poll" | "managed_thread" | "unsupported"
 
 /**
- * Per-MEMBER endpoint capabilities (work order 2026-09-08): what the
+ * Per-MEMBER endpoint capabilities: what the
  * member's native endpoint can actually do. Providers are endpoints only —
  * a conversation mixes push/pull/resumable members freely, and these
  * capabilities belong to the member, never to the conversation.
@@ -235,7 +218,7 @@ export interface Channel {
   /** Chess-clock timer: tracks cumulative active time per member. */
   timer: ChannelTimer
   /**
-   * Conversation budgets (work order 2026-09-08): autonomous-run safeguards,
+   * Conversation budgets: autonomous-run safeguards,
    * all optional (null = unlimited). Backfilled for old channels.
    *  - max_runtime_ms: conversation age cap; sends rejected past it.
    *  - max_delivered_messages: lifetime cap on handed-over envelopes
@@ -318,7 +301,7 @@ export interface SendInput {
   /** Deliver to every other member of the channel instead of one target. */
   broadcast?: boolean
   /**
-   * One-sentence session purpose (work order: session description). The
+   * One-sentence session purpose (session description). The
    * FIRST responding agent sets it; max 140 chars, newlines stripped,
    * markdown discouraged by length. Set-once: later values are ignored.
    */

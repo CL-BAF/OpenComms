@@ -1,16 +1,4 @@
-/**
- * M4.6 MCP principal + orchestrator-tool tests.
- *
- * Code-gate conditions (Reviewer):
- *   A. TOOL-LIST FILTERING AT CALL TIME — a member-class pin invoking an
- *      operator tool gets a typed denial AT DISPATCH (not just hidden
- *      from the listing).
- *   B. --ADMIN GATE — operator requires BOTH the admin flag AND the
- *      acting identity; both deny paths asserted.
- *   C. human-present TOKEN FLOW — token arrives as the tool arg, flows
- *      through the existing OrchestratorApi gate, and the RAW token never
- *      lands in any response/payload (no-log gate over MCP).
- */
+/** Check authorization at dispatch and keep approval tokens out of responses and logs. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -41,9 +29,7 @@ test("M4.6 principal: pin class read + member default (additive backfill)", () =
   const dir = projectWithPin("operator")
   try {
     assert.equal(pinClass(dir, "member_test01"), "operator")
-    // Absent pin file => legacy "member" (backfill).
     assert.equal(pinClass(dir, "member_absent"), "member")
-    // Corrupt pin file => "member" (fail closed to the legacy class).
     writeFileSync(join(dir, ".opencomms", "pins", "member_bad.json"), "{broken", "utf8")
     assert.equal(pinClass(dir, "member_bad"), "member")
   } finally {
@@ -63,7 +49,6 @@ test("M4.6 condition A: member-class pin invoking an operator tool is DENIED at 
     })
     assert.equal(auth.ok, false)
     if (!auth.ok) assert.match(auth.message, /operator-class/)
-    // Same identity WITH --admin is allowed (the flag is the operator proof).
     const withAdmin = authorizePrincipal({
       projectDir: dir,
       env: ENV,
@@ -80,7 +65,6 @@ test("M4.6 condition A: member-class pin invoking an operator tool is DENIED at 
 test("M4.6 condition B: --admin gate has both deny paths (no flag / no operator identity)", () => {
   const dir = projectWithPin("member")
   try {
-    // Deny path 1: member-class pin WITHOUT --admin => operator tools denied.
     const noAdmin = authorizePrincipal({
       projectDir: dir,
       env: ENV,
@@ -89,10 +73,6 @@ test("M4.6 condition B: --admin gate has both deny paths (no flag / no operator 
       state: { channels: {} },
     })
     assert.equal(noAdmin.ok, false)
-    // Deny path 2: --admin set, but the acting identity is still member-class
-    // and the required class exceeds it (the flag alone is not enough when
-    // required=human-present+operator semantics apply; here operator flag
-    // upgrades the class — asserted to make the upgrade EXPLICIT).
     const adminUpgrade = authorizePrincipal({
       projectDir: dir,
       env: ENV,
@@ -132,18 +112,14 @@ test("M4.6 condition C: human-present token flows through the OrchestratorApi ga
     const tools = orchestratorTools(api, false)
     const approve = tools.find((t) => t.name === "opencomms_node_approve")
     assert.ok(approve, "node_approve missing from the tool registry")
-    // Missing token => the existing OrchestratorApi gate denies.
     const noToken = await approve.execute({ node_id: "node_x" })
     assert.ok(noToken.isError)
     assert.match(noToken.text, /Owner approval required/)
-    // Wrong token => same denial.
     const wrong = await approve.execute({ node_id: "node_x", confirm_token: "wrong" })
     assert.ok(wrong.isError)
     assert.match(wrong.text, /Owner approval required/)
-    // The RAW token never lands in any tool output.
     const withToken = await approve.execute({ node_id: "node_x", confirm_token: token })
     assert.ok(!withToken.text.includes(token), "raw confirm token leaked into the tool output")
-    // The audit trail records the denial, never the token.
     const events = store.load().events
     assert.ok(events.some((e) => e.type === "trust_denied"))
     assert.ok(!events.some((e) => JSON.stringify(e).includes(token)))
@@ -173,14 +149,12 @@ test("M4.6 registry: tool list is identity-scoped (member pin sees no operator t
       projectId: () => null,
     } as ConstructorParameters<typeof OrchestratorApi>[0]
     const api = new OrchestratorApi(deps)
-    // Member-class instance (admin=false): NO operator tools in the list.
     const memberTools = orchestratorTools(api, false).map((t) => t.name)
     assert.ok(
       memberTools.includes("opencomms_node_approve"),
       "human-present tools are always listed (token-gated at call)",
     )
     assert.ok(!memberTools.includes("opencomms_agent_create"), "member-class instance must not see operator tools")
-    // Operator-class instance (--admin): operator tools present.
     const operatorTools = orchestratorTools(api, true).map((t) => t.name)
     assert.ok(operatorTools.includes("opencomms_agent_create"))
     assert.ok(operatorTools.includes("opencomms_task_assign"))
@@ -190,10 +164,7 @@ test("M4.6 registry: tool list is identity-scoped (member pin sees no operator t
 })
 
 test("M4.6 wiring: the production MCP server registry includes the orchestrator tools (P2 wiring gap)", async () => {
-  // The P2: orchestratorTools() was only invoked in tests — the production
-  // serve() registered only the 16 channel tools. Verify the WIRING by
-  // spawning the real MCP server, requesting tools/list over its stdio,
-  // and asserting the orchestrator tools are IN the registry.
+  // Probe the production registry over stdio rather than calling the tool factory directly.
   const dir = projectWithPin("member")
   try {
     const { spawn } = await import("node:child_process")

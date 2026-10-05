@@ -1,32 +1,13 @@
 /**
- * Orchestrator API (M1) — loopback HTTP handlers for contract v0.3
- * (docs/orchestrator-api.md). Runs IN-PROCESS inside the `opencomms gui`
- * server (ADR-0005 leaning; Tauri sidecar argv unchanged).
- *
- * M1 scope (Lead tasking): local node only; agents create/status/stop/
- * restart-stub; designated:"lead" one-per-project enforcement; runtimes
- * listing; trust store + confirm-token gate; additive SSE topic wiring is
- * provided by the feed (events.ts) and the server broadcast.
- *
- * Security invariants (Reviewer checklist, binding):
- *  - approve/revoke REQUIRE the owner confirm token (wrong/absent => 403 +
- *    audit event). Never readable via GET. Agent-facing tools have no path
- *    to these routes.
- *  - REDACTION BY VALUE: the serve password (and any token-bearing string)
- *    is replaced with "[REDACTED]" in every persisted record — matched
- *    literally, never by flag name. A unit test asserts the password value
- *    appears in NO persisted field.
- *  - Spawn commands are argv-only (no shell); secrets travel in env only.
- *  - The serve password never enters role prompts, logs, or the API surface.
+ * Project-local API shared by HTTP and native transports.
+ * Owner trust actions require the confirmation token; read APIs never return it.
+ * Persisted fields redact secret values. Processes use argv and env-only secrets.
  */
 
-import { mkdirSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { randomBytes, createHash } from "node:crypto"
 import {
-  localNodeIdFor,
   newAgentId,
-  newConfirmToken,
   newNodeId,
   newPairingCode,
   PAIRING_CODE_TTL_MS,
@@ -38,9 +19,8 @@ import {
   type OrchestrationEvent,
 } from "./state.js"
 import { listEvents, type OrchestratorFeed } from "./events.js"
-import type { AgentRuntime, SpawnRequest } from "./runtime.js"
-import { registeredRuntimes } from "./runtime.js"
-import { createOpencodeRuntime, parseModel, resolveOpencodeBinary } from "./runtimes/opencode.js"
+import type { AgentRuntime } from "./runtime.js"
+import { createOpencodeRuntime, resolveOpencodeBinary } from "./runtimes/opencode.js"
 import { createAcpRuntime } from "./runtimes/acp.js"
 import { createManagedWorktree } from "./worktrees.js"
 import { managedCapabilities, requiredCapabilityIssue } from "./managed-capabilities.js"
@@ -62,7 +42,6 @@ import {
 } from "./tasks.js"
 import { MAX_TEAM_TEMPLATES, newTeamTemplateId, validTeamTemplate, type TeamTemplate } from "./team-templates.js"
 
-/** Envelope contract v0.0: { ok: true, data } / { ok: false, message }. */
 export interface ApiResult {
   ok: boolean
   message: string
@@ -70,7 +49,6 @@ export interface ApiResult {
   data?: unknown
 }
 
-/** Default per-agent worktree root (Decision Log 2026-09-11, Option A). */
 export function agentWorktreeDir(projectDir: string, agentId: string): string {
   return join(projectDir, ".opencomms", "agents", agentId, "worktree")
 }
@@ -92,17 +70,9 @@ export interface OrchestratorApiDeps {
   runtimes?: Record<string, () => { runtime: string; host: string }>
   turnTimeoutMs?: number
   pollMs?: number
-  /**
-   * Injected runtime factory (tests pass a fake; production defaults to the
-   * real opencode runtime). Keeps the create/stop paths testable without a
-   * live serve while the production behavior stays unchanged.
-   */
+  /** Runtime factory override for tests and configured hosts. */
   createRuntime?: () => AgentRuntime
-  /**
-   * Channel-engine surface for task assignment (M2 §9b-3): the orchestrator
-   * sends AS the operator session via the SAME engine mutation path as any
-   * other send. The GUI wiring supplies the real engine fns; tests inject.
-   */
+  /** Task dispatch uses the operator send path and existing engine invariants. */
   loadChannelEngineState: () => {
     queues?: Record<string, string[]>
     messages: Record<
@@ -127,11 +97,10 @@ export interface OrchestratorApiDeps {
     senderSessionId: string,
   ) => { ok: boolean; message: string }
   saveChannelEngineState: (state: unknown) => void
-  /** M3 CA factory (tests inject; production derives from projectDir). */
+  /** CA override; production derives it from projectDir. */
   ca?: () => NodeCertificateAuthority
 }
 
-/** Validation failure shape (contract §6: 400/403/404/409/500). */
 const fail = (message: string): ApiResult => ({ ok: false, message })
 const pass = <T>(message: string, data?: T): ApiResult => ({ ok: true, message, data })
 
@@ -175,19 +144,8 @@ function containsCredential(value: unknown, secret: string): boolean {
 }
 
 /**
- * M4 §9c-6 / condition C — the ONE server-side enforcement point for
- * remote actions (M1 pattern: server-side, never GUI-side).
- *
- * Ordered checks, each failure naming WHICH check failed (audit evidence):
- *   1. node-approved  — remote, approval set, not revoked, in approved list
- *   2. credential-valid — expiry stamped AND in the future (composed with
- *      the CA isRevoked gate, which the transport also enforces)
- *   3. grant-present — node.grants contains the action's grant label
- *
- * Design: docs/orchestrator-design.md §9c-6; Reviewer's four deny cases
- * (unapproved / expired / revoked / ungranted) + pass case are test-
- * asserted. The channel engine stays node-blind — this gate lives only in
- * the orchestrator layer.
+ * Remote actions require owner approval, unexpired credentials, CA revocation checks
+ * when supplied, and the action grant. The channel engine remains node-blind.
  */
 export type RemoteAction = "spawn" | "tasks"
 
@@ -198,7 +156,7 @@ export function assertRemoteActionAllowed(
 ): { ok: true } | { ok: false; reason: string } {
   const grantLabel = input.action === "spawn" ? "spawn" : "tasks"
   const node = state.nodes.find((n) => n.id === input.node_id)
-  // 1. node-approved
+
   if (!node || node.kind !== "remote") return { ok: false, reason: "node not approved (unknown or not a remote node)" }
   if (node.approved_at === null || node.approved_by !== "owner") {
     return { ok: false, reason: "node not approved (owner approval missing or revoked)" }
@@ -207,10 +165,7 @@ export function assertRemoteActionAllowed(
     return { ok: false, reason: "node not approved (not in the approved list)" }
   }
   if (node.status === "offline") return { ok: false, reason: "node not approved (node offline/revoked)" }
-  // 2. credential-valid — BOTH layers compose (Reviewer code-gate): the
-  //    timestamp check here AND the CA's load-bearing isRevoked gate. The
-  //    CA is injected when the caller has it (api paths always do); a
-  //    caller without the CA gets the timestamp layer only.
+  // Expiry and CA revocation compose; callers without a CA can only check expiry.
   if (typeof node.credential_expires_at !== "number") {
     return { ok: false, reason: "credential invalid (no issued certificate)" }
   }
@@ -220,7 +175,7 @@ export function assertRemoteActionAllowed(
   if (deps.ca && deps.ca.isRevoked(node.id)) {
     return { ok: false, reason: "credential invalid (certificate revoked)" }
   }
-  // 3. grant-present
+
   if (!node.grants.includes(grantLabel)) {
     return { ok: false, reason: `grant missing ("${grantLabel}" not in node grants)` }
   }
@@ -300,22 +255,15 @@ export class OrchestratorApi {
     this.acpRuntime = undefined
   }
 
-  /** M3 CA accessor (lazy; production derives from projectDir). */
   private ca(): NodeCertificateAuthority {
     return this.deps.ca ? this.deps.ca() : new NodeCertificateAuthority(this.deps.projectDir)
   }
 
-  /**
-   * M3: the node's public key PEM from its pairing claim. The real daemon
-   * transport carries the PEM in the claim body; the skeleton derives a
-   * stable per-node keypair placeholder ONLY when no key was provided
-   * (tests). Production claims MUST carry nodePublicKeyPem — enforced by
-   * the fingerprint pinning below.
-   */
+  /** Pairing must supply the public key; missing keys fail certificate issuance. */
   private nodePublicPem(target: { id: string; name: string }): string {
     const state = this.deps.loadOrchestrator()
     void state
-    // Stored by claimPairingCode when the daemon provided it.
+
     const stored = (this.nodeClaimedKeys as Map<string, string>).get(target.id)
     return stored ?? ""
   }
@@ -348,10 +296,7 @@ export class OrchestratorApi {
         code: "unsupported",
       }
     }
-    // Catalog cache: detect() shells `opencode models` ONCE per runtime
-    // instance (30s timeout) and parses provider/model lines; the configured
-    // serve pin is surfaced as a dedicated entry so the dialog can show the
-    // verified default first.
+    // Detection caches the catalogue; expose the verified configured pin first.
     const runtime = this.deps.createRuntime
       ? this.deps.createRuntime()
       : createOpencodeRuntime({
@@ -482,8 +427,7 @@ export class OrchestratorApi {
       (n) => n.id === (typeof body["node_id"] === "string" ? body["node_id"] : state0.local_node_id),
     )
     if (!node) return fail(`Unknown node "${String(body["node_id"] ?? "")}".`)
-    // M4 §9c-6 / condition C: a REMOTE spawn passes the server-side grant
-    // check BEFORE any dispatch (ordered checks, 403 + audit on failure).
+    // Check remote authorization before dispatch.
     if (node.kind === "remote") {
       const grantCheck = assertRemoteActionAllowed(
         state0,
@@ -510,10 +454,7 @@ export class OrchestratorApi {
         "Remote managed creation is unavailable: this build has no authenticated remote runtime dispatch. No local agent was created.",
       )
     }
-    // Contract v0.3 §9: exactly ONE designated lead per project, immutable.
-    // Model pinning is binding (M0 spike evidence): invalid/missing pins are
-    // rejected unless the operator explicitly relies on the configured serve
-    // model (OPENCOMMS_ORCH_SERVE_MODEL), which detect() has verified.
+    // One immutable lead per project. Model pins must be explicit or verified in configuration.
     const requestedModel = typeof body["model"] === "string" ? body["model"].trim() : undefined
     const configuredModel = this.deps.serveModel()
     if (runtimeId === "acp" && requestedModel)
@@ -534,8 +475,7 @@ export class OrchestratorApi {
       if (!pin) return fail('Configured model must be "provider/model".')
     }
 
-    // Provider config: inline config content is scanned for the password
-    // value BEFORE it can reach any record (Reviewer item 1).
+    // Reject inline provider config containing the password before persistence.
     const providerConfig =
       body["provider_config"] && typeof body["provider_config"] === "object"
         ? (body["provider_config"] as Record<string, unknown>)
@@ -624,8 +564,7 @@ export class OrchestratorApi {
         operation_id: operationId,
         reused: true,
       })
-    // Real runtime spawn AFTER the record is durably "starting" (crash-safe:
-    // a lost spawn leaves a stale row the reconcile path marks honestly).
+    // Persist starting before spawn so an interrupted launch remains visible.
     if (isolatedWorktree) {
       try {
         createManagedWorktree(this.deps.projectDir, spawnedId.worktree)
@@ -714,10 +653,7 @@ export class OrchestratorApi {
     }
     if (agent.status === "stopped") return pass(`Agent ${agent.name} is already stopped.`)
     const runtime = this.runtimeForAgent(agent)
-    // M2 real stop (design §9b-1): graceful abort → session-level stop. The
-    // shared serve child is NEVER touched here — killing it would stop ALL
-    // agents on the node; orphan prevention (Review priority) = the stop
-    // path asserts exactly one abort and never releases the serve.
+    // Abort only this session; killing the shared serve would stop every agent.
     let stopDetail = "no live session (row was not running)"
     if (
       agent.host_session_id &&
@@ -755,7 +691,7 @@ export class OrchestratorApi {
     return pass(`Agent ${agent.name} stopped.`, { detail: stopDetail })
   }
 
-  /** POST /api/orchestrator/agents/restart — REAL lifecycle (M2, design §9b-1). */
+  /** POST /api/orchestrator/agents/restart */
   async restartAgent(body: Record<string, unknown>): Promise<ApiResult> {
     const agentId = typeof body["agent_id"] === "string" ? body["agent_id"].trim() : ""
     if (!agentId) return fail("agent_id is required.")
@@ -766,9 +702,7 @@ export class OrchestratorApi {
       return fail("The designated Lead cannot be restarted; the owner runs the built-in Lead.")
     }
     const runtime = this.runtimeForAgent(agent)
-    // Identity adoption FIRST (Review priority: restart vs duplicate
-    // identities): session ids persist across serve restarts, so resume is
-    // the happy path and the host_session_id stays UNCHANGED.
+    // Resume the recorded identity before an explicitly authorized replacement.
     const adopted = agent.host_session_id ? await runtime.resume(agent) : null
     if (adopted?.ok) {
       await this.deps.withLock(() => {
@@ -903,9 +837,7 @@ export class OrchestratorApi {
         target.enrolled_at = Date.now()
         if (!state.trust.approved_node_ids.includes(nodeId)) state.trust.approved_node_ids.push(nodeId)
         state.trust.pending_pairing_requests = state.trust.pending_pairing_requests.filter((r) => r.node_id !== nodeId)
-        // Cert issuance is bound to approval (design §9c-1 step 3): the cert
-        // record (fingerprint/expiry) is stamped here; the CERT itself is
-        // delivered to the node at its next claim-with-credential step.
+        // Approval binds certificate issuance and records its fingerprint and expiry.
         if (target.fingerprint) {
           const cert = this.ca().issue({
             node_id: target.id,
@@ -924,9 +856,7 @@ export class OrchestratorApi {
           })
         }
       } else {
-        // M3 §9c-5 revoke semantics (no orphans): record each remote agent's
-        // state at revoke time for the audit trail; mark-lost (failed +
-        // reason), never silently delete.
+        // Preserve remote agent records and mark them failed at revocation.
         const agentsOnNode = state.agents.filter((a) => a.node_id === nodeId)
         for (const agent of agentsOnNode) {
           agent.status = "failed"
@@ -936,13 +866,11 @@ export class OrchestratorApi {
         target.approved_by = null
         target.credential_expires_at = null
         state.trust.approved_node_ids = state.trust.approved_node_ids.filter((id) => id !== nodeId)
-        // Binding B (load-bearing): revoke the CERT immediately — a revoked
-        // cert cannot reconnect even before expiry.
+        // Revoke immediately so the certificate cannot reconnect before expiry.
         this.ca().revoke(nodeId)
         target.fingerprint = null
         target.grants = []
-        // §9c-5 audit: agent states at revoke time (orphan-prevention
-        // evidence: nothing was silently deleted).
+        // Retain agent states at revocation in the audit trail.
         pushEvent(state, {
           kind: "orchestration",
           type: "revoke_agents_marked",
@@ -967,14 +895,8 @@ export class OrchestratorApi {
   }
 
   /**
-   * M5 (1): the append-only AUDIT LOG — the orchestration events ring
-   * exposed as an owner-only surface (confirm-token gated). Covers trust
-   * events (approve/revoke/denials), spawn/stop/restart, task assignment,
-   * cert issuance, and the condition-C deny cases. The ring is capped
-   * (MAX_ORCHESTRATOR_EVENTS); entries are never mutated after append —
-   * append-only by construction. Secrets never appear: redaction was
-   * enforced at write time (spawn_cmd_redacted, hash-only pairing codes,
-   * trust token never stored in events).
+   * Owner-token-gated view of the capped audit ring. Events are appended, never edited;
+   * secret redaction happens before persistence.
    */
   auditLog(body: Record<string, unknown>): ApiResult {
     const token = typeof body["confirm_token"] === "string" ? body["confirm_token"] : ""
@@ -993,10 +915,8 @@ export class OrchestratorApi {
   }
 
   /**
-   * M3 trust core (design §9c-1): generate a one-time pairing code. The
-   * RAW code is returned EXACTLY ONCE (shown to the operator on the
-   * coordinator GUI/CLI, entered on the node out-of-band); the store keeps
-   * only the hash. The confirm token is required (owner action).
+   * Return a one-time pairing code to the owner; persist only its hash.
+   * The node receives the raw code out of band.
    */
   async createPairingCode(body: Record<string, unknown>): Promise<ApiResult> {
     const token = typeof body["confirm_token"] === "string" ? body["confirm_token"] : ""
@@ -1054,16 +974,13 @@ export class OrchestratorApi {
   }
 
   /**
-   * M3 §9c-1 step 2: the node daemon presents the code + its CSR-derived
-   * fingerprint. A VALID, UNEXPIRED, UNUSED code creates the pending node
-   * row (pending_approval); approval still requires the owner's
-   * approve/revoke call. The raw code is never stored; codes are one-time.
+   * A valid, unused pairing code creates a pending node.
+   * Owner approval remains required before issuing credentials.
    */
   async claimPairingCode(body: Record<string, unknown>): Promise<ApiResult> {
     const code = typeof body["pairing_code"] === "string" ? body["pairing_code"].trim().toUpperCase() : ""
     const platform = typeof body["platform"] === "string" ? body["platform"].trim() : process.platform
-    // M3 §9c-3: the daemon generates its keypair LOCALLY and sends only the
-    // PUBLIC key. The private key never crosses the network (ADR-0001).
+    // Nodes send only their public key; the private key stays on the node.
     const nodePublicKeyPem = typeof body["node_public_key_pem"] === "string" ? body["node_public_key_pem"].trim() : ""
     if (!code) return fail("pairing_code is required.")
     if (!nodePublicKeyPem)
@@ -1141,11 +1058,8 @@ export class OrchestratorApi {
   }
 
   /**
-   * GET /api/orchestrator/agents/{id}/permissions (M2, design §9b-4).
-   * Trust boundary (Review priority): this surface is OPERATOR-ONLY —
-   * served from the GUI process behind the loopback + browser-surface
-   * guard; agent-facing tools never reach it. A null drain means the host
-   * exposes no permission API (honest "unsupported", never faked empty).
+   * Operator-only pending permissions, guarded by the loopback/native boundary.
+   * Agent-facing MCP tools cannot call this surface.
    */
   async listPermissions(agentId: string): Promise<ApiResult> {
     const state = this.deps.loadOrchestrator()
@@ -1177,9 +1091,8 @@ export class OrchestratorApi {
   }
 
   /**
-   * POST /api/orchestrator/agents/{id}/permissions/{permissionID} — answers
-   * ONE pending prompt. Operator-only action (see listPermissions); the M1
-   * least-privilege spawn defaults still gate what the agent can request.
+   * Operator-only answer to one pending host permission.
+   * The host retains its permission policy.
    */
   async respondPermission(agentId: string, permissionId: string, body: Record<string, unknown>): Promise<ApiResult> {
     const response = body["response"]
@@ -1207,20 +1120,14 @@ export class OrchestratorApi {
     return result.ok ? pass(result.message) : fail(result.message)
   }
 
-  /** Sentinel stamping (Reviewer item 3): REAL project id when available. */
+  /** Use the host project id when available, otherwise the GUI sentinel. */
   projectIdForChannel(): string {
     return this.deps.projectId() ?? "gui-local-project"
   }
 
   /**
-   * POST /api/orchestrator/tasks/assign (M2, design §9b-3).
-   *
-   * Trust boundary (Review priority): the task body is UNTRUSTED content —
-   * it rides the EXISTING message engine as review_request semantics sent
-   * AS the operator session, framed identically to peer mail. The
-   * orchestrator is just another channel participant, never a privileged
-   * injection path: no new message type, no new delivery route, engine
-   * invariants (dedup, rate limit, hops, framing) apply unchanged.
+   * POST /api/orchestrator/tasks/assign. Untrusted content uses the existing operator
+   * review_request path, preserving framing, deduplication, rate and hop limits.
    */
   async assignTask(body: Record<string, unknown>): Promise<ApiResult> {
     const agentId = typeof body["agent_id"] === "string" ? body["agent_id"].trim() : ""
@@ -1288,8 +1195,7 @@ export class OrchestratorApi {
     }
     const agent = state.agents.find((a) => a.id === agentId)
     if (!agent) return fail(`Unknown agent "${agentId}".`)
-    // M4 §9c-6 / condition C: a task to an agent on a REMOTE node passes
-    // the server-side grant check BEFORE any dispatch.
+    // Check remote authorization before dispatch.
     const agentNode = state.nodes.find((n) => n.id === agent.node_id)
     if (agentNode && agentNode.kind === "remote") {
       const grantCheck = assertRemoteActionAllowed(
@@ -1820,7 +1726,6 @@ export class OrchestratorApi {
   }
 }
 
-/** Task ids mirror the agt_/node_ pattern (crypto randomBytes, Reviewer P3). */
 export function newTaskId(): string {
   return `tsk_${randomBytes(12).toString("hex")}`
 }

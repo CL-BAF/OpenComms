@@ -1,17 +1,3 @@
-﻿/**
- * OpenComms â€” core engine.
- *
- * Pure-ish logic over the persisted State. All functions are deterministic
- * and synchronous; the host adapter wraps them with its injected client
- * client for session lookups and delivery.
- *
- * Channels support N members (up to Channel.max_members) with an OPEN role
- * vocabulary: any short human-readable label, unique per channel. Messages
- * target one member (by session id or role label), all other members
- * (broadcast=true), or â€” on a two-member channel â€” the single peer by
- * omission, which preserves the classic Builder<->Reviewer flow verbatim.
- */
-
 import { createHash, randomUUID } from "node:crypto"
 import {
   DEFAULT_MAX_MEMBERS,
@@ -36,7 +22,6 @@ import {
   type PauseInput,
   type ResumeInput,
   type SendInput,
-  type SessionLifecycle,
   type State,
   type StatusInput,
   type StatusReport,
@@ -60,7 +45,6 @@ export const MAX_SESSION_DESCRIPTION = 140
  */
 export const MAX_RESUME_LADDER = 8
 
-/** Lifecycle guard shared by all mutating operations. */
 export function lifecycleRefusal(channel: Channel, op: string): string | null {
   if (channel.lifecycle === "active") return null
   const hint =
@@ -207,8 +191,6 @@ export function makeMember(
   }
 }
 
-// â”€â”€ Timer (chess clock, keyed by member session id) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
 /** Compute cumulative ms for a member, including the in-progress segment. */
 export function timerElapsed(timer: ChannelTimer, memberId: string, now: number = Date.now()): number {
   const base = timer.elapsed_ms[memberId] ?? 0
@@ -343,8 +325,6 @@ function resolveRecipients(
   return { recipients: [others[0]!] }
 }
 
-/** â”€â”€ Retention â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
 /**
  * Enforce the hard cap on persisted envelopes: newest MAX_PERSISTED_MESSAGES
  * survive, older envelopes are deleted along with their delivered_to entries,
@@ -376,15 +356,11 @@ function sweepSeenContent(channel: Channel, now: number): void {
   }
 }
 
-/** â”€â”€ Channel lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
-/** Optional int clamped into [min,max]; undefined/null/non-finite → fallback. */
 function clampOptionalInt(value: number | undefined | null, min: number, max: number, fallback: number): number {
   if (value === undefined || value === null || !Number.isFinite(value)) return fallback
   return Math.max(min, Math.min(max, Math.floor(value)))
 }
 
-/** Optional positive number clamped into [min,max]; undefined/null → null (unlimited). */
 function clampOptionalPositive(value: number | undefined | null, min: number, max: number): number | null {
   if (value === undefined || value === null || !Number.isFinite(value)) return null
   return Math.max(min, Math.min(max, Math.floor(value)))
@@ -514,7 +490,6 @@ export function createChannel(state: State, input: CreateInput): ToolResult {
       ? Math.max(2, Math.min(MAX_MEMBERS_CEILING, Math.floor(input.max_members)))
       : DEFAULT_MAX_MEMBERS
 
-  // Conversation safeguards (clamped to sane ranges; null = unlimited).
   const rateLimit = clampOptionalInt(input.rate_limit, 1, 1000, DEFAULT_RATE_LIMIT)
   const maxHops = clampOptionalInt(input.max_hops, 1, 50, DEFAULT_MAX_HOPS)
   const maxRuntime = clampOptionalPositive(input.budgets?.max_runtime_ms, 60_000, 30 * 24 * 60 * 60_000)
@@ -587,20 +562,12 @@ export function joinChannel(state: State, input: JoinInput): ToolResult {
   const lifecycle = lifecycleRefusal(channel, "join")
   if (lifecycle) return fail(lifecycle)
 
-  // Operator-created (or freshly resumed) sessions start EMPTY with a
-  // sentinel project id chosen by whichever surface made them (GUI/CLI/
-  // MCP each use a different one). The FIRST joining member ADOPTS the
-  // session: the channel inherits the joiner's project_id + worktree.
-  // SENTINEL ids ("*local-project") are labels meaning "some local project"
-  // — a sentinel on EITHER side cannot mismatch a real identity. The
-  // WORKTREE path stays STRICT for populated channels: that is the real
-  // cross-project anchor (sentinel joiners still resolve the same directory),
-  // so isolation is preserved and only the label scheme relaxed.
+  // The first member adopts an empty channel's identity. Sentinel project ids
+  // do not conflict with real ids, but populated channels still require an exact
+  // worktree match to preserve isolation.
   const sentinelJoin = isSentinelProjectId(input.project_id)
   if (channel.members.length === 0) {
-    // Empty session: the first joiner's REAL identity becomes the channel's
-    // identity (sentinel joiners leave the sentinel in place until a real
-    // identity lands). Worktree always adopts.
+    // A real project id replaces a sentinel; the worktree always adopts.
     if (!sentinelJoin) channel.project_id = input.project_id
     channel.worktree = input.worktree
   }
@@ -815,7 +782,7 @@ function queueRemovalNotices(
  * OPERATOR member removal (GUI / CLI backend surface): removes a member
  * from a session WITHOUT provider authorization checks — the operator is
  * the trusted local user, not an agent. Removes the OpenComms LINK ONLY;
- * external provider processes are never touched (work order: keep
+ * external provider processes are never touched (keep
  * "remove from OpenComms" separate from "terminate provider process").
  * Sender is recorded as "operator" in the system notices.
  */
@@ -929,8 +896,6 @@ export function kickChannel(state: State, input: KickInput): ToolResult {
   )
 }
 
-/** â”€â”€ Messaging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
 export function sendMessage(state: State, input: SendInput, senderSessionId: string): ToolResult {
   return enqueueMessage(state, input, senderSessionId, false)
 }
@@ -996,7 +961,6 @@ function enqueueMessage(state: State, input: SendInput, senderSessionId: string,
     return fail(`Rate limit exceeded on channel "${input.channel}" (${channel.rate_limit} messages per minute).`)
   }
 
-  // Expired dedup entries no longer block anything; sweep them opportunistically.
   sweepSeenContent(channel, now)
 
   // Repeated-content detection, scoped PER SENDER: two different members may
@@ -1035,8 +999,6 @@ function enqueueMessage(state: State, input: SendInput, senderSessionId: string,
     }
   }
 
-  // All validation passed â€” record the dedup marker and enqueue one envelope
-  // per resolved recipient.
   channel.seen_content[key] = now
 
   const envelopes: MessageEnvelope[] = []
@@ -1067,8 +1029,6 @@ function enqueueMessage(state: State, input: SendInput, senderSessionId: string,
     envelopes.push(envelope)
   }
 
-  // Session description (work order: set ONCE by the first responding
-  // agent; one short sentence; later values are ignored).
   let descriptionRecorded = false
   if (!channel.description && input.session_description && input.session_description.trim()) {
     const candidate = input.session_description.replace(/\s+/g, " ").trim().slice(0, MAX_SESSION_DESCRIPTION)
@@ -1098,8 +1058,6 @@ function enqueueMessage(state: State, input: SendInput, senderSessionId: string,
     session_description: descriptionRecorded ? channel.description : undefined,
   })
 }
-
-/** â”€â”€ Failure-path requeue (used by the plugin when a prompt fails) â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 export interface DeliveryPair {
   message_id: string
@@ -1140,7 +1098,7 @@ export function drainForDelivery(state: State, recipientSessionId: string): Deli
  * in either "delivered" or "in_flight" state (crash-window recovery uses the
  * same path as a thrown prompt).
  *
- * Retry cap (work order: retries must not create amplification loops): an
+ * Retry cap (retries must not create amplification loops): an
  * envelope whose attempts reached MAX_DELIVERY_ATTEMPTS dead-letters as
  * "failed" instead of re-queuing — it stays in the message record (visible
  * in history) but stops consuming delivery attempts.
@@ -1326,8 +1284,6 @@ export function drainQueue(
   return drained
 }
 
-// ── Session lifecycle: save / resume-as-new / delete ─────────────────────
-
 /**
  * Build the archive payload for a session (PURE — the caller persists via
  * ArchiveStore, then commits the purge). Saving is NOT deleting: everything
@@ -1420,7 +1376,6 @@ export function resumeSession(
   if (!baseName || !CHANNEL_NAME_PATTERN.test(baseName)) {
     return fail(`Invalid session name "${input.new_name ?? input.archive.name}".`)
   }
-  // Name ladder: base, base-r2 ... base-rN (bounded resume flooding).
   let name = baseName
   for (let i = 2; i <= 1 + MAX_RESUME_LADDER; i++) {
     if (!state.channels[name]) {
@@ -1519,7 +1474,6 @@ export function deleteSession(
     phase: "archive",
   })
 }
-/** â”€â”€ Read paths (membership-scoped) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 export function inbox(state: State, input: InboxInput): ToolResult {
   const channel = findChannel(state, input.channel)
@@ -1643,8 +1597,6 @@ export function status(state: State, input: StatusInput): ToolResult {
   return ok("OpenComms status.", report)
 }
 
-/** â”€â”€ Timer actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
 /**
  * Resolve ANY member (including the caller) by session id or role label.
  * Used by set_limit, where scoping the clock cap to yourself is legitimate.
@@ -1761,7 +1713,6 @@ export function timerAction(state: State, input: TimerInput): ToolResult {
       })
     }
     case "set_limit": {
-      // Number.isFinite also rejects NaN produced by coercing garbage input.
       if (
         input.limit_ms === null ||
         input.limit_ms === undefined ||
@@ -1772,7 +1723,6 @@ export function timerAction(state: State, input: TimerInput): ToolResult {
       }
       let limitMemberId: string | null = null
       if (input.to && input.to.trim()) {
-        // Limits may scope to any member, including the caller themself.
         const candidate = resolveAnyMember(channel, input.to)
         if (!candidate) {
           return fail(`No member matches "${input.to}" on channel "${input.channel}".`)
@@ -1795,8 +1745,6 @@ export function timerAction(state: State, input: TimerInput): ToolResult {
   }
 }
 
-/** â”€â”€ Session staleness / membership helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
 export function markStale(state: State, sessionId: string): void {
   for (const channel of Object.values(state.channels)) {
     const member = channel.members.find((m) => m.session_id === sessionId)
@@ -1804,7 +1752,6 @@ export function markStale(state: State, sessionId: string): void {
       member.stale = true
       member.stale_at = Date.now()
     }
-    // Stop the timer segment if the stale session was on the clock.
     if (channel.timer.active_member_id === sessionId && channel.timer.segment_started_at !== null) {
       foldRunningSegment(channel.timer, Date.now())
       channel.timer.active_member_id = null
@@ -1856,7 +1803,7 @@ export function resolveMemberByHostSession(state: State, host: string, hostSessi
   for (const channel of Object.values(state.channels)) {
     for (const member of channel.members) {
       if (member.host === host && member.host_session_id === hostSessionId) {
-        if (found !== null && found !== member.session_id) return null // ambiguous
+        if (found !== null && found !== member.session_id) return null
         found = member.session_id
       }
     }
@@ -1867,8 +1814,6 @@ export function resolveMemberByHostSession(state: State, host: string, hostSessi
 export function deliveryStatusOf(state: State, messageId: string): DeliveryStatus | null {
   return state.messages[messageId]?.delivery_status ?? null
 }
-
-/** â”€â”€ Untrusted-content framing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 /**
  * Frame a delivered peer message as untrusted DATA before it enters another

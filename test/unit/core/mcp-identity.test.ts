@@ -1,10 +1,4 @@
-﻿/**
- * MCP identity pinning tests (Reviewer Item 2 model).
- *
- * Contract: tool callers can never choose an identity; a wrong/absent pin
- * is denied fail-closed; two members on one machine cannot send as each
- * other; kicked members lose access immediately.
- */
+﻿/** Authorization uses pinned identity; caller-supplied session IDs cannot impersonate members. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -63,8 +57,7 @@ test("pinned member identity authorizes only that member", () => {
   assert.equal(ok2.ok, true)
   if (ok2.ok) assert.equal(ok2.member_id, "sess_mcp_reviewer")
 
-  // A caller claiming an unknown session id can NEVER authorize: identity
-  // comes from the pin, not from arguments â€” there is no argument to abuse.
+  // Unknown session arguments cannot override the pinned identity.
   const stranger = authorizeMember(state, { OPENCOMMS_MEMBER_ID: "sess_stranger" })
   assert.equal(stranger.ok, false)
 })
@@ -85,8 +78,7 @@ test("kicked member's pin stops granting access immediately (fail closed)", () =
 
 test("two members on one machine cannot send as each other (identity is per-instance)", () => {
   const state = seededState()
-  // The ONLY identity source is the instance's env pin. Simulating both
-  // instances: builder-env vs reviewer-env resolve to different member ids.
+  // Separate pinned instances resolve independently on the same machine.
   const asBuilder = authorizeMember(state, { OPENCOMMS_MEMBER_ID: "sess_mcp_builder" })
   const asReviewer = authorizeMember(state, { OPENCOMMS_MEMBER_ID: "sess_mcp_reviewer" })
   assert.equal(asBuilder.ok && asReviewer.ok, true)

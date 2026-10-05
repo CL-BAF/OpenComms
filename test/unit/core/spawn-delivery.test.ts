@@ -1,11 +1,4 @@
-/**
- * Spawn-push delivery tests.
- *
- * Covers the argv contract for the documented CLI resume APIs (argv array,
- * message as the LAST element, NO shell), the fail-closed gating (mode,
- * binding, host support), and the two-phase delivery flow with a fake
- * spawner: drain → spawn → commit; failure → FIFO requeue.
- */
+/** Injected processes verify argv-only resume, acceptance commits and FIFO retry. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -150,7 +143,6 @@ test("deliverViaSpawn failure: CLI error requeues in FIFO order + records error"
 
   assert.equal(outcome.status, "failed")
   assert.equal(spawned.length, 1)
-  // FIFO restored: both messages pending again, original order.
   assert.deepEqual(
     (state.queues["sess_spawn_target"] ?? []).map((id) => state.messages[id]!.content),
     ["m1", "m2"],
@@ -252,8 +244,6 @@ test("codex member spawn uses codex exec resume argv", async () => {
 })
 
 test("join with spawn_push flag records spawn_push delivery mode (MCP schema)", async () => {
-  // Schema-level check: the tool schema exposes spawn_push and the mode
-  // round-trips through the engine. (Full MCP flow covered in mcp tests.)
   const state = emptyState()
   const created = createChannel(state, {
     channel: "spx",
@@ -279,8 +269,6 @@ test("join with spawn_push flag records spawn_push delivery mode (MCP schema)", 
   assert.equal(joined.ok, true)
   assert.equal(state.channels["spx"]!.members[1]!.delivery_mode, "spawn_push")
 })
-
-// ── P2-1: Windows npm-shim handling (command-template override) ──
 
 test("parseCommandTemplate: quote-aware split, no shell semantics", () => {
   assert.deepEqual(parseCommandTemplate("node C:\\tools\\cli.js"), ["node", "C:\\tools\\cli.js"])
@@ -344,17 +332,13 @@ test("P2-1: spawn failure with EINVAL carries the actionable shim hint", async (
   assert.equal(outcome.status, "failed")
   assert.match(outcome.detail, /EINVAL/)
   assert.match(outcome.detail, /OPENCOMMS_CODEX_BIN/)
-  // The failure is persisted in state.errors (visible via opencomms_status).
   assert.ok(
     (state.errors ?? []).some((e) => e.message.includes("Spawn delivery") && e.message.includes("EINVAL")),
     "persisted error recorded",
   )
   assert.equal(errors.length, 0, "driver delegates persistence to state.errors for spawn failures")
-  // FIFO preserved after the failed spawn.
   assert.equal((state.queues[member.session_id] ?? []).length, 1)
 })
-
-// ── P2-2: argv size guard ──
 
 test("P2-2: oversized batch refused BEFORE draining; queue untouched; no spawn", async () => {
   const state = emptyState()
@@ -376,7 +360,6 @@ test("P2-2: oversized batch refused BEFORE draining; queue untouched; no spawn",
   for (const m of Object.values(state.messages)) assert.equal(m.delivery_status, "pending", "not drained")
   assert.ok(errors.some((e) => e.includes("spawn argv limit") && e.includes("switch this member to pull")))
 
-  // Repeat attempt: no duplicate error spam (guard dedups per message id).
   const outcome2 = await deliverViaSpawn(deps, member)
   assert.equal(outcome2.status, "skipped")
   assert.equal(errors.filter((e) => e.includes("spawn argv limit")).length, 1)

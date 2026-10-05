@@ -1,18 +1,3 @@
-/**
- * OpenCode adapter (M1): wraps the EXISTING installer, never rewrites it.
- *
- * Detection artifacts (project scope):
- *   - <project>/.opencode/plugins/plugin.js present?
- *   - opencode.json(.jsonc) "plugin" array contains ".opencode/plugins/plugin.js"?
- *   - .opencomms/integration.json marker version vs ctx.currentVersion?
- *
- * Mapping:
- *   both present            -> installed (or outdated when marker < current)
- *   registered but missing  -> broken (partial install)
- *   file present, unregistered -> broken (registration missing)
- *   neither                 -> absent
- */
-
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { join, resolve, dirname, basename } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -52,10 +37,7 @@ function readConfig(projectDir: string): {
   } catch (error) {
     return { path: existing, parsed: null, rawError: `cannot read ${basename(existing)}: ${(error as Error).message}` }
   }
-  // String-aware comment stripping shared with the installer (Reviewer
-  // P2-6): the adapter must parse identically to install-opencode.ts, so the
-  // scanner lives in exactly one place. Only .jsonc is stripped — naive //
-  // stripping corrupts "$schema": "https://..." URLs in .json.
+  // Share the installer's JSONC parser; naive comment stripping corrupts URLs.
   let text = raw
   if (existing.endsWith(".jsonc")) {
     text = stripJsoncComments(text)
@@ -142,7 +124,6 @@ async function detectOpencode(ctx: IntegrationContext): Promise<IntegrationDetec
     if (!registered) issues.push("plugin file present but not registered in opencode.json (registration missing)")
     return { status: "broken", installedVersion: marker, currentVersion: ctx.currentVersion, details, issues }
   }
-  // Both artifacts present — marker decides installed vs outdated.
   if (marker && compareVersions(marker, ctx.currentVersion) < 0) {
     issues.push(`outdated marker ${marker} < ${ctx.currentVersion} (update required)`)
     return { status: "outdated", installedVersion: marker, currentVersion: ctx.currentVersion, details, issues }
@@ -227,7 +208,7 @@ export const opencodeAdapter: HostIntegration = {
     }
   },
   async uninstall(ctx: IntegrationContext): Promise<IntegrationReport> {
-    // Binding order (Reviewer R2): files first, marker last. Validate BEFORE
+    // Binding order: files first, marker last. Validate BEFORE
     // any mutation (parse-before-remove, same rule as parse-before-copy); the
     // marker is removed ONLY after the full removal succeeded, so
     // runGuarded's rollback can never resurrect a marker whose artifacts are
@@ -293,7 +274,6 @@ export const opencodeAdapter: HostIntegration = {
       }
     }
 
-    // opencode.json(.jsonc) plugin entry, via the SAME parse path as install.
     if (cfg.parsed) {
       const field = cfg.parsed["plugin"]
       if (typeof field === "string" && field === OPENCODE_PLUGIN_REL) {

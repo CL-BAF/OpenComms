@@ -1,17 +1,4 @@
-/**
- * M1 core-abstraction tests (+ R1 hardening).
- *
- * Covers: manager register/list, unknown-id handling, adapter-throw
- * resilience, versioning fresh write / malformed -> null / per-id update
- * preserves other ids / atomic rename, compareVersions (incl. leading-v),
- * and the manager update dispatcher (absent -> install, broken -> repair,
- * marker drift -> update, installed-but-marker-absent -> adoption update,
- * installed-and-current -> strict no-op). R1 additions: parallel installs
- * under the StateStore lock (no lost markers), failure rollback (ok:false
- * never leaves a success stamp), and one real-adapter scenario (corrupt
- * .claude/settings.json via the real claude-code adapter — skipped when
- * dist is not built). Otherwise mocks only; never touches gui/ files.
- */
+/** Mock adapters test locking and rollback; the malformed-config case uses a real installer. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -173,7 +160,6 @@ test(
       assert.equal(report.ok, false)
       assert.match(report.warnings.join(" "), /exploded/)
     }
-    // update() with a throwing detect maps to ok:false without calling install.
     const updated = await manager.update(ctx, "boom")
     assert.equal(updated.ok, false)
     assert.match(updated.warnings.join(" "), /Detection.*failed|exploded/)
@@ -210,13 +196,11 @@ test(
     const manager = new IntegrationManager()
     const adapter = mockAdapter("opencode")
     manager.register(adapter)
-    // Stale marker -> update path even though detect says installed.
     updateIntegrationMarker(dir, "opencode", { version: "1.2.0" })
     const ctx = ctxFor(dir, "1.3.1")
     const updated = await manager.update(ctx, "opencode")
     assert.equal(updated.ok, true)
     assert.equal(adapter.calls["update"], 1)
-    // Fresh marker at current version -> no-op, adapter.update not called again.
     updateIntegrationMarker(dir, "opencode", { version: "1.3.1" })
     const noop = await manager.update(ctx, "opencode")
     assert.equal(noop.ok, true)
@@ -369,7 +353,6 @@ test(
   "manager: ok:false never leaves a success stamp (rollback restores pre-op marker)",
   withTmpDir(async (dir) => {
     const manager = new IntegrationManager()
-    // Misbehaving adapter: stamps a marker, then reports failure.
     const stampingFailure = mockAdapter("stamp-fail", {
       install: async (ctx) => {
         setInstalledVersion(ctx.projectDir, "stamp-fail", ctx.currentVersion)
@@ -386,7 +369,6 @@ test(
     const failed = await manager.install(ctxFor(dir, "1.3.1"), "stamp-fail")
     assert.equal(failed.ok, false)
     assert.equal(getInstalledVersion(dir, "stamp-fail"), null)
-    // Pre-existing marker survives a later failure untouched.
     setInstalledVersion(dir, "stamp-fail", "1.2.0")
     const failedAgain = await manager.install(ctxFor(dir, "1.3.1"), "stamp-fail")
     assert.equal(failedAgain.ok, false)
@@ -469,7 +451,6 @@ test("manager.uninstall: delegates to adapters with the member; ok:false 'uninst
   try {
     const manager = new IntegrationManager()
 
-    // Adapter WITHOUT the optional member (delete via override cast).
     const bare = mockAdapter("bare")
     const bareNoUninstall = { ...bare } as HostIntegration & { calls: Record<string, number> }
     delete (bareNoUninstall as Partial<HostIntegration>).uninstall
@@ -479,14 +460,12 @@ test("manager.uninstall: delegates to adapters with the member; ok:false 'uninst
     assert.match(refused.warnings.join(" "), /Uninstall unsupported by "bare"/)
     assert.equal(bare.calls["uninstall"] ?? 0, 0)
 
-    // Adapter WITH the member delegates under runGuarded.
     const full = mockAdapter("full")
     manager.register(full)
     const done = await manager.uninstall(ctxFor(dir), "full")
     assert.equal(done.ok, true)
     assert.equal(full.calls["uninstall"], 1)
 
-    // Unknown id.
     const unknown = await manager.uninstall(ctxFor(dir), "nope")
     assert.equal(unknown.ok, false)
     assert.match(unknown.warnings.join(" "), /Unknown integration "nope"/)

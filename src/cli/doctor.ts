@@ -1,29 +1,7 @@
 /**
- * Structured doctor backend (M2): the single diagnostics implementation
- * shared by `opencomms doctor [--fix]` (CLI dispatch lands in
- * `src/cli/main.ts`, owned by Lead) and the future GUI Integrations
- * surface (M3). Human-readable text output stays in `fmtDoctor`
- * (`src/cli/main.ts`); this module is the machine-readable backend both
- * consumers reuse so the two can never drift.
- *
- * Backend = the IntegrationManager from `src/integrations/registry.ts`
- * (all five hosts). No second diagnostics implementation, no network
- * calls, no new dependencies.
- *
- * Check semantics:
- * - checks[] reflect state observed during detection (pre-fix). `fixed[]`
- *   / `unfixable[]` describe what `--fix` did about it. A second run after
- *   successful repairs therefore shows clean checks with empty `fixed[]`
- *   (idempotent: nothing left to fix).
- * - ok = no check with status "fail" in THIS report. Warnings (absent
- *   integrations, missing CLIs, no pins) do not fail the run.
- * - "absent" integrations are NEVER installed implicitly (charter rule):
- *   --fix skips them entirely.
- * - Placeholder member env (P1-1: adapter issues mentioning "placeholder")
- *   lands in unfixable[] with install-member guidance; repair is not
- *   attempted (it would only reinstall the same placeholder) and
- *   install-member is never auto-run.
- * - Locking lives in the manager's runGuarded; doctor adds no second lock.
+ * CLI and GUI diagnostics share IntegrationManager. Checks describe pre-repair
+ * state; absent integrations and unbound identities require explicit installation.
+ * The manager owns locking.
  */
 
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs"
@@ -60,9 +38,7 @@ export interface DoctorReport {
 const PLACEHOLDER_PATTERN = /placeholder/i
 
 function isPlaceholderBroken(detection: IntegrationDetection): boolean {
-  // PRIMARY contract (Reviewer R2): structural equality against the shared
-  // constant adapters emit verbatim. The /placeholder/i regex remains ONLY
-  // as a legacy fallback for markers/issues written before the contract.
+  // Prefer shared issue constants; retain regex matching for legacy issue records.
   if (detection.issues.includes(PLACEHOLDER_ISSUE)) return true
   return PLACEHOLDER_PATTERN.test([...detection.issues, ...detection.details].join(" "))
 }
@@ -202,10 +178,6 @@ function permsCheck(projectDir: string): DoctorCheck {
   }
 }
 
-/**
- * Shared implementation; `manager` is injectable so tests can register a
- * throwing mock entry without touching the real five-host registry.
- */
 export async function doctorReportWithManager(
   projectDir: string,
   opts: { fix: boolean },
@@ -297,7 +269,6 @@ async function safeDetect(
   }
 }
 
-/** Public entry: detection + optional fix against the canonical five-host registry. */
 export async function doctorReport(projectDir: string, opts: { fix: boolean }): Promise<DoctorReport> {
   return doctorReportWithManager(projectDir, opts, createDefaultManager())
 }

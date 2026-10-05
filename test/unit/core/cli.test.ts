@@ -1,11 +1,4 @@
-/**
- * Shared CLI tests (Stage 9, Reviewer spec):
- * - installer idempotency across hosts
- * - uninstall completeness WITHOUT destroying state (.opencomms/state.json survives)
- * - doctor output (detected hosts, versions, capabilities, no secrets)
- * - Windows paths with spaces
- * - version/status accuracy
- */
+/** Install/uninstall must preserve unrelated configuration and project state. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -29,7 +22,7 @@ test("CLI entry detection handles Node SEA double-click launches without argv[1]
   assert.equal(isCliEntryPoint("C:/repo/test-runner.js", "C:/repo/test-runner.js", exe, true), false)
 })
 
-function mkProject(name = "oc-cli"): { dir: string; cleanup: () => void } {
+function mkProject(_name = "oc-cli"): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "oc-cli-"))
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
@@ -68,7 +61,6 @@ function seedState(dir: string): void {
 test("version command reports the version and schema", () => {
   const r = runCli(["version"])
   assert.equal(r.code, 0)
-  // Version derives from package.json (P3-4): read the same source of truth.
   const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version: string }
   assert.match(r.output, new RegExp(`opencomms ${pkg.version.replace(/\./g, "\\.")}`))
   assert.match(r.output, /schema v2/)
@@ -105,7 +97,6 @@ test("doctor reports state, hosts and pin without printing secrets", () => {
   const p = mkProject()
   try {
     seedState(p.dir)
-    // Installer writes a pin file with a member id + role label.
     mkdirSync(join(p.dir, ".opencomms"), { recursive: true })
     writeFileSync(
       join(p.dir, ".opencomms", "member-pin.json"),
@@ -117,8 +108,7 @@ test("doctor reports state, hosts and pin without printing secrets", () => {
     assert.match(r.output, /Hosts:/)
     assert.match(r.output, /OpenCode/)
     assert.match(r.output, /Claude Code/)
-    assert.match(r.output, /delivery: PULL ONLY/) // Desktop row present
-    // No secrets: full member id value must not appear.
+    assert.match(r.output, /delivery: PULL ONLY/)
     assert.ok(!r.output.includes("sess_secret_pin_value"), "doctor must not print pin values")
   } finally {
     p.cleanup()
@@ -150,7 +140,7 @@ test("doctor lists per-member pins and still hides member ids (P1-1)", () => {
 test("install-member: blind second run refuses; explicit --id registers a second pin", () => {
   const p = mkProject()
   try {
-    seedState(p.dir) // state.json must exist for member registration
+    seedState(p.dir)
     const first = runCli(["install-member", "--project", p.dir, "--host", "claude-code"])
     assert.equal(first.code, 0, first.output)
     assert.match(first.output, /pins\//, "pin path points at the per-member pins directory")
@@ -170,7 +160,6 @@ test("install-member: blind second run refuses; explicit --id registers a second
     ])
     assert.equal(second.code, 0, second.output)
     assert.ok(existsSync(join(p.dir, ".opencomms", "pins", "sess_pin_cli_second.json")), "second member pin written")
-    // First member's pin untouched.
     const pins = readdirSync(join(p.dir, ".opencomms", "pins")).filter((f) => f.endsWith(".json"))
     assert.equal(pins.length, 2, "two independent member pins coexist")
   } finally {
@@ -182,7 +171,6 @@ test("uninstall claude-code removes hooks but KEEPS state.json (state survival)"
   const p = mkProject()
   try {
     seedState(p.dir)
-    // Register hooks like the installer does.
     mkdirSync(join(p.dir, ".claude"), { recursive: true })
     writeFileSync(
       join(p.dir, ".claude", "settings.json"),
@@ -250,12 +238,10 @@ test("install claude-code is idempotent across re-runs", () => {
     const r2 = runCli(["install", "claude-code", "--project", p.dir])
     assert.equal(r2.code, 0)
     assert.match(r2.output, /idempotent/)
-    // Hooks exactly once.
     const settings = JSON.parse(readFileSync(join(p.dir, ".claude", "settings.json"), "utf8")) as {
       hooks?: Record<string, Array<{ hooks: unknown[] }>>
     }
     assert.equal((settings.hooks?.SessionStart ?? []).length, 1)
-    // .mcp.json exactly once.
     const mcp = JSON.parse(readFileSync(join(p.dir, ".mcp.json"), "utf8")) as Record<string, unknown>
     assert.equal(Object.keys(mcp["mcpServers"] as object).filter((k) => k === "opencomms").length, 1)
   } finally {

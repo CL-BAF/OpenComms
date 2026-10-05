@@ -1,9 +1,4 @@
-﻿/**
- * Core migration tests (schema v1 -> v2) â€” Stage 2.
- *
- * Reviewer Item 4: cutover discipline â€” single migration, backup, marker
- * prevents re-run, legacy file untouched, tampered legacy never trusted.
- */
+﻿/** One-time migration preserves legacy data and rejects tampered state. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -97,14 +92,12 @@ function v1Fixture(): Record<string, any> {
 test("v1 state migrates to v2 on first load: members enriched, queues/messages preserved", () => {
   const dir = tmpProject()
   try {
-    // Legacy layout only: .opencode-comms/state.json (v1), no .opencomms.
     mkdirSync(join(dir, ".opencode-comms"), { recursive: true })
     writeFileSync(join(dir, ".opencode-comms", "state.json"), JSON.stringify(v1Fixture()), "utf8")
 
     const store = new StateStore(dir)
     const state = store.load()
 
-    // Migration happened and is visible.
     assert.equal(state.schema_version, 2)
     assert.ok(state.errors.some((e: { message: string }) => e.message.includes("Migrated")))
 
@@ -114,20 +107,16 @@ test("v1 state migrates to v2 on first load: members enriched, queues/messages p
     const first = channel.members[0]!
     assert.equal(first.session_id, "sess_v1_a")
     assert.equal(first.role, "Builder")
-    assert.equal(first.host, "opencode-comms") // legacy rows keep their era label
+    assert.equal(first.host, "opencode-comms")
     assert.equal(first.surface, "cli")
     assert.equal(first.delivery_mode, "push")
     assert.deepEqual(first.stale_policy, { mode: "window", window_ms: 300_000 })
-    // Queues and messages survive verbatim.
     assert.deepEqual(state.queues["sess_v1_b"], ["ocm_1"])
     assert.equal(state.messages["ocm_1"]?.content, "hello from v1")
-    // Timer preserved (member-keyed v1 timers pass through).
     assert.equal(channel.timer.active_member_id, "sess_v1_a")
     assert.equal(channel.timer.elapsed_ms["sess_v1_a"], 5000)
-    // Backup + marker exist.
     assert.ok(existsSync(join(dir, ".opencomms", "state.v1.bak.json")))
     assert.ok(existsSync(join(dir, ".opencomms", MIGRATION_MARKER)))
-    // Original legacy file untouched.
     assert.ok(existsSync(join(dir, ".opencode-comms", "state.json")))
     assert.equal(JSON.parse(readFileSync(join(dir, ".opencode-comms", "state.json"), "utf8")).schema_version, 1)
   } finally {
@@ -146,8 +135,6 @@ test("second load does NOT re-migrate (marker discipline)", () => {
     const noticeCount1 = first.errors.filter((e: { message: string }) => e.message.includes("Migrated")).length
     assert.equal(noticeCount1, 1)
 
-    // Second load: marker present, no duplicate migration notice, members not
-    // re-wrapped (would reset joined_at etc.).
     const second = new StateStore(dir).load()
     assert.equal(second.schema_version, 2)
     assert.equal(second.errors.filter((e: { message: string }) => e.message.includes("Migrated")).length, noticeCount1)
@@ -198,7 +185,6 @@ test("tampered legacy state is never migrated; starts empty with recorded reason
     const state = new StateStore(dir).load()
     assert.equal(Object.keys(state.channels).length, 0)
     assert.ok(state.errors.some((e: { message: string }) => e.message.includes("Legacy state rejected")))
-    // Legacy file still untouched.
     assert.ok(existsSync(join(dir, ".opencode-comms", "state.json")))
   } finally {
     rmSync(dir, { recursive: true, force: true })

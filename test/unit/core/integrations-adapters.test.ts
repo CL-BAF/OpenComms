@@ -1,20 +1,4 @@
-/**
- * Integrations adapters tests (M1+M2, IntegrationBuilder slice).
- *
- * Uses real tmp project dirs + the REAL wrapped installers (dist must exist;
- * CI builds first). Asserts:
- * - fresh install / already-installed / outdated / repeated / repair
- * - malformed integration.json -> repair path works (never bricks)
- * - preservation of unrelated user config (opencode.json, .claude/settings.json,
- *   .mcp.json, .codex/config.toml)
- * - failure rollback (installer refusal leaves config + marker untouched)
- * - placeholder member env is broken until `install-member` replaces it
- * - foreign plugin.js clobber guard, orphan codex env block
- * - parse-before-copy: malformed claude settings -> no partial writes
- * - capability honesty (no FULL claims on PULL-only hosts)
- * - versioning: fresh write, malformed -> null, per-id preservation, atomic
- * - manager: register/list, unknown id, adapter throw -> ok:false/broken
- */
+/** Real project directories and installers; dist must exist before these tests run. */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -68,7 +52,6 @@ function distReady(): boolean {
   )
 }
 
-/** Replace the claude .mcp.json member placeholder with a real member id. */
 function replaceClaudePlaceholder(dir: string, memberId = "sess_test_member"): void {
   const path = join(dir, ".mcp.json")
   const parsed = JSON.parse(readFileSync(path, "utf8")) as {
@@ -78,14 +61,11 @@ function replaceClaudePlaceholder(dir: string, memberId = "sess_test_member"): v
   writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`, "utf8")
 }
 
-/** Replace the codex config.toml member placeholder with a real member id. */
 function replaceCodexPlaceholder(dir: string, memberId = "sess_test_member"): void {
   const path = join(dir, ".codex", "config.toml")
   const toml = readFileSync(path, "utf8")
   writeFileSync(path, toml.replace(PLACEHOLDER, memberId), "utf8")
 }
-
-// ---------- versioning ----------
 
 test("versioning: fresh write stamps one id; per-id update preserves others", () => {
   const dir = mkTmp("oc-int-ver-")
@@ -138,8 +118,6 @@ test("versioning: compareVersions is semver-ish with leading-v parity", () => {
   assert.equal(compareVersions("v1.3.1", "1.3.1"), 0)
 })
 
-// ---------- manager hardening ----------
-
 test("manager: register/list; unknown install -> ok:false; unknown detect throws; adapter throw -> ok:false/broken", async () => {
   const dir = mkTmp("oc-int-mgr-")
   try {
@@ -180,8 +158,6 @@ test("manager: register/list; unknown install -> ok:false; unknown detect throws
     cleanup(dir)
   }
 })
-
-// ---------- opencode adapter ----------
 
 test("opencode: fresh project detects absent; fresh install stamps marker", async (t) => {
   if (!distReady()) {
@@ -310,7 +286,6 @@ test("opencode: .jsonc with $schema URL + comments parses identically to install
       ].join("\n"),
       "utf8",
     )
-    // Detection must see through comments exactly like the installer does.
     const before = await opencodeAdapter.detect(mkCtx(dir))
     assert.equal(before.status, "absent")
     const installed = await opencodeAdapter.install(mkCtx(dir))
@@ -356,8 +331,6 @@ test("opencode: installer refusal (bad plugin field) -> ok:false, marker untouch
     cleanup(dir)
   }
 })
-
-// ---------- claude-code adapter ----------
 
 test("claude-code: fresh install carries placeholder -> broken; pin replacement -> installed; verify only after pin", async (t) => {
   if (!distReady()) {
@@ -479,8 +452,6 @@ test("claude-code: malformed integration.json -> detect still works; repair rest
   }
 })
 
-// ---------- codex adapter ----------
-
 test("codex: fresh install carries placeholder -> broken; pin replacement -> installed", async (t) => {
   if (!distReady()) {
     t.skip("dist missing")
@@ -577,8 +548,6 @@ test("codex: preserves unrelated config.toml sections", async (t) => {
   }
 })
 
-// ---------- capability honesty ----------
-
 test("capabilities stay honest: claude/codex never claim FULL push", async () => {
   const dir = mkTmp("oc-int-cap-")
   try {
@@ -593,8 +562,6 @@ test("capabilities stay honest: claude/codex never claim FULL push", async () =>
     cleanup(dir)
   }
 })
-
-// ---------- M2: claude-desktop adapter ----------
 
 test("claude-desktop: fresh project detects absent; verify fails honestly", async () => {
   const dir = mkTmp("oc-int-dt-")
@@ -701,8 +668,6 @@ test("claude-desktop: invalid manifest is broken (never installed)", async () =>
     cleanup(dir)
   }
 })
-
-// ---------- M2: chatgpt adapter ----------
 
 test("chatgpt: fresh absent; install scaffolds + stamps marker; verify passes", async () => {
   const dir = mkTmp("oc-int-gpt-")

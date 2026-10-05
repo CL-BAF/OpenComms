@@ -1,13 +1,4 @@
-/**
- * Claude Code hook CLI entrypoint.
- *
- * Claude Code runs: node claude-code-hooks.mjs <subcommand>
- * with the hook JSON on stdin (session_id, cwd, hook_event_name, ...).
- * stdout JSON may inject additionalContext at hook boundaries.
- *
- * Handlers are async (state lock is async); the process stays alive until
- * the work settles — no blocking, no spin (Reviewer Issue 1).
- */
+/** Hook stdin selects lifecycle dispatch; handlers await the asynchronous state lock. */
 
 import { hookAutomatic, hookSessionStart, hookUserPromptSubmit, hookStop, hookSessionEnd } from "./hooks.js"
 
@@ -28,8 +19,6 @@ export async function runHook(sub: string, projectDir?: string): Promise<unknown
   }
 }
 
-// CLI execution only (not when imported). Match any hook-cli/hook-runner
-// filename (dist emits hook-cli.js; the installed copy is claude-code-hooks.mjs).
 const invoked = process.argv[1]?.replace(/\\/g, "/") ?? ""
 if (/(claude-code-hooks|hook-cli)\.(mjs|js|ts)$/.test(invoked)) {
   void (async () => {
