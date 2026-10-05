@@ -131,7 +131,7 @@ async function webdriver(method, path, body) {
   })
   const result = await response.json()
   assert.ok(
-    response.ok && !result.value?.error,
+    response.ok && typeof result.value?.error !== "string",
     `WebDriver ${method} ${path}: ${result.value?.message || response.status}`,
   )
   return result.value
