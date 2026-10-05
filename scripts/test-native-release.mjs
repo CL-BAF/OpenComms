@@ -162,11 +162,71 @@ async function invoke(cmd, args = {}) {
     args: [cmd, args],
   })
 }
+// Toolhelp avoids the WMI service; limited-information handles verify executable paths.
+const processSnapshotScript = String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class OpenCommsProcessSnapshot {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  private struct Entry {
+    public uint size, usage, pid;
+    public UIntPtr heap;
+    public uint module, threads, parent;
+    public int priority;
+    public uint flags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string name;
+  }
+  public sealed class Row { public uint pid, parent; public string name; }
+  [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool Process32FirstW(IntPtr snapshot, ref Entry entry);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool Process32NextW(IntPtr snapshot, ref Entry entry);
+  [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder path, ref uint length);
+  [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+  public static Row[] ForInstall(string directory) {
+    string prefix = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+    var rows = new List<Row>();
+    IntPtr snapshot = CreateToolhelp32Snapshot(2, 0);
+    if (snapshot == new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    try {
+      var entry = new Entry { size = (uint)Marshal.SizeOf(typeof(Entry)) };
+      if (Process32FirstW(snapshot, ref entry)) {
+        do {
+          if (!String.Equals(entry.name, "opencomms-desktop.exe", StringComparison.OrdinalIgnoreCase) &&
+              !String.Equals(entry.name, "opencomms-coordinator.exe", StringComparison.OrdinalIgnoreCase)) continue;
+          IntPtr process = OpenProcess(0x1000, false, entry.pid);
+          if (process == IntPtr.Zero) {
+            int error = Marshal.GetLastWin32Error();
+            if (error == 87) continue; // Exited between snapshot and handle acquisition.
+            throw new Win32Exception(error, "Cannot inspect native process " + entry.pid);
+          }
+          try {
+            uint length = 32768;
+            var path = new StringBuilder((int)length);
+            if (!QueryFullProcessImageNameW(process, 0, path, ref length)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (path.ToString().StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+              rows.Add(new Row { pid = entry.pid, parent = entry.parent, name = entry.name });
+          } finally { CloseHandle(process); }
+        } while (Process32NextW(snapshot, ref entry));
+      }
+      int endError = Marshal.GetLastWin32Error();
+      if (endError != 18) throw new Win32Exception(endError, "Native process snapshot did not finish");
+    } finally { CloseHandle(snapshot); }
+    return rows.ToArray();
+  }
+}
+'@
+$rows = @([OpenCommsProcessSnapshot]::ForInstall($env:OPENCOMMS_NATIVE_SMOKE_INSTALL))
+ConvertTo-Json -InputObject $rows -Compress
+`
 function installedProcesses() {
-  const json = powershell(
-    "$dir=$env:OPENCOMMS_NATIVE_SMOKE_INSTALL+[IO.Path]::DirectorySeparatorChar; $rows=@(Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir,[StringComparison]::OrdinalIgnoreCase)} | ForEach-Object {[pscustomobject]@{pid=$_.ProcessId;parent=$_.ParentProcessId;name=$_.Name}}); ConvertTo-Json -InputObject $rows -Compress",
-    { OPENCOMMS_NATIVE_SMOKE_INSTALL: installDir },
-  )
+  const json = powershell(processSnapshotScript, { OPENCOMMS_NATIVE_SMOKE_INSTALL: installDir })
   return JSON.parse(json || "[]")
 }
 function closeApp(pid) {

@@ -197,14 +197,16 @@ jobs:
           sha256sum opencomms.exe "OpenComms-Setup-$RELEASE_VERSION.exe" "OpenComms-GUI-Setup-$RELEASE_VERSION.exe" "opencomms-linux-$RELEASE_VERSION-x86_64.tar.gz" > SHA256SUMS
           if tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha'); then
             test "$tag_sha" = "$GITHUB_SHA"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA"
           fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha')" = "$GITHUB_SHA"
           if gh release view "$tag" --json isDraft,targetCommitish > existing-release.json; then
             test "$(jq -r '.isDraft' existing-release.json)" = true
             test "$(jq -r '.targetCommitish' existing-release.json)" = "$GITHUB_SHA"
           else
-            gh release create "$tag" --draft --target "$GITHUB_SHA" --title "OpenComms $tag — GUI and coordination upgrade" --notes-file "../docs/releases/$tag.md"
+            gh release create "$tag" --verify-tag --draft --target "$GITHUB_SHA" --title "OpenComms $tag — GUI and coordination upgrade" --notes-file "../docs/releases/$tag.md"
           fi
-          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha')" = "$GITHUB_SHA"
           gh release upload "$tag" --clobber opencomms.exe "OpenComms-Setup-$RELEASE_VERSION.exe" "OpenComms-GUI-Setup-$RELEASE_VERSION.exe" "opencomms-linux-$RELEASE_VERSION-x86_64.tar.gz" SHA256SUMS
           gh release edit "$tag" --draft=false --latest
           gh release view "$tag" --json url,isDraft,assets --jq '{url,isDraft,assets:[.assets[].name]}'
