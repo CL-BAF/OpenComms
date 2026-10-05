@@ -21,6 +21,8 @@ const driver = option("--driver") || join(homedir(), ".cargo", "bin", "tauri-dri
 assert.ok(existsSync(driver), "Install tauri-driver with cargo install tauri-driver --locked.")
 const nativeDriver = option("--native-driver")
 if (nativeDriver) assert.ok(existsSync(nativeDriver), "The supplied Microsoft Edge driver does not exist.")
+const powershellPath = option("--powershell")
+if (powershellPath) assert.ok(existsSync(powershellPath), "The supplied PowerShell executable does not exist.")
 const version = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).version
 const evidence = join(repo, ".verification")
 const root = join(evidence, `native-release-${process.pid}-${Date.now()}`)
@@ -74,10 +76,11 @@ function nsisGuiBytes(built) {
   return { expected, offset }
 }
 const powershell = (code, extra = {}) =>
-  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", code], {
+  execFileSync(powershellPath || "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", code], {
     encoding: "utf8",
     windowsHide: true,
-    env: { ...env, ...extra },
+    env: { ...process.env, ...extra },
+    stdio: ["ignore", "pipe", "inherit"],
     timeout: 15_000,
   }).trim()
 
@@ -165,6 +168,7 @@ async function invoke(cmd, args = {}) {
 // Toolhelp avoids the WMI service; limited-information handles verify executable paths.
 const processSnapshotScript = String.raw`
 $ErrorActionPreference = 'Stop'
+[Console]::Error.WriteLine('[native-release] process inspector: compiling Win32 bindings')
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -222,8 +226,11 @@ public static class OpenCommsProcessSnapshot {
   }
 }
 '@
+[Console]::Error.WriteLine('[native-release] process inspector: bindings ready; querying snapshot')
 $rows = @([OpenCommsProcessSnapshot]::ForInstall($env:OPENCOMMS_NATIVE_SMOKE_INSTALL))
+[Console]::Error.WriteLine('[native-release] process inspector: snapshot ready; writing JSON')
 ConvertTo-Json -InputObject $rows -Compress
+[Console]::Error.WriteLine('[native-release] process inspector: complete')
 `
 function installedProcesses() {
   const json = powershell(processSnapshotScript, { OPENCOMMS_NATIVE_SMOKE_INSTALL: installDir })
@@ -241,6 +248,8 @@ function findUninstaller() {
 }
 
 try {
+  assert.equal(installedProcesses().length, 0, "The isolated installation directory already has running processes.")
+  check("native process inspector preflight succeeds before installation")
   // NSIS requires /D last and without quotes, even when the directory contains spaces.
   await run(resolve(installer), ["/S", `/D=${installDir}`], 120_000, true)
   installed = true
@@ -432,12 +441,12 @@ try {
   }
   // Cleanup is scoped to executable paths in this test's install directory.
   try {
-    for (const row of installedProcesses()) {
-      try {
-        execFileSync("taskkill.exe", ["/PID", String(row.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
-      } catch {}
-    }
     if (installed) {
+      for (const row of installedProcesses()) {
+        try {
+          execFileSync("taskkill.exe", ["/PID", String(row.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
+        } catch {}
+      }
       const uninstaller = findUninstaller()
       if (uninstaller) await run(join(installDir, uninstaller), ["/S"]).catch(() => {})
     }
@@ -451,6 +460,11 @@ try {
         installer: basename(installer),
         platform: process.platform,
         node: process.version,
+        process_inspector: {
+          runtime: basename(powershellPath || "powershell.exe"),
+          timeout_ms: 15_000,
+          environment: "host",
+        },
         native_identity: nativeIdentity,
         checks,
         passed: checks.length,

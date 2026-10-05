@@ -122,7 +122,7 @@ jobs:
           $downloadExit = $LASTEXITCODE
           Pop-Location
           if ($downloadExit -ne 0) { throw 'Matching WebView2 driver download failed.' }
-          node scripts/test-native-release.mjs --installer $installers[0].FullName --native-driver (Join-Path $driverDir 'msedgedriver.exe')
+          node scripts/test-native-release.mjs --installer $installers[0].FullName --native-driver (Join-Path $driverDir 'msedgedriver.exe') --powershell (Get-Command pwsh.exe).Source
           if ($LASTEXITCODE -ne 0) { throw 'Installed native GUI verification failed.' }
           Copy-Item -LiteralPath $installers[0].FullName -Destination "dist-release/OpenComms-GUI-Setup-$env:RELEASE_VERSION.exe"
       - name: Retain native verification result
