@@ -9,6 +9,7 @@ import { OrchestratorStore, newAgentId, pushEvent } from "../dist/orchestrator/s
 import { StateStore } from "../dist/core/store.js"
 import { joinChannel } from "../dist/core/engine.js"
 import { dispatchBridgeCommand } from "../dist/orchestrator/bridge.js"
+import { VERSION } from "../dist/version.js"
 
 const packagePath = process.env.OPENCOMMS_PLAYWRIGHT_PATH
 const { chromium } = await (packagePath ? import(pathToFileURL(packagePath).href) : import("playwright")).catch(() => {
@@ -482,7 +483,7 @@ try {
     ".verification/browser-workflows.json",
     JSON.stringify(
       {
-        version: "1.4.0",
+        version: VERSION,
         node: process.version,
         browser: browser.version(),
         at: new Date().toISOString(),

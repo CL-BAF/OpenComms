@@ -197,7 +197,13 @@ else
   info "installing version ${resolved_version} from ${REPO} Releases"
   fetch "$tarball_url" "$staging/$tarball_name" || fail "could not download $tarball_name after retries."
   fetch "$sums_url" "$staging/SHA256SUMS" || fail "could not download SHA256SUMS after retries."
-  ( cd "$staging" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ) || fail "checksum verification FAILED for the downloaded artifacts. Nothing was installed. This may indicate a corrupted download or a tampered artifact — do not retry blindly; report it."
+  manifest_hash=$(awk -v wanted="$tarball_name" '$2 == wanted { count++; hash = $1; if (NF != 2) bad = 1 } END { if (count != 1 || bad) exit 1; print hash }' "$staging/SHA256SUMS") || fail "release checksum manifest must contain exactly one entry for $tarball_name. Nothing was installed."
+  case "$manifest_hash" in
+    ''|*[!0-9a-fA-F]*) fail "release checksum entry is malformed. Nothing was installed." ;;
+  esac
+  [ "${#manifest_hash}" -eq 64 ] || fail "release checksum entry is malformed. Nothing was installed."
+  printf '%s  %s\n' "$manifest_hash" "$tarball_name" > "$staging/selected.sha256"
+  ( cd "$staging" && sha256sum -c selected.sha256 >/dev/null 2>&1 ) || fail "checksum verification FAILED for the downloaded artifact. Nothing was installed. This may indicate a corrupted download or a tampered artifact — do not retry blindly; report it."
   extract_dir="$staging/payload"
   mkdir -p "$extract_dir"
   tar -xzf "$staging/$tarball_name" -C "$extract_dir" || fail "tarball extraction failed (downloaded artifact is not a valid gzip tarball)."

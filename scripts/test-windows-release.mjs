@@ -1,17 +1,11 @@
 #!/usr/bin/env node
 /** Smoke-test the built Windows installer in an isolated per-user install. */
 import { execFileSync, spawn } from "node:child_process"
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { createHash } from "node:crypto"
 
 if (process.platform !== "win32") {
   throw new Error("The Windows release smoke test must run on Windows.")
@@ -19,10 +13,13 @@ if (process.platform !== "win32") {
 
 const repoRoot = resolve(join(fileURLToPath(new URL("..", import.meta.url))))
 const releaseDir = join(repoRoot, "dist-release")
-const installer = readdirSync(releaseDir)
-  .filter((name) => /^OpenComms-Setup-.*\.exe$/i.test(name))
-  .map((name) => join(releaseDir, name))[0]
-if (!installer || !existsSync(installer)) throw new Error("No OpenComms-Setup-*.exe was found in dist-release.")
+const packageVersion = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version
+const installer = join(releaseDir, `OpenComms-Setup-${packageVersion}.exe`)
+const sourceExe = join(releaseDir, "opencomms.exe")
+if (!existsSync(installer) || !existsSync(sourceExe))
+  throw new Error(`Current release ${packageVersion} installer or executable is missing; run npm run build:release.`)
+const smokeEnv = { ...process.env }
+delete smokeEnv.OPENCOMMS_VERSION
 
 const root = join(tmpdir(), `opencomms-release-smoke-${process.pid}`)
 const installDir = join(root, "Install")
@@ -35,6 +32,10 @@ let smokeExecutable = null
 
 function check(condition, message) {
   if (!condition) throw new Error(message)
+}
+
+function sha256(file) {
+  return createHash("sha256").update(readFileSync(file)).digest("hex")
 }
 
 function shortcutInfo(shortcut) {
@@ -97,9 +98,13 @@ try {
   mkdirSync(configDir, { recursive: true })
   writeFileSync(projectState, preservedState, "utf8")
 
-  execFileSync(installer, ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", `/DIR=${installDir}`, "/TASKS=desktopicon"], {
-    stdio: "inherit",
-  })
+  execFileSync(
+    installer,
+    ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", `/DIR=${installDir}`, "/TASKS=desktopicon"],
+    {
+      stdio: "inherit",
+    },
+  )
 
   const installedExe = join(installDir, "opencomms.exe")
   smokeExecutable = installedExe
@@ -109,31 +114,62 @@ try {
   check(existsSync(launcher), "Installed OpenComms.vbs launcher is missing.")
   check(existsSync(icon), "Installed icon.ico is missing.")
 
-  const version = execFileSync(installedExe, ["version"], { encoding: "utf8" })
-  check(version.includes("opencomms "), "Installed executable did not answer to version.")
+  const version = execFileSync(installedExe, ["version"], { encoding: "utf8", env: smokeEnv })
+  check(
+    version.match(/^opencomms ([^\s]+)/)?.[1] === packageVersion,
+    "Installed executable does not report the current package version.",
+  )
+  check(
+    sha256(installedExe) === sha256(sourceExe),
+    "Installer packaged a different executable from the current release build.",
+  )
 
   const desktopShortcut = join(homedir(), "Desktop", "OpenComms.lnk")
-  const programsRoot = join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs")
+  const programsRoot = join(
+    process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"),
+    "Microsoft",
+    "Windows",
+    "Start Menu",
+    "Programs",
+  )
   const startShortcut = findFile(programsRoot, "OpenComms.lnk")
   check(startShortcut !== null, "Start Menu OpenComms shortcut is missing.")
   check(existsSync(desktopShortcut), "Desktop OpenComms shortcut is missing.")
 
   for (const shortcut of [startShortcut, desktopShortcut]) {
     const info = shortcutInfo(shortcut)
-    check(info.TargetPath.toLowerCase().endsWith("\\wscript.exe"), `Shortcut target is not wscript.exe: ${info.TargetPath}`)
-    check(info.Arguments.includes("OpenComms.vbs") && /\bgui\b/i.test(info.Arguments), "Shortcut arguments do not launch the GUI.")
-    check(info.WorkingDirectory.toLowerCase() === installDir.toLowerCase(), "Shortcut working directory is not the install directory.")
+    check(
+      info.TargetPath.toLowerCase().endsWith("\\wscript.exe"),
+      `Shortcut target is not wscript.exe: ${info.TargetPath}`,
+    )
+    check(
+      info.Arguments.includes("OpenComms.vbs") && /\bgui\b/i.test(info.Arguments),
+      "Shortcut arguments do not launch the GUI.",
+    )
+    check(
+      info.WorkingDirectory.toLowerCase() === installDir.toLowerCase(),
+      "Shortcut working directory is not the install directory.",
+    )
   }
 
-  const gui = spawn(join(process.env.WINDIR ?? "C:\\Windows", "System32", "wscript.exe"), [launcher, "gui", "--server", "--port", port], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-    env: { ...process.env, OPENCOMMS_CONFIG_DIR: configDir },
-  })
+  const gui = spawn(
+    join(process.env.WINDIR ?? "C:\\Windows", "System32", "wscript.exe"),
+    [launcher, "gui", "--server", "--port", port],
+    {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...smokeEnv, OPENCOMMS_CONFIG_DIR: configDir },
+    },
+  )
   gui.unref()
   const workspace = await (await waitForGui(`http://127.0.0.1:${port}/api/workspace`)).json()
   check(workspace.ok === true, "Installed GUI workspace endpoint failed.")
+  const capabilities = await (await fetch(`http://127.0.0.1:${port}/api/capabilities`)).json()
+  check(
+    capabilities.ok === true && capabilities.data?.version === packageVersion,
+    "Installed GUI backend does not report the current release version.",
+  )
   check(!existsSync(join(installDir, ".opencomms")), "GUI created project state inside the install directory.")
   stopSmokeGui()
 

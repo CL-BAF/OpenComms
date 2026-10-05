@@ -1,6 +1,6 @@
 {
   "name": "opencomms",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "OpenComms links existing OpenCode, Claude Code, Claude Desktop, Codex and Gemini CLI sessions into project-local multi-agent channels, and separately creates explicitly managed OpenCode or configured ACP sessions. Includes framed push/pull messaging, workflow records, loopback GUI, integration onboarding and a standalone CLI. Linked sessions remain user-owned; managed capabilities and live verification limits are explicit.",
   "type": "module",
   "license": "MIT",

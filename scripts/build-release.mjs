@@ -9,6 +9,9 @@ import { tmpdir } from "node:os"
 
 const repoRoot = resolve(join(fileURLToPath(new URL("..", import.meta.url))))
 const outDir = resolve(join(repoRoot, "dist-release"))
+const version = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version
+if (process.platform === "linux" && process.arch !== "x64")
+  throw new Error("Linux release packaging currently supports x86_64 only.")
 mkdirSync(outDir, { recursive: true })
 const node = process.execPath
 const buildExe = join(repoRoot, "scripts", "build-exe.mjs")
@@ -18,19 +21,30 @@ const exe = join(outDir, process.platform === "win32" ? "opencomms.exe" : "openc
 if (!existsSync(exe)) throw new Error(`Release executable missing: ${exe}`)
 const checksum = createHash("sha256").update(readFileSync(exe)).digest("hex")
 writeFileSync(join(outDir, `${exe.split(/[\\/]/).pop()}.sha256`), `${checksum}  ${exe.split(/[\\/]/).pop()}\n`, "utf8")
+const releaseArtifacts = [exe]
 
 if (process.platform === "win32") {
   execFileSync(node, [join(repoRoot, "scripts", "build-installer.mjs")], { cwd: repoRoot, stdio: "inherit" })
+  const installer = join(outDir, `OpenComms-Setup-${version}.exe`)
+  const installerChecksum = createHash("sha256").update(readFileSync(installer)).digest("hex")
+  writeFileSync(`${installer}.sha256`, `${installerChecksum}  ${installer.split(/[\\/]/).pop()}\n`, "utf8")
+  releaseArtifacts.push(installer)
 }
 
 if (process.platform === "linux") {
-  buildLinuxTarball(node, repoRoot, outDir)
+  releaseArtifacts.push(buildLinuxTarball(repoRoot, outDir))
 }
+writeFileSync(
+  join(outDir, "SHA256SUMS"),
+  releaseArtifacts
+    .map((file) => `${createHash("sha256").update(readFileSync(file)).digest("hex")}  ${file.split(/[\\/]/).pop()}`)
+    .join("\n") + "\n",
+  "utf8",
+)
 
 console.log(`[opencomms-release] executable: ${exe}`)
 
-function buildLinuxTarball(node, repoRoot, outDir) {
-  const version = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version
+function buildLinuxTarball(repoRoot, outDir) {
   const staging = resolve(join(tmpdir(), `opencomms-stage-${process.pid}-${Date.now()}`))
   const payloadDir = join(staging, "opencomms")
   mkdirSync(payloadDir, { recursive: true })
@@ -58,7 +72,7 @@ function buildLinuxTarball(node, repoRoot, outDir) {
   // Payload checksums live inside the tarball; its own checksum lives beside it.
   copyFileSync(join(staging, "SHA256SUMS"), join(payloadDir, "SHA256SUMS"))
 
-  const tarball = join(outDir, `opencomms-linux-${version}.tar.gz`)
+  const tarball = join(outDir, `opencomms-linux-${version}-x86_64.tar.gz`)
   execFileSync("tar", ["-czf", tarball, "-C", staging, "opencomms"], { cwd: repoRoot, stdio: "inherit" })
   const tarChecksum = createHash("sha256").update(readFileSync(tarball)).digest("hex")
   writeFileSync(
@@ -67,6 +81,7 @@ function buildLinuxTarball(node, repoRoot, outDir) {
     "utf8",
   )
   console.log(`[opencomms-release] linux tarball: ${tarball}`)
+  return tarball
 }
 
 function readmeLinux(version) {
@@ -75,8 +90,8 @@ function readmeLinux(version) {
 Contents:
   opencomms/opencomms           standalone executable (Node SEA, no Node.js needed)
   opencomms/opencomms.service   systemd USER unit template (@BIN@/@PROJECT_DIR@ placeholders)
-  opencomms/install.sh          installer (binary, unit, PATH note; prints
-                                systemctl/linger instructions, never runs them)
+  opencomms/install.sh          installer (binary, unit, PATH note; service
+                                enable/start and linger actions remain manual)
   opencomms/README-linux.txt    this file
 
 Quick start (no root required):
@@ -87,19 +102,21 @@ Quick start (no root required):
 Headless service (recommended on servers):
   ./opencomms/install.sh --exe /abs/path/opencomms \\
     --project /path/to/project --service
-Then (printed by install.sh, never auto-run):
+Then enable the service with:
   systemctl --user daemon-reload
   systemctl --user enable --now opencomms
   loginctl enable-linger \$USER     # optional: run the service before login
 
 Uninstall:
-  ./opencomms/install.sh --uninstall   # prints systemctl/linger instructions first
+  ./opencomms/install.sh --uninstall   # preserves project state
 
 Headless daemon = \`opencomms gui --server --no-open\` (loopback-only, never
 network-exposed). Verify with \`opencomms doctor\`.
 
-Secrets: this release writes no secrets anywhere; pairing tokens and API
-keys are an M2+ concern (OS keyring first, encrypted-file fallback).
+OpenComms persists project state and may store local credentials for managed
+runtime connections or node enrollment. Keep project data private. Vendor
+authentication is configured separately in the selected host. Uninstall
+preserves project state and does not remove host credentials.
 
 Verify checksums:   sha256sum -c SHA256SUMS   (from the extraction dir)
 `

@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "
 import { resolve, relative, join } from "node:path"
 
 const root = resolve(".")
+const packageVersion = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version
 const excluded = new Set(["node_modules", "target", "dist-shell", "binaries", ".git"])
 const files = []
 function walk(path) {
@@ -24,7 +25,7 @@ const inventory = files.map((path) => ({ path: relative(root, path).replaceAll("
 const snapshot = createHash("sha256").update(inventory.map((entry) => `${entry.sha256}  ${entry.path}\n`).join("")).digest("hex")
 const artifacts = [
   "dist-release/opencomms.exe",
-  "dist-release/opencomms-1.4.0.tgz",
+  `dist-release/opencomms-${packageVersion}.tgz`,
   "desktop/src-tauri/binaries/opencomms-coordinator-x86_64-pc-windows-msvc.exe",
   "desktop/dist-shell/index.html",
   "desktop/dist-shell/app.js",
@@ -39,7 +40,7 @@ for (const [name, path] of Object.entries({ unit: "validation-unit-final.log", c
 }
 const manifest = {
   recorded_at: new Date().toISOString(),
-  package_version: JSON.parse(readFileSync("package.json", "utf8")).version,
+  package_version: packageVersion,
   tested_source_snapshot_sha256: snapshot,
   snapshot_algorithm: "sha256 of sorted UTF-8 lines: <file sha256> two spaces <relative path> LF",
   scope: "src, test, scripts, installer, adapters/assets, desktop source/config, install.mjs, root package/tsconfig/.gitignore; excludes generated outputs, dependencies, caches and root/docs documentation",

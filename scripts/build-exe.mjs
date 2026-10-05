@@ -113,7 +113,13 @@ run(process.execPath, [
   "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
 ])
 
-const smoke = execFileSync(target, ["version"], { encoding: "utf8", timeout: 30_000 })
+const smokeEnv = { ...process.env }
+delete smokeEnv.OPENCOMMS_VERSION
+const smoke = execFileSync(target, ["version"], { encoding: "utf8", timeout: 30_000, env: smokeEnv })
+const expectedVersion = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version
+if (smoke.match(/^opencomms ([^\s]+)/)?.[1] !== expectedVersion) {
+  throw new Error(`Executable version mismatch: expected opencomms ${expectedVersion}, received ${smoke.trim()}`)
+}
 console.log(`[opencomms-exe] smoke: ${smoke.trim()}`)
 
 try {

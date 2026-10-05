@@ -1,16 +1,16 @@
 # OpenComms
 
-Project-local communication and coordination for AI coding sessions. Package version **1.4.0**; TypeScript, ESM, MIT.
+Project-local communication and coordination for AI coding sessions. Package version **1.5.0**; TypeScript, ESM, MIT. See [v1.5.0 release notes](docs/releases/v1.5.0.md).
 
 **Linked mode** connects sessions you already run and preserves their identity, model, workspace and host permissions. **Managed mode** explicitly creates separate OpenCode sessions or sessions through an operator-configured ACP runtime. Managed capabilities depend on the selected host; MCP tool access alone does not provide session control.
 
 The browser console and Tauri shell share named, validated backend operations. The console shows delivery, execution, approvals and uncertainty separately. Peer messages remain framed as untrusted data.
 
-The upgrade started from a source archive; repository history was subsequently restored for the authorized commit and push. Current changes and exact verification results are in [the upgrade handoff](docs/UPGRADE_HANDOFF.md). **Authenticated vendor roundtrips and the packaged Tauri/Windows installer remain unverified in this environment.** Historical release reports are not acceptance evidence for this build.
+The browser and native consoles expose the same task, team, context and integration operations. **Authenticated vendor roundtrips remain unverified by local protocol fixtures.** Packaged desktop and installer validation is separate from source tests. The [earlier upgrade handoff](docs/UPGRADE_HANDOFF.md) records the historical v1.4.0 local build; its results are not acceptance evidence for v1.5.0.
 
 ## Start locally
 
-The produced portable Windows coordinator runs without a Node installation:
+The portable Windows coordinator runs without a Node installation:
 
 ```powershell
 .\dist-release\opencomms.exe version
@@ -105,11 +105,11 @@ node scripts/test-standalone-artifacts.mjs dist-release/opencomms.exe
 npm pack --pack-destination dist-release
 ```
 
-The SEA embeds standalone MCP, Claude/Gemini hooks, OpenCode plugin and Desktop manifest assets. The npm package ships these assets in `dist`. Neither installation needs to rebuild source. The generated executable is an unsigned local build, not a published release.
+The SEA embeds standalone MCP, Claude/Gemini hooks, OpenCode plugin and Desktop manifest assets. The npm package ships these assets in `dist`. Neither installation needs to rebuild source. Builds are unsigned unless the release explicitly states otherwise; compare the downloaded artifact with its published checksum.
 
-`npm run build:installer` needs Inno Setup 6.4.x. `npm run test:windows-release` needs its produced installer. Tauri needs Rust, Visual Studio C++ build tools and WebView2 on Windows; see [desktop/README.md](desktop/README.md). Static assets and the packaged coordinator bridge have been tested separately; they do not prove Rust compilation, the WebView or installer works. No current installer was produced here.
+`npm run build:installer` needs Inno Setup 6.4.x. `npm run test:windows-release` needs its produced installer. Tauri needs Rust, Visual Studio C++ build tools and WebView2 on Windows; see [desktop/README.md](desktop/README.md). The Inno installer launches the browser console; the Tauri installer packages the native shell and coordinator sidecar. Static assets and bridge tests alone do not prove either packaged GUI works; each release needs its own installer smoke test.
 
-Linux install/update scripts remain available for existing published releases. This upgrade did not validate a Linux package or publish any release. `opencomms update --check` previews the configured release target; Windows update directs you to its installer. Review the target/version before updating. The GUI updater is disabled, and native signing/updater configuration remains unconfigured.
+Linux install/update scripts remain available for server releases. `opencomms update --check` previews the configured release target; Windows update directs you to its installer. Review the target/version before updating. The GUI updater is disabled, and native signing/updater configuration remains unconfigured.
 
 ## Source map and documentation
 

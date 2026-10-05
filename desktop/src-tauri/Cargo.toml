@@ -1,6 +1,6 @@
 [package]
 name = "opencomms-desktop"
-version = "1.4.0"
+version = "1.5.0"
 description = "OpenComms Tauri desktop shell with bundled offline assets and an allowlisted coordinator stdio bridge."
 edition = "2021"
 

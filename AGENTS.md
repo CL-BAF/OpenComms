@@ -6,7 +6,7 @@
 
 Project-local TypeScript coordination platform. Its linked OpenCode plugin **links existing root OpenCode sessions** (2..N) into a communication channel with an **open role vocabulary** without creating or owning those sessions. Separately authorized managed mode creates supported OpenCode or configured ACP sessions; see `docs/CAPABILITIES.md` for current limits.
 
-- Package: `opencomms` v1.4.0, ESM, `opencode >=1.18.0`
+- Package: `opencomms` v1.5.0, ESM, `opencode >=1.18.0`
 - Core sources: `src/core/types.ts`, `src/core/store.ts`, `src/core/engine.ts` + OpenCode adapter `src/plugin.ts`
 - State lives at `<project>/.opencomms/state.json` (schema v2), written atomically (temp file + rename). Legacy `.opencode-comms/state.json` exists only until the one-time v1->v2 migration
 - Linked mode never creates or replaces host sessions. Separately authorized managed mode can create OpenCode or configured ACP sessions; see `docs/CAPABILITIES.md` and `docs/TASK_EXECUTION.md` for current boundaries.

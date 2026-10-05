@@ -7,10 +7,24 @@ import { fileURLToPath } from "node:url"
 
 const repoRoot = resolve(join(fileURLToPath(new URL("..", import.meta.url))))
 const exe = resolve(join(repoRoot, "dist-release", "opencomms.exe"))
+const packageVersion = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version
 if (process.platform !== "win32") {
   throw new Error("The Inno Setup installer is Windows-only. Run npm run build:installer on Windows or in Windows CI.")
 }
-if (!existsSync(exe)) throw new Error("Missing dist-release/opencomms.exe. Run npm run build:exe -- --out dist-release first.")
+if (!existsSync(exe))
+  throw new Error("Missing dist-release/opencomms.exe. Run npm run build:exe -- --out dist-release first.")
+const versionEnv = { ...process.env }
+delete versionEnv.OPENCOMMS_VERSION
+const executableVersion = execFileSync(exe, ["version"], {
+  encoding: "utf8",
+  timeout: 30_000,
+  env: versionEnv,
+}).match(/^opencomms ([^\s]+)/)?.[1]
+if (executableVersion !== packageVersion) {
+  throw new Error(
+    `Release executable version ${executableVersion ?? "unknown"} differs from package ${packageVersion}; rebuild it before packaging.`,
+  )
+}
 
 const candidates = [
   process.env["ISCC_EXE"],
@@ -23,11 +37,11 @@ if (!iscc) {
   throw new Error("ISCC.exe not found. Install Inno Setup 6.4.x or set ISCC_EXE to its full path.")
 }
 
-const packageVersion = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version
 execFileSync(iscc, [`/DAppVersion=${packageVersion}`, join(repoRoot, "installer", "OpenComms.iss")], {
   cwd: repoRoot,
   stdio: "inherit",
 })
 const artifacts = readdirSync(join(repoRoot, "dist-release")).filter((name) => name.endsWith(".exe"))
-if (!artifacts.some((name) => name.startsWith("OpenComms-Setup-"))) throw new Error("Installer output was not produced")
+if (!existsSync(join(repoRoot, "dist-release", `OpenComms-Setup-${packageVersion}.exe`)))
+  throw new Error("Current-version installer output was not produced")
 console.log(`[opencomms-installer] produced: ${artifacts.join(", ")}`)

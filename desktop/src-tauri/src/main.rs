@@ -5,7 +5,7 @@ use serde_json::Value;
 use serde::Serialize;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
@@ -22,6 +22,27 @@ impl Drop for Coordinator {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+struct CoordinatorState {
+    connection: Mutex<Option<Coordinator>>,
+    closing: AtomicBool,
+}
+
+impl CoordinatorState {
+    fn new() -> Self {
+        Self {
+            connection: Mutex::new(None),
+            closing: AtomicBool::new(false),
+        }
+    }
+
+    fn shutdown(&self) {
+        // Tauri exits the process directly, so managed-state destructors are insufficient.
+        self.closing.store(true, Ordering::SeqCst);
+        let mut connection = self.connection.lock().unwrap_or_else(|error| error.into_inner());
+        connection.take();
     }
 }
 
@@ -338,7 +359,7 @@ fn repo_root() -> std::path::PathBuf {
 /// Forward validated request shapes without logging token-bearing bodies.
 #[tauri::command]
 async fn orchestrator_invoke(
-    state: tauri::State<'_, Arc<Mutex<Option<Coordinator>>>>,
+    state: tauri::State<'_, Arc<CoordinatorState>>,
     cmd: String,
     args: Value,
 ) -> Result<Value, BridgeError> {
@@ -353,7 +374,10 @@ async fn orchestrator_invoke(
     let operation = cmd.clone();
     let id = request_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut guard = connection.lock().map_err(|_| BridgeError::new("failed", "Coordinator state is unavailable. Restart OpenComms.", &id, &operation, "not_executed"))?;
+        let mut guard = connection.connection.lock().map_err(|_| BridgeError::new("failed", "Coordinator state is unavailable. Restart OpenComms.", &id, &operation, "not_executed"))?;
+        if connection.closing.load(Ordering::SeqCst) {
+            return Err(BridgeError::new("temporarily_unavailable", "OpenComms is closing. Reopen it to submit another operation.", &id, &operation, "not_executed"));
+        }
         if guard.is_none() {
             *guard = Some(connect_coordinator().map_err(|message| BridgeError::new("temporarily_unavailable", message, &id, &operation, "not_executed"))?);
         }
@@ -368,9 +392,16 @@ async fn orchestrator_invoke(
 
 fn main() {
     // Bundled assets use coordinator IPC; the webview does not load a loopback page.
-    tauri::Builder::default()
-        .manage(Arc::new(Mutex::<Option<Coordinator>>::new(None)))
+    let connection = Arc::new(CoordinatorState::new());
+    let shutdown = Arc::clone(&connection);
+    let app = tauri::Builder::default()
+        .manage(connection)
         .invoke_handler(tauri::generate_handler![orchestrator_invoke, pick_project])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(move |_app, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            shutdown.shutdown();
+        }
+    });
 }

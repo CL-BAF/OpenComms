@@ -1,0 +1,205 @@
+name: Publish verified release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "docs/releases/**"
+      - ".github/workflows/publish-release.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencomms-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      pending: ${{ steps.release.outputs.pending }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 22.14.0
+      - id: release
+        name: Check release version and existing publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test -s "docs/releases/v${version}.md"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" --json isDraft --jq '.isDraft' > existing-draft.txt; then
+            if [ "$(cat existing-draft.txt)" = true ]; then
+              echo "pending=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "pending=false" >> "$GITHUB_OUTPUT"
+              echo "Release v$version is already published; its assets will not be replaced."
+            fi
+          else
+            echo "pending=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  windows:
+    needs: prepare
+    if: needs.prepare.outputs.pending == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 22.14.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+      - name: Install locked dependencies
+        run: |
+          npm ci
+          npm ci --prefix desktop
+      - name: Validate source
+        run: |
+          npm run typecheck
+          npm run format:check
+          npm run test:unit
+          npm run test:contract
+      - name: Locate Inno Setup
+        shell: pwsh
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler)) { throw 'Runner Inno Setup compiler is missing.' }
+          "ISCC_EXE=$compiler" >> $env:GITHUB_ENV
+      - name: Build and test standalone release
+        run: |
+          npm run build:release
+          npm run test:windows-release
+          node scripts/test-standalone-artifacts.mjs dist-release/opencomms.exe
+      - name: Prepare native assets and coordinator
+        shell: pwsh
+        run: |
+          node scripts/build-shell-asset.mjs
+          node scripts/test-native-assets.mjs
+          $binaryDir = 'desktop/src-tauri/binaries'
+          New-Item -ItemType Directory -Force -Path $binaryDir | Out-Null
+          Copy-Item -LiteralPath 'dist-release/opencomms.exe' -Destination "$binaryDir/opencomms-coordinator-x86_64-pc-windows-msvc.exe"
+      - name: Test Rust coordinator transport
+        working-directory: desktop/src-tauri
+        run: cargo test --locked
+      - name: Build native GUI installer
+        working-directory: desktop
+        run: npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+      - name: Install native WebDriver
+        run: |
+          cargo install tauri-driver --locked
+          cargo install --git https://github.com/chippers/msedgedriver-tool --locked
+      - name: Smoke-test installed native GUI
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath 'desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis' -Filter '*.exe')
+          if ($installers.Count -ne 1) { throw 'Expected exactly one freshly built native installer.' }
+          $driverDir = Join-Path $env:RUNNER_TEMP 'opencomms-webdriver'
+          New-Item -ItemType Directory -Force -Path $driverDir | Out-Null
+          Push-Location $driverDir
+          & "$env:USERPROFILE/.cargo/bin/msedgedriver-tool.exe"
+          $downloadExit = $LASTEXITCODE
+          Pop-Location
+          if ($downloadExit -ne 0) { throw 'Matching WebView2 driver download failed.' }
+          node scripts/test-native-release.mjs --installer $installers[0].FullName --native-driver (Join-Path $driverDir 'msedgedriver.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Installed native GUI verification failed.' }
+          Copy-Item -LiteralPath $installers[0].FullName -Destination "dist-release/OpenComms-GUI-Setup-$env:RELEASE_VERSION.exe"
+      - name: Retain native verification result
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: native-verification
+          if-no-files-found: ignore
+          path: .verification/native-release-summary.json
+      - name: Upload verified Windows downloads
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: release-windows
+          if-no-files-found: error
+          path: |
+            dist-release/opencomms.exe
+            dist-release/OpenComms-Setup-${{ needs.prepare.outputs.version }}.exe
+            dist-release/OpenComms-GUI-Setup-${{ needs.prepare.outputs.version }}.exe
+
+  linux:
+    needs: prepare
+    if: needs.prepare.outputs.pending == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 22.14.0
+          cache: npm
+      - run: npm ci
+      - name: Validate and build Linux release
+        run: |
+          npm run typecheck
+          npm run test:unit
+          npm run test:contract
+          npm run build:release
+          node scripts/test-linux-release.mjs
+          node scripts/test-standalone-artifacts.mjs dist-release/opencomms
+      - name: Upload verified Linux download
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: release-linux
+          if-no-files-found: error
+          path: dist-release/opencomms-linux-${{ needs.prepare.outputs.version }}-x86_64.tar.gz
+
+  publish:
+    needs: [prepare, windows, linux]
+    if: needs.prepare.outputs.pending == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+      - name: Check artifacts and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          tag="v$RELEASE_VERSION"
+          cd release-assets
+          test -s opencomms.exe
+          test -s "OpenComms-Setup-$RELEASE_VERSION.exe"
+          test -s "OpenComms-GUI-Setup-$RELEASE_VERSION.exe"
+          test -s "opencomms-linux-$RELEASE_VERSION-x86_64.tar.gz"
+          sha256sum opencomms.exe "OpenComms-Setup-$RELEASE_VERSION.exe" "OpenComms-GUI-Setup-$RELEASE_VERSION.exe" "opencomms-linux-$RELEASE_VERSION-x86_64.tar.gz" > SHA256SUMS
+          if tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha'); then
+            test "$tag_sha" = "$GITHUB_SHA"
+          fi
+          if gh release view "$tag" --json isDraft,targetCommitish > existing-release.json; then
+            test "$(jq -r '.isDraft' existing-release.json)" = true
+            test "$(jq -r '.targetCommitish' existing-release.json)" = "$GITHUB_SHA"
+          else
+            gh release create "$tag" --draft --target "$GITHUB_SHA" --title "OpenComms $tag — GUI and coordination upgrade" --notes-file "../docs/releases/$tag.md"
+          fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha')" = "$GITHUB_SHA"
+          gh release upload "$tag" --clobber opencomms.exe "OpenComms-Setup-$RELEASE_VERSION.exe" "OpenComms-GUI-Setup-$RELEASE_VERSION.exe" "opencomms-linux-$RELEASE_VERSION-x86_64.tar.gz" SHA256SUMS
+          gh release edit "$tag" --draft=false --latest
+          gh release view "$tag" --json url,isDraft,assets --jq '{url,isDraft,assets:[.assets[].name]}'

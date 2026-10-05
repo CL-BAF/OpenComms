@@ -1,22 +1,45 @@
 /** Exercise the copied SEA binary and its installed adapters away from the repository. */
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { createServer } from "node:net"
 import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { createHash } from "node:crypto"
 
-const source = resolve(process.argv[2] ?? "dist-release/opencomms.exe")
+const packageRoot = resolve(fileURLToPath(new URL("..", import.meta.url)))
+const packageVersion = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).version
+const binaryName = process.platform === "win32" ? "opencomms.exe" : "opencomms"
+const source = resolve(process.argv[2] ?? join(packageRoot, "dist-release", binaryName))
 const npmMode = process.argv.includes("--npm")
 assert.ok(existsSync(source), "Build the standalone executable first.")
 const root = mkdtempSync(join(tmpdir(), "opencomms-standalone-"))
 const install = join(root, "Install")
 mkdirSync(install)
-const binary = join(install, "opencomms.exe"),
+const binary = join(install, binaryName),
   project = join(root, "Project")
 mkdirSync(project)
-if (!npmMode) copyFileSync(source, binary)
-const env = { ...process.env, OPENCOMMS_CONFIG_DIR: join(root, "Config") }
+if (!npmMode) {
+  copyFileSync(source, binary)
+  if (process.platform !== "win32") chmodSync(binary, 0o755)
+  assert.equal(
+    createHash("sha256").update(readFileSync(binary)).digest("hex"),
+    createHash("sha256").update(readFileSync(source)).digest("hex"),
+    "Copied smoke executable differs from the release artifact.",
+  )
+}
+const env = { ...process.env, OPENCOMMS_CONFIG_DIR: join(root, "Config"), OPENCOMMS_PROJECT_DIR: project }
+delete env.OPENCOMMS_VERSION
 const actions = []
 let gui
 let prefix = []
@@ -35,18 +58,38 @@ function nodeAdapter(file, input) {
 try {
   if (npmMode) {
     const npmCli = process.env.OPENCOMMS_NPM_CLI
-    assert.ok(npmCli && existsSync(npmCli), "Set OPENCOMMS_NPM_CLI to npm/bin/npm-cli.js for the offline package smoke.")
-    const installed = spawnSync(process.execPath, [npmCli, "install", source, "--prefix", install, "--ignore-scripts", ...(process.argv.includes("--online") ? ["--prefer-offline", "--fetch-retries=0", "--fetch-timeout=15000"] : ["--offline"]), "--no-audit", "--fund=false", "--cache", resolve(".npm-cache")], { encoding: "utf8", timeout: 60000 })
+    assert.ok(
+      npmCli && existsSync(npmCli),
+      "Set OPENCOMMS_NPM_CLI to npm/bin/npm-cli.js for the offline package smoke.",
+    )
+    const installed = spawnSync(
+      process.execPath,
+      [
+        npmCli,
+        "install",
+        source,
+        "--prefix",
+        install,
+        "--ignore-scripts",
+        ...(process.argv.includes("--online")
+          ? ["--prefer-offline", "--fetch-retries=0", "--fetch-timeout=15000"]
+          : ["--offline"]),
+        "--no-audit",
+        "--fund=false",
+        "--cache",
+        resolve(".npm-cache"),
+      ],
+      { encoding: "utf8", timeout: 60000 },
+    )
     assert.equal(installed.status, 0, installed.stdout + installed.stderr)
     prefix = [join(install, "node_modules", "opencomms", "dist", "cli", "main.js")]
   }
-  assert.match(execute(["version"]), /1\.4\.0/)
+  assert.equal(execute(["version"]).match(/^opencomms ([^\s]+)/)?.[1], packageVersion)
   for (const host of ["opencode", "claude-code", "codex", "gemini-cli", "claude-desktop"])
     execute(["install", host, "--project", project])
   const mcp = join(project, ".opencomms", "opencomms-mcp.mjs")
   assert.ok(existsSync(mcp), "Installed standalone MCP artifact must exist.")
-  const initialized = nodeAdapter(
-    mcp,
+  const initializeRequest =
     JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
@@ -56,8 +99,8 @@ try {
         capabilities: {},
         clientInfo: { name: "standalone-smoke", version: "1" },
       },
-    }) + "\n",
-  )
+    }) + "\n"
+  const initialized = nodeAdapter(mcp, initializeRequest)
   assert.match(initialized, /"id":1/)
   assert.match(initialized, /serverInfo/)
   for (const [file, event] of [
@@ -75,6 +118,7 @@ try {
   assert.ok(existsSync(join(project, "opencomms-claude-desktop", "manifest.json")))
   const desktopMcp = join(project, "opencomms-claude-desktop", "server", "main.mjs")
   assert.ok(existsSync(desktopMcp), "Desktop bundle must contain the MCP entry point.")
+  assert.match(nodeAdapter(desktopMcp, initializeRequest), /serverInfo/)
   const probe = createServer()
   await new Promise((done) => probe.listen(0, "127.0.0.1", done))
   const port = probe.address().port
@@ -101,6 +145,7 @@ try {
   assert.ok(address, "Copied executable GUI must report its bound address: " + output + errors)
   const capabilities = await (await fetch(address + "/api/capabilities")).json()
   assert.equal(capabilities.ok, true)
+  assert.equal(capabilities.data?.version, packageVersion)
   const created = await (
     await fetch(address + "/api/sessions", {
       method: "POST",
@@ -112,13 +157,16 @@ try {
   const state = JSON.parse(readFileSync(join(project, ".opencomms", "state.json"), "utf8"))
   assert.ok(state.channels["standalone-smoke"])
   const report = {
-    version: "1.4.0",
+    version: packageVersion,
     mode: `${npmMode ? "installed npm tarball" : "copied SEA binary"}; real local backend and adapter child processes; no live vendor or installer claim`,
     actions,
     gui: "passed",
   }
   mkdirSync(".verification", { recursive: true })
-  writeFileSync(`.verification/${npmMode ? "npm" : "standalone"}-artifacts.json`, JSON.stringify(report, null, 2) + "\n")
+  writeFileSync(
+    `.verification/${npmMode ? "npm" : "standalone"}-artifacts.json`,
+    JSON.stringify(report, null, 2) + "\n",
+  )
   console.log(JSON.stringify(report))
 } finally {
   if (gui && gui.exitCode === null) {

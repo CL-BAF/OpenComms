@@ -15,13 +15,17 @@ if (process.platform !== "linux") {
 
 const repoRoot = resolve(join(fileURLToPath(new URL("..", import.meta.url))))
 const releaseDir = join(repoRoot, "dist-release")
-const tarball = readdirSync(releaseDir)
-  .filter((name) => /^opencomms-linux-.*\.tar\.gz$/.test(name))
-  .map((name) => join(releaseDir, name))[0]
-if (!tarball || !existsSync(tarball))
+const packageVersion = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version
+const tarball = join(releaseDir, `opencomms-linux-${packageVersion}-x86_64.tar.gz`)
+const sourceExe = join(releaseDir, "opencomms")
+if (!existsSync(tarball) || !existsSync(sourceExe))
   throw annotated(
-    new Error("No opencomms-linux-*.tar.gz found in dist-release (run npm run build:release on Linux first)."),
+    new Error(
+      `Current release ${packageVersion} tarball or executable is missing (run npm run build:release on Linux first).`,
+    ),
   )
+const smokeEnv = { ...process.env }
+delete smokeEnv.OPENCOMMS_VERSION
 
 const root = join(tmpdir(), `opencomms-linux-smoke-${process.pid}`)
 const extractDir = join(root, "extract")
@@ -54,6 +58,81 @@ function annotated(error) {
 
 function sha256(file) {
   return createHash("sha256").update(readFileSync(file)).digest("hex")
+}
+
+function verifyDownloadChecksums(installer) {
+  const tools = join(root, "download-tools")
+  const sumsFile = join(root, "download-SHA256SUMS")
+  const downloadLog = join(root, "download-urls.txt")
+  const downloadBin = join(homeDir, "download-bin")
+  const tarballName = `opencomms-linux-${packageVersion}-x86_64.tar.gz`
+  const tarballUrl = `https://github.com/CL-BAF/OpenComms/releases/download/v${packageVersion}/${tarballName}`
+  mkdirSync(tools)
+  writeFileSync(
+    join(tools, "curl"),
+    `#!/bin/sh
+set -eu
+out=""
+url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift 2 ;;
+    *) url=$1; shift ;;
+  esac
+done
+printf '%s\\n' "$url" >> "$OPENCOMMS_SMOKE_DOWNLOAD_LOG"
+if [ "$url" = "$OPENCOMMS_SMOKE_TARBALL_URL" ]; then
+  cp "$OPENCOMMS_SMOKE_TARBALL" "$out"
+elif [ "$url" = "$OPENCOMMS_SMOKE_SUMS_URL" ]; then
+  cp "$OPENCOMMS_SMOKE_MANIFEST" "$out"
+else
+  exit 19
+fi
+`,
+    "utf8",
+  )
+  chmodSync(join(tools, "curl"), 0o755)
+  const env = {
+    ...smokeEnv,
+    HOME: homeDir,
+    XDG_CONFIG_HOME: configDir,
+    PATH: `${tools}:${process.env.PATH}`,
+    OPENCOMMS_SMOKE_DOWNLOAD_LOG: downloadLog,
+    OPENCOMMS_SMOKE_TARBALL_URL: tarballUrl,
+    OPENCOMMS_SMOKE_SUMS_URL: `https://github.com/CL-BAF/OpenComms/releases/download/v${packageVersion}/SHA256SUMS`,
+    OPENCOMMS_SMOKE_TARBALL: tarball,
+    OPENCOMMS_SMOKE_MANIFEST: sumsFile,
+  }
+  const args = ["--version", `v${packageVersion}`, "--bin-dir", downloadBin, "--no-path-edit"]
+  const tarballEntry = `${sha256(tarball)}  ${tarballName}\n`
+  const otherPlatformEntry = `${"f".repeat(64)}  OpenComms-Setup-${packageVersion}.exe\n`
+  writeFileSync(sumsFile, tarballEntry + otherPlatformEntry)
+  execFileSync(installer, args, { env, stdio: "pipe", timeout: 60_000 })
+  const downloadedExe = join(downloadBin, "opencomms")
+  check(
+    sha256(downloadedExe) === sha256(sourceExe),
+    "Download installer failed to install the tarball from a mixed-platform checksum manifest.",
+  )
+  check(
+    readFileSync(downloadLog, "utf8").split("\n").includes(tarballUrl),
+    "Download installer requested a filename different from the release builder.",
+  )
+  for (const [name, manifest, expectedError] of [
+    ["incorrect", `${"0".repeat(64)}  ${tarballName}\n`, /checksum verification FAILED/],
+    ["missing", otherPlatformEntry, /exactly one entry/],
+    ["duplicate", tarballEntry + tarballEntry, /exactly one entry/],
+    ["malformed", `not-a-hash  ${tarballName}\n`, /checksum entry is malformed/],
+  ]) {
+    writeFileSync(sumsFile, manifest)
+    let refused = false
+    try {
+      execFileSync(installer, args, { env, stdio: "pipe", timeout: 60_000 })
+    } catch (error) {
+      refused = expectedError.test(String(error.stderr ?? error.message))
+    }
+    check(refused, `Download installer did not refuse a ${name} tarball checksum entry.`)
+    check(sha256(downloadedExe) === sha256(sourceExe), `A ${name} checksum entry modified the installed binary.`)
+  }
 }
 
 async function waitForGui(url, timeoutMs = 30_000) {
@@ -136,7 +215,12 @@ try {
   }
 
   const exe = join(payloadDir, "opencomms")
-  check(execFileSync(exe, ["version"], { encoding: "utf8" }).includes("opencomms "), "Exe did not answer to version.")
+  check(
+    execFileSync(exe, ["version"], { encoding: "utf8", env: smokeEnv }).match(/^opencomms ([^\s]+)/)?.[1] ===
+      packageVersion,
+    "Tarball executable does not report the current package version.",
+  )
+  check(sha256(exe) === sha256(sourceExe), "Tarball contains a different executable from the current release build.")
   const doctor = execFileSync(exe, ["doctor", "--project", projectDir], { encoding: "utf8" })
   check(doctor.includes("OpenComms doctor"), "Exe did not answer to doctor.")
 
@@ -156,6 +240,12 @@ try {
   )
   const installedExe = join(binDir, "opencomms")
   check(existsSync(installedExe), "install.sh did not install the binary.")
+  check(sha256(installedExe) === sha256(sourceExe), "Linux installer did not preserve the release executable bytes.")
+  check(
+    execFileSync(installedExe, ["version"], { encoding: "utf8", env: smokeEnv }).match(/^opencomms ([^\s]+)/)?.[1] ===
+      packageVersion,
+    "Installed Linux executable does not report the current package version.",
+  )
   const unitFile = join(configDir, "systemd", "user", "opencomms.service")
   check(existsSync(unitFile), "install.sh did not write the unit.")
   const unit = readFileSync(unitFile, "utf8")
@@ -239,6 +329,11 @@ try {
     }
   }
   check(workspaceOk, `GUI did not answer at http://127.0.0.1:${port}/api/workspace within 30s.`)
+  const capabilities = await (await fetch(`http://127.0.0.1:${port}/api/capabilities`)).json()
+  check(
+    capabilities.ok === true && capabilities.data?.version === packageVersion,
+    "Installed Linux GUI backend does not report the current release version.",
+  )
   check(!existsSync(join(root, "extract", ".opencomms")), "GUI created state inside the extraction dir.")
   check(!existsSync(join(payloadDir, ".opencomms")), "GUI created state inside the payload dir.")
 
@@ -326,8 +421,10 @@ try {
   })
   check(!existsSync(regExe), "Uninstall (post-regression) left the binary behind.")
 
+  verifyDownloadChecksums(join(payloadDir, "install.sh"))
+
   console.log(
-    "[opencomms-linux-release] extraction, checksums, exe smoke, unit quoting, headless GUI, SIGTERM, installer regressions, and uninstall passed",
+    "[opencomms-linux-release] extraction, checksums, current artifact identity, GUI, installer regressions, applicable download checksum entries, and uninstall passed",
   )
 } catch (error) {
   console.log(
