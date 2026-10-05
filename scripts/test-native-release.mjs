@@ -54,12 +54,25 @@ let installed = false
 let failure = null
 let driverLog = ""
 let appPath = ""
+let nativeIdentity = null
 const pause = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
 const check = (name) => {
   checks.push(name)
   console.log(`[native-release] PASS ${name}`)
 }
 const hash = (path) => createHash("sha256").update(readFileSync(path)).digest("hex")
+function nsisGuiBytes(built) {
+  // Locked Tauri CLI 2.11.4 patches the first marker for NSIS, then restores the build file.
+  // https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle.rs
+  const sourceMarker = Buffer.from("__TAURI_BUNDLE_TYPE_VAR_UNK", "ascii")
+  const packagedMarker = Buffer.from("__TAURI_BUNDLE_TYPE_VAR_NSS", "ascii")
+  const offset = built.indexOf(sourceMarker)
+  assert.ok(offset >= 0, "Built GUI lacks the Tauri bundle marker; review the locked bundler contract.")
+  assert.equal(packagedMarker.length, sourceMarker.length)
+  const expected = Buffer.from(built)
+  packagedMarker.copy(expected, offset)
+  return { expected, offset }
+}
 const powershell = (code, extra = {}) =>
   execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", code], {
     encoding: "utf8",
@@ -175,10 +188,24 @@ try {
   const coordinator = join(installDir, "opencomms-coordinator.exe")
   assert.ok(existsSync(appPath), "NSIS package omitted the native executable.")
   assert.ok(existsSync(coordinator), "NSIS package omitted the coordinator beside the executable.")
+  const builtGui = readFileSync(
+    join(repo, "desktop", "src-tauri", "target", "x86_64-pc-windows-msvc", "release", "opencomms-desktop.exe"),
+  )
+  const installedGui = readFileSync(appPath)
+  const packagedGui = nsisGuiBytes(builtGui)
+  nativeIdentity = {
+    algorithm: "SHA-256",
+    build_sha256: createHash("sha256").update(builtGui).digest("hex"),
+    expected_nsis_sha256: createHash("sha256").update(packagedGui.expected).digest("hex"),
+    installed_sha256: createHash("sha256").update(installedGui).digest("hex"),
+    bundle_marker_offset: packagedGui.offset,
+    bundle_marker_transition: "UNK -> NSS",
+  }
+  assert.equal(installedGui.length, packagedGui.expected.length, "Installed GUI length differs from its build.")
   assert.equal(
-    hash(appPath),
-    hash(join(repo, "desktop", "src-tauri", "target", "x86_64-pc-windows-msvc", "release", "opencomms-desktop.exe")),
-    "Installed GUI differs from the release Rust executable.",
+    nativeIdentity.installed_sha256,
+    nativeIdentity.expected_nsis_sha256,
+    "Installed GUI differs from the built executable beyond Tauri's documented NSIS marker.",
   )
   assert.equal(
     hash(coordinator),
@@ -364,6 +391,7 @@ try {
         installer: basename(installer),
         platform: process.platform,
         node: process.version,
+        native_identity: nativeIdentity,
         checks,
         passed: checks.length,
         failed: failure ? 1 : 0,
