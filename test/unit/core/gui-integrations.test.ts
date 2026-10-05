@@ -26,7 +26,7 @@ import { createDefaultManager } from "../../../src/integrations/registry.js"
 import { getInstalledVersion, updateIntegrationMarker } from "../../../src/integrations/versioning.js"
 import { VERSION } from "../../../src/version.js"
 
-const HOST_IDS = ["opencode", "claude-code", "codex", "claude-desktop", "chatgpt"]
+const HOST_IDS = ["opencode", "claude-code", "codex", "claude-desktop", "chatgpt", "gemini-cli"]
 
 function mkTmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))

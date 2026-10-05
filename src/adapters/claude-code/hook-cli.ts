@@ -9,10 +9,12 @@
  * the work settles — no blocking, no spin (Reviewer Issue 1).
  */
 
-import { hookSessionStart, hookUserPromptSubmit, hookStop, hookSessionEnd } from "./hooks.js"
+import { hookAutomatic, hookSessionStart, hookUserPromptSubmit, hookStop, hookSessionEnd } from "./hooks.js"
 
 export async function runHook(sub: string, projectDir?: string): Promise<unknown> {
   switch (sub) {
+    case "auto":
+      return hookAutomatic(projectDir)
     case "session-start":
       return await hookSessionStart(projectDir)
     case "user-prompt-submit":
@@ -31,7 +33,9 @@ export async function runHook(sub: string, projectDir?: string): Promise<unknown
 const invoked = process.argv[1]?.replace(/\\/g, "/") ?? ""
 if (/(claude-code-hooks|hook-cli)\.(mjs|js|ts)$/.test(invoked)) {
   void (async () => {
-    const sub = process.argv[2] ?? ""
+    // Installed hooks share one command. The documented hook_event_name
+    // selects the handler when no explicit legacy subcommand was supplied.
+    const sub = process.argv[2] ?? "auto"
     // Optional explicit project dir (argv[3]); hooks.json passes none —
     // the hook stdin `cwd` (Claude Code's project dir) is the default.
     const projectDir = process.argv[3] && !process.argv[3].startsWith("-") ? process.argv[3] : undefined

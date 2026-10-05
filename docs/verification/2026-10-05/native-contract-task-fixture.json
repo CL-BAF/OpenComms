@@ -1,0 +1,8 @@
+{
+  "surface": "native-contract",
+  "task_id": "tsk_ed1990b161e0364ea6764ea7",
+  "criterion": "The UI records evidence and independent review before completing this fixture task.",
+  "kind": "UI/backend fixture",
+  "scope": "No authenticated vendor or external attack behavior tested",
+  "publication_note": "Local validation snapshot; user-profile/workspace paths redacted for publication. No live vendor or packaged native acceptance is inferred."
+}

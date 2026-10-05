@@ -1,0 +1,2654 @@
+
+> opencomms@1.4.0 test:unit
+> npm run build && npm run build:test && node --test --test-reporter=tap --test-concurrency=1 "dist-test/test/unit/**/*.test.js"
+
+
+> opencomms@1.4.0 build
+> tsc -p tsconfig.build.json && npm run build:bundle
+
+
+> opencomms@1.4.0 build:bundle
+> node scripts/build-bundles.mjs
+
+
+> opencomms@1.4.0 build:test
+> tsc -p tsconfig.test.json
+
+TAP version 13
+# Subtest: StateStore: rename retry succeeds
+ok 1 - StateStore: rename retry succeeds
+  ---
+  duration_ms: 64.6495
+  type: 'test'
+  ...
+# Subtest: StateStore: rename failure preserves previous state
+ok 2 - StateStore: rename failure preserves previous state
+  ---
+  duration_ms: 227.6329
+  type: 'test'
+  ...
+# Subtest: OrchestratorStore: rename retry succeeds
+ok 3 - OrchestratorStore: rename retry succeeds
+  ---
+  duration_ms: 74.8985
+  type: 'test'
+  ...
+# Subtest: OrchestratorStore: rename failure preserves previous state
+ok 4 - OrchestratorStore: rename failure preserves previous state
+  ---
+  duration_ms: 170.8284
+  type: 'test'
+  ...
+# Subtest: StateStore: partial temporary write is cleaned up without touching state
+ok 5 - StateStore: partial temporary write is cleaned up without touching state
+  ---
+  duration_ms: 2.8829
+  type: 'test'
+  ...
+# Subtest: OrchestratorStore: partial temporary write is cleaned up without touching state
+ok 6 - OrchestratorStore: partial temporary write is cleaned up without touching state
+  ---
+  duration_ms: 3.0074
+  type: 'test'
+  ...
+# Subtest: ACP preserves multibyte agent text split across actual stdio pipe chunks
+ok 7 - ACP preserves multibyte agent text split across actual stdio pipe chunks
+  ---
+  duration_ms: 110.0344
+  type: 'test'
+  ...
+# Subtest: ACP actual stdio subprocess negotiates, creates quietly, preserves framing and loads exact persisted identity
+ok 8 - ACP actual stdio subprocess negotiates, creates quietly, preserves framing and loads exact persisted identity
+  ---
+  duration_ms: 158.5268
+  type: 'test'
+  ...
+# Subtest: ACP permission waits for an operator, offers once authority and can cancel an active prompt
+ok 9 - ACP permission waits for an operator, offers once authority and can cancel an active prompt
+  ---
+  duration_ms: 96.4095
+  type: 'test'
+  ...
+# Subtest: ACP unsupported load never creates a replacement; bounded turn timeout stays uncertain
+ok 10 - ACP unsupported load never creates a replacement; bounded turn timeout stays uncertain
+  ---
+  duration_ms: 176.1293
+  type: 'test'
+  ...
+# Subtest: agent CLI: missing required flags pre-validate with exit 2 and no HTTP call
+ok 11 - agent CLI: missing required flags pre-validate with exit 2 and no HTTP call
+  ---
+  duration_ms: 0.6727
+  type: 'test'
+  ...
+# Subtest: agent CLI: unknown subcommand exits 2 with usage
+ok 12 - agent CLI: unknown subcommand exits 2 with usage
+  ---
+  duration_ms: 0.5706
+  type: 'test'
+  ...
+# Subtest: agent CLI: stop/restart/status require a positional agent id (exit 2)
+ok 13 - agent CLI: stop/restart/status require a positional agent id (exit 2)
+  ---
+  duration_ms: 0.1539
+  type: 'test'
+  ...
+# Subtest: agent CLI: connection failure maps to exit 1 with the console hint (injected fetch)
+ok 14 - agent CLI: connection failure maps to exit 1 with the console hint (injected fetch)
+  ---
+  duration_ms: 0.3132
+  type: 'test'
+  ...
+# Subtest: agent CLI: --json emits the raw envelope; 403 maps to exit 4 (injected fetch)
+ok 15 - agent CLI: --json emits the raw envelope; 403 maps to exit 4 (injected fetch)
+  ---
+  duration_ms: 15.8001
+  type: 'test'
+  ...
+# Subtest: agent CLI: list rendering + --json success envelope (injected fetch)
+ok 16 - agent CLI: list rendering + --json success envelope (injected fetch)
+  ---
+  duration_ms: 1.4059
+  type: 'test'
+  ...
+# Subtest: agent CLI: 409 conflict maps to exit 3, 404 to exit 5, 500 to exit 6 (injected fetch)
+ok 17 - agent CLI: 409 conflict maps to exit 3, 404 to exit 5, 500 to exit 6 (injected fetch)
+  ---
+  duration_ms: 1.1031
+  type: 'test'
+  ...
+# Subtest: bridge parity: Rust ALLOWED_COMMANDS equals TS BRIDGE_COMMANDS exactly
+ok 18 - bridge parity: Rust ALLOWED_COMMANDS equals TS BRIDGE_COMMANDS exactly
+  ---
+  duration_ms: 1.2502
+  type: 'test'
+  ...
+# Subtest: native action contract: visible mutations dispatch to the advertised operation
+ok 19 - native action contract: visible mutations dispatch to the advertised operation
+  ---
+  duration_ms: 1.749
+  type: 'test'
+  ...
+# Subtest: every advertised GUI route resolves to an implemented native dispatcher
+ok 20 - every advertised GUI route resolves to an implemented native dispatcher
+  ---
+  duration_ms: 1.48
+  type: 'test'
+  ...
+# Subtest: bridge rejects arbitrary proxies and malformed arguments without reflecting sensitive input
+ok 21 - bridge rejects arbitrary proxies and malformed arguments without reflecting sensitive input
+  ---
+  duration_ms: 0.3802
+  type: 'test'
+  ...
+# Subtest: native mutations share lifetime tracking, keep one project binding, and release tracking on failure
+ok 22 - native mutations share lifetime tracking, keep one project binding, and release tracking on failure
+  ---
+  duration_ms: 0.7919
+  type: 'test'
+  ...
+# Subtest: bridge preserves real outcome and correlation fields and redacts dispatch exceptions
+ok 23 - bridge preserves real outcome and correlation fields and redacts dispatch exceptions
+  ---
+  duration_ms: 2.2891
+  type: 'test'
+  ...
+# Subtest: bridge bounds incomplete input, discards oversized frames, and recovers at the next frame
+ok 24 - bridge bounds incomplete input, discards oversized frames, and recovers at the next frame
+  ---
+  duration_ms: 1.1315
+  type: 'test'
+  ...
+# Subtest: bridge probe: packaged sidecar handshakes, acks, and serves runtimes_list
+ok 25 - bridge probe: packaged sidecar handshakes, acks, and serves runtimes_list
+  ---
+  duration_ms: 98.1807
+  type: 'test'
+  ...
+# Subtest: M5 budgets: orchestrator task assignment respects the channel message budget (no bypass)
+ok 26 - M5 budgets: orchestrator task assignment respects the channel message budget (no bypass)
+  ---
+  duration_ms: 11.547
+  type: 'test'
+  ...
+# Subtest: M5 budgets: orchestrator task assignment respects the runtime budget
+ok 27 - M5 budgets: orchestrator task assignment respects the runtime budget
+  ---
+  duration_ms: 8.8074
+  type: 'test'
+  ...
+# Subtest: chatgpt capability claims are honest (PULL-only, no push, no identity)
+ok 28 - chatgpt capability claims are honest (PULL-only, no push, no identity)
+  ---
+  duration_ms: 0.9493
+  type: 'test'
+  ...
+# Subtest: scaffold refuses unauthenticated public startup
+ok 29 - scaffold refuses unauthenticated public startup
+  ---
+  duration_ms: 5.0717
+  type: 'test'
+  ...
+# Subtest: scaffold documents the supported path and the forbidden one
+ok 30 - scaffold documents the supported path and the forbidden one
+  ---
+  duration_ms: 1.8166
+  type: 'test'
+  ...
+# Subtest: detectChatGptDesktop never scans private app data (returns not-detected)
+ok 31 - detectChatGptDesktop never scans private app data (returns not-detected)
+  ---
+  duration_ms: 0.1359
+  type: 'test'
+  ...
+# Subtest: hook CLI: SessionStart binds pinned member to the Claude session and drains queued messages
+ok 32 - hook CLI: SessionStart binds pinned member to the Claude session and drains queued messages
+  ---
+  duration_ms: 58.4252
+  type: 'test'
+  ...
+# Subtest: hook CLI: stale member is cleared at SessionStart (Reviewer Issue 3)
+ok 33 - hook CLI: stale member is cleared at SessionStart (Reviewer Issue 3)
+  ---
+  duration_ms: 52.2984
+  type: 'test'
+  ...
+# Subtest: hook CLI completes fast when the queue is empty (no 5s spin-wait stall)
+ok 34 - hook CLI completes fast when the queue is empty (no 5s spin-wait stall)
+  ---
+  duration_ms: 47.905
+  type: 'test'
+  ...
+# Subtest: two Claude sessions on one channel receive only their own messages
+ok 35 - two Claude sessions on one channel receive only their own messages
+  ---
+  duration_ms: 96.9082
+  type: 'test'
+  ...
+# Subtest: P1-1: two install-member runs + sequential SessionStarts bind each Claude session to its OWN member (no env pin)
+ok 36 - P1-1: two install-member runs + sequential SessionStarts bind each Claude session to its OWN member (no env pin)
+  ---
+  duration_ms: 108.313
+  type: 'test'
+  ...
+# Subtest: P1-1: multiple unbound pins are AMBIGUOUS - no auto-bind, guidance message, no delivery
+ok 37 - P1-1: multiple unbound pins are AMBIGUOUS - no auto-bind, guidance message, no delivery
+  ---
+  duration_ms: 53.977
+  type: 'test'
+  ...
+# Subtest: P1-1: stale (session-ended) member is rebindable at SessionStart - no silent loss after a Claude restart
+ok 38 - P1-1: stale (session-ended) member is rebindable at SessionStart - no silent loss after a Claude restart
+  ---
+  duration_ms: 46.0204
+  type: 'test'
+  ...
+# Subtest: P1-1 negative: member A's pin can never bind or drain for member B
+ok 39 - P1-1 negative: member A's pin can never bind or drain for member B
+  ---
+  duration_ms: 134.7059
+  type: 'test'
+  ...
+# Subtest: CLI entry detection handles Node SEA double-click launches without argv[1]
+ok 40 - CLI entry detection handles Node SEA double-click launches without argv[1]
+  ---
+  duration_ms: 0.9254
+  type: 'test'
+  ...
+# Subtest: version command reports the version and schema
+ok 41 - version command reports the version and schema
+  ---
+  duration_ms: 0.4266
+  type: 'test'
+  ...
+# Subtest: status reports channels, members, hosts and delivery modes from real state
+ok 42 - status reports channels, members, hosts and delivery modes from real state
+  ---
+  duration_ms: 3.5721
+  type: 'test'
+  ...
+# Subtest: members command lists the roster for a member-scoped lookup
+ok 43 - members command lists the roster for a member-scoped lookup
+  ---
+  duration_ms: 2.2004
+  type: 'test'
+  ...
+# Subtest: doctor reports state, hosts and pin without printing secrets
+ok 44 - doctor reports state, hosts and pin without printing secrets
+  ---
+  duration_ms: 64.7802
+  type: 'test'
+  ...
+# Subtest: doctor lists per-member pins and still hides member ids (P1-1)
+ok 45 - doctor lists per-member pins and still hides member ids (P1-1)
+  ---
+  duration_ms: 56.8961
+  type: 'test'
+  ...
+# Subtest: install-member: blind second run refuses; explicit --id registers a second pin
+ok 46 - install-member: blind second run refuses; explicit --id registers a second pin
+  ---
+  duration_ms: 3.1414
+  type: 'test'
+  ...
+# Subtest: uninstall claude-code removes hooks but KEEPS state.json (state survival)
+ok 47 - uninstall claude-code removes hooks but KEEPS state.json (state survival)
+  ---
+  duration_ms: 4.4951
+  type: 'test'
+  ...
+# Subtest: uninstall codex removes only the opencomms section (other config survives)
+ok 48 - uninstall codex removes only the opencomms section (other config survives)
+  ---
+  duration_ms: 3.223
+  type: 'test'
+  ...
+# Subtest: install claude-code is idempotent across re-runs
+ok 49 - install claude-code is idempotent across re-runs
+  ---
+  duration_ms: 50.1843
+  type: 'test'
+  ...
+# Subtest: Windows paths with spaces work end-to-end (status/doctor/uninstall)
+ok 50 - Windows paths with spaces work end-to-end (status/doctor/uninstall)
+  ---
+  duration_ms: 57.652
+  type: 'test'
+  ...
+# Subtest: unknown command exits 1 with help pointer; help lists commands
+ok 51 - unknown command exits 1 with help pointer; help lists commands
+  ---
+  duration_ms: 0.1589
+  type: 'test'
+  ...
+# Subtest: codex capabilities distinguish usable PULL tools from an unimplemented App Server runtime
+ok 52 - codex capabilities distinguish usable PULL tools from an unimplemented App Server runtime
+  ---
+  duration_ms: 0.5993
+  type: 'test'
+  ...
+# Subtest: installCodex registers the MCP server section and copies the bundle
+ok 53 - installCodex registers the MCP server section and copies the bundle
+  ---
+  duration_ms: 53.4743
+  type: 'test'
+  ...
+# Subtest: installCodex is idempotent (second run does not duplicate the section)
+ok 54 - installCodex is idempotent (second run does not duplicate the section)
+  ---
+  duration_ms: 92.2851
+  type: 'test'
+  ...
+# Subtest: installCodex preserves an existing unrelated config.toml
+ok 55 - installCodex preserves an existing unrelated config.toml
+  ---
+  duration_ms: 68.6941
+  type: 'test'
+  ...
+# Subtest: installCodex uses absolute paths + explicit cwd (no cwd assumptions)
+ok 56 - installCodex uses absolute paths + explicit cwd (no cwd assumptions)
+  ---
+  duration_ms: 74.9823
+  type: 'test'
+  ...
+# Subtest: detectCodex returns a deterministic shape (detected or not) without throwing
+ok 57 - detectCodex returns a deterministic shape (detected or not) without throwing
+  ---
+  duration_ms: 56.9436
+  type: 'test'
+  ...
+# Subtest: evaluation consumes identical recorded tasks, counts verified outcomes and preserves unknown usage
+ok 58 - evaluation consumes identical recorded tasks, counts verified outcomes and preserves unknown usage
+  ---
+  duration_ms: 3.0496
+  type: 'test'
+  ...
+# Subtest: evaluation refuses mismatched work, duplicate outcomes and fabricated estimates
+ok 59 - evaluation refuses mismatched work, duplicate outcomes and fabricated estimates
+  ---
+  duration_ms: 0.5441
+  type: 'test'
+  ...
+# Subtest: evaluation treats acknowledgement, failed work and unsupported acceptance evidence honestly
+ok 60 - evaluation treats acknowledgement, failed work and unsupported acceptance evidence honestly
+  ---
+  duration_ms: 0.2187
+  type: 'test'
+  ...
+# Subtest: emergency coordination state stays project-local and survives restart without unpausing unrelated operator pauses
+ok 61 - emergency coordination state stays project-local and survives restart without unpausing unrelated operator pauses
+  ---
+  duration_ms: 207.3413
+  type: 'test'
+  ...
+# Subtest: OpenCode PUSH <-> Claude Code PULL: mixed channel delivers both ways
+ok 62 - OpenCode PUSH <-> Claude Code PULL: mixed channel delivers both ways
+  ---
+  duration_ms: 2.2373
+  type: 'test'
+  ...
+# Subtest: PUSH<->PULL staleness boundary: age kills PUSH copies, PULL copies survive
+ok 63 - PUSH<->PULL staleness boundary: age kills PUSH copies, PULL copies survive
+  ---
+  duration_ms: 0.2878
+  type: 'test'
+  ...
+# Subtest: three-host channel: duplicate role rejected cross-host; targeted sends exact
+ok 64 - three-host channel: duplicate role rejected cross-host; targeted sends exact
+  ---
+  duration_ms: 0.2589
+  type: 'test'
+  ...
+# Subtest: status exposes each participant's host/surface/delivery (channel status row)
+ok 65 - status exposes each participant's host/surface/delivery (channel status row)
+  ---
+  duration_ms: 0.6204
+  type: 'test'
+  ...
+# Subtest: kick works cross-host: kicked MCP member's pin dies, PUSH side unaffected
+ok 66 - kick works cross-host: kicked MCP member's pin dies, PUSH side unaffected
+  ---
+  duration_ms: 0.3458
+  type: 'test'
+  ...
+# Subtest: daemon run: refuses non-wss coordinator base (exit 2)
+ok 67 - daemon run: refuses non-wss coordinator base (exit 2)
+  ---
+  duration_ms: 3.5694
+  type: 'test'
+  ...
+# Subtest: daemon run: refuses without an enrolled identity (exit 2)
+ok 68 - daemon run: refuses without an enrolled identity (exit 2)
+  ---
+  duration_ms: 0.5183
+  type: 'test'
+  ...
+# Subtest: daemon run: watchdog READY after connect + first heartbeat (P2-B-3)
+ok 69 - daemon run: watchdog READY after connect + first heartbeat (P2-B-3)
+  ---
+  duration_ms: 1004.7718
+  type: 'test'
+  ...
+# Subtest: daemon run: ack-after-deliver with cursor dedup (P2-B-4 / P2-A)
+ok 70 - daemon run: ack-after-deliver with cursor dedup (P2-B-4 / P2-A)
+  ---
+  duration_ms: 1003.341
+  type: 'test'
+  ...
+# Subtest: daemon run: watchdog stops on failure (P2-B-5)
+ok 71 - daemon run: watchdog stops on failure (P2-B-5)
+  ---
+  duration_ms: 6.069
+  type: 'test'
+  ...
+# Subtest: daemon run: cursor dedup via Backend's dedupeForNode (P2-A)
+ok 72 - daemon run: cursor dedup via Backend's dedupeForNode (P2-A)
+  ---
+  duration_ms: 1017.4768
+  type: 'test'
+  ...
+# Subtest: daemon run: stopHook exits the loop cleanly (P2-B signal path)
+ok 73 - daemon run: stopHook exits the loop cleanly (P2-B signal path)
+  ---
+  duration_ms: 1007.1357
+  type: 'test'
+  ...
+# Subtest: delivery lifetime budget gates every queued handover instead of allowing a prequeued batch to overrun
+ok 74 - delivery lifetime budget gates every queued handover instead of allowing a prequeued batch to overrun
+  ---
+  duration_ms: 3.6032
+  type: 'test'
+  ...
+# Subtest: failed delivery retries consume handover budget and stop without losing pending mail
+ok 75 - failed delivery retries consume handover budget and stop without losing pending mail
+  ---
+  duration_ms: 0.4683
+  type: 'test'
+  ...
+# Subtest: runtime budget expiring after enqueue prevents host handover while retaining mail for an operator decision
+ok 76 - runtime budget expiring after enqueue prevents host handover while retaining mail for an operator decision
+  ---
+  duration_ms: 0.3226
+  type: 'test'
+  ...
+# Subtest: manifest validates against the MCPB v0.3 essentials (documented 2026-08-29)
+ok 77 - manifest validates against the MCPB v0.3 essentials (documented 2026-08-29)
+  ---
+  duration_ms: 1.27
+  type: 'test'
+  ...
+# Subtest: desktop capability claims stay honest (PULL-only, no push/identity/roleInjection)
+ok 78 - desktop capability claims stay honest (PULL-only, no push/identity/roleInjection)
+  ---
+  duration_ms: 0.2787
+  type: 'test'
+  ...
+# Subtest: bundle layout + self-contained server end-to-end pull (packaging smoke)
+ok 79 - bundle layout + self-contained server end-to-end pull (packaging smoke)
+  ---
+  duration_ms: 66.9965
+  type: 'test'
+  ...
+# Subtest: doctor: fresh project is all-absent, ok=true, nothing to fix
+ok 80 - doctor: fresh project is all-absent, ok=true, nothing to fix
+  ---
+  duration_ms: 75.6921
+  type: 'test'
+  ...
+# Subtest: doctor: registry covers all five hosts
+ok 81 - doctor: registry covers all five hosts
+  ---
+  duration_ms: 0.1813
+  type: 'test'
+  ...
+# Subtest: doctor: all five installed => all host checks ok
+ok 82 - doctor: all five installed => all host checks ok
+  ---
+  duration_ms: 171.6959
+  type: 'test'
+  ...
+# Subtest: doctor: broken plugin registration fails, --fix repairs, second run is idempotent
+ok 83 - doctor: broken plugin registration fails, --fix repairs, second run is idempotent
+  ---
+  duration_ms: 243.2555
+  type: 'test'
+  ...
+# Subtest: doctor: outdated marker warns, --fix updates the marker
+ok 84 - doctor: outdated marker warns, --fix updates the marker
+  ---
+  duration_ms: 166.4039
+  type: 'test'
+  ...
+# Subtest: doctor: corrupt marker + broken artifacts fails, --fix takes the repair path
+ok 85 - doctor: corrupt marker + broken artifacts fails, --fix takes the repair path
+  ---
+  duration_ms: 158.8438
+  type: 'test'
+  ...
+# Subtest: doctor: placeholder member env is unfixable with install-member guidance (never auto-runs)
+ok 86 - doctor: placeholder member env is unfixable with install-member guidance (never auto-runs)
+  ---
+  duration_ms: 96.5927
+  type: 'test'
+  ...
+# Subtest: doctor: absent integrations are never installed implicitly by --fix
+ok 87 - doctor: absent integrations are never installed implicitly by --fix
+  ---
+  duration_ms: 66.345
+  type: 'test'
+  ...
+# Subtest: doctor: throwing adapter becomes a fail check, never a crash
+ok 88 - doctor: throwing adapter becomes a fail check, never a crash
+  ---
+  duration_ms: 64.3742
+  type: 'test'
+  ...
+# Subtest: Gemini onboarding preserves settings, actual installed hook binds existing identity and receives framed mail
+ok 89 - Gemini onboarding preserves settings, actual installed hook binds existing identity and receives framed mail
+  ---
+  duration_ms: 104.5725
+  type: 'test'
+  ...
+# Subtest: Gemini malformed configuration refuses install with no partial files
+ok 90 - Gemini malformed configuration refuses install with no partial files
+  ---
+  duration_ms: 6.3521
+  type: 'test'
+  ...
+# Subtest: overview: fresh project — all five hosts absent, install offered, uninstall withheld
+ok 91 - overview: fresh project — all five hosts absent, install offered, uninstall withheld
+  ---
+  duration_ms: 13.7061
+  type: 'test'
+  ...
+# Subtest: overview: installed opencode — verify offered, uninstall offered, update/repair withheld
+ok 92 - overview: installed opencode — verify offered, uninstall offered, update/repair withheld
+  ---
+  duration_ms: 35.5089
+  type: 'test'
+  ...
+# Subtest: integrationAction: unknown verb and unknown id rejected BEFORE the manager
+ok 93 - integrationAction: unknown verb and unknown id rejected BEFORE the manager
+  ---
+  duration_ms: 0.6189
+  type: 'test'
+  ...
+# Subtest: bootstrap: fresh project offers install and writes NOTHING (offer-only guarantee)
+ok 94 - bootstrap: fresh project offers install and writes NOTHING (offer-only guarantee)
+  ---
+  duration_ms: 0.66
+  type: 'test'
+  ...
+# Subtest: bootstrap: current integration continues; outdated offers update
+ok 95 - bootstrap: current integration continues; outdated offers update
+  ---
+  duration_ms: 34.192
+  type: 'test'
+  ...
+# Subtest: bootstrap: broken integration offers repair (partial install)
+ok 96 - bootstrap: broken integration offers repair (partial install)
+  ---
+  duration_ms: 3.8473
+  type: 'test'
+  ...
+# Subtest: bootstrap: legacy v1 state without v2 => migration_required (continue, never auto-migrate)
+ok 97 - bootstrap: legacy v1 state without v2 => migration_required (continue, never auto-migrate)
+  ---
+  duration_ms: 1.8191
+  type: 'test'
+  ...
+# Subtest: bootstrap: v2 state present + legacy dir present => NEVER migration_required (store.ts parity)
+ok 98 - bootstrap: v2 state present + legacy dir present => NEVER migration_required (store.ts parity)
+  ---
+  duration_ms: 49.7577
+  type: 'test'
+  ...
+# Subtest: bootstrap: malformed / foreign-schema marker => incompatible mapped to the SAME repair path
+ok 99 - bootstrap: malformed / foreign-schema marker => incompatible mapped to the SAME repair path
+  ---
+  duration_ms: 2.1845
+  type: 'test'
+  ...
+# Subtest: bootstrap: uninstall via integrationAction closes the lifecycle (absent again)
+ok 100 - bootstrap: uninstall via integrationAction closes the lifecycle (absent again)
+  ---
+  duration_ms: 28.3648
+  type: 'test'
+  ...
+# Subtest: GUI/native: creation budgets, existing identities, removal, pause, archive and resume persist through shared backend
+ok 101 - GUI/native: creation budgets, existing identities, removal, pause, archive and resume persist through shared backend
+  ---
+  duration_ms: 80.7187
+  type: 'test'
+  ...
+# Subtest: GUI/native: one established bridge follows project selection without leaking context or writes to previous project
+ok 102 - GUI/native: one established bridge follows project selection without leaking context or writes to previous project
+  ---
+  duration_ms: 35.7864
+  type: 'test'
+  ...
+# Subtest: GUI/native: operator assignment in a three-member channel targets the worker, and stable retry sends once
+ok 103 - GUI/native: operator assignment in a three-member channel targets the worker, and stable retry sends once
+  ---
+  duration_ms: 27.8695
+  type: 'test'
+  ...
+# Subtest: GUI/native: coordination stop remains available when the designated Lead is present
+ok 104 - GUI/native: coordination stop remains available when the designated Lead is present
+  ---
+  duration_ms: 17.6001
+  type: 'test'
+  ...
+# Subtest: GUI/native: emergency coordination stop gates assignment even if a channel is individually unpaused
+ok 105 - GUI/native: emergency coordination stop gates assignment even if a channel is individually unpaused
+  ---
+  duration_ms: 14.8766
+  type: 'test'
+  ...
+# Subtest: GUI/native: emergency state follows the project and cannot unpause a same-named session in another project
+ok 106 - GUI/native: emergency state follows the project and cannot unpause a same-named session in another project
+  ---
+  duration_ms: 45.2084
+  type: 'test'
+  ...
+# Subtest: GUI/native: a pending native mutation blocks concurrent HTTP project switching
+ok 107 - GUI/native: a pending native mutation blocks concurrent HTTP project switching
+  ---
+  duration_ms: 11.5426
+  type: 'test'
+  ...
+# Subtest: GUI/native: emergency coordination state and prior pauses survive a coordinator restart
+ok 108 - GUI/native: emergency coordination state and prior pauses survive a coordinator restart
+  ---
+  duration_ms: 23.9217
+  type: 'test'
+  ...
+# Subtest: GUI/native: remote and inactive permission capability matches the enforced host boundary
+ok 109 - GUI/native: remote and inactive permission capability matches the enforced host boundary
+  ---
+  duration_ms: 20.5327
+  type: 'test'
+  ...
+# Subtest: GUI/native: capability negotiation names supported actions and failures retain actionable correlation
+ok 110 - GUI/native: capability negotiation names supported actions and failures retain actionable correlation
+  ---
+  duration_ms: 14.1371
+  type: 'test'
+  ...
+# Subtest: GUI: create â†’ list shows the empty active session; join-command is the real one
+ok 111 - GUI: create â†’ list shows the empty active session; join-command is the real one
+  ---
+  duration_ms: 63.0005
+  type: 'test'
+  ...
+# Subtest: GUI: workspace registry switches projects and never writes state before selection
+ok 112 - GUI: workspace registry switches projects and never writes state before selection
+  ---
+  duration_ms: 62.3856
+  type: 'test'
+  ...
+# Subtest: GUI: native bridge bootstrap keeps runtime storage hidden until project selection
+ok 113 - GUI: native bridge bootstrap keeps runtime storage hidden until project selection
+  ---
+  duration_ms: 6.9241
+  type: 'test'
+  ...
+# Subtest: GUI: embedded application shell uses modals and exposes project, diagnostics, and capability surfaces
+ok 114 - GUI: embedded application shell uses modals and exposes project, diagnostics, and capability surfaces
+  ---
+  duration_ms: 0.5869
+  type: 'test'
+  ...
+# Subtest: GUI: members endpoint returns live roster with honest states; remove severs the link only
+ok 115 - GUI: members endpoint returns live roster with honest states; remove severs the link only
+  ---
+  duration_ms: 24.4503
+  type: 'test'
+  ...
+# Subtest: GUI: save â†’ archived card; resume-as-new; delete is destructive
+ok 116 - GUI: save â†’ archived card; resume-as-new; delete is destructive
+  ---
+  duration_ms: 112.1713
+  type: 'test'
+  ...
+# Subtest: GUI: binds loopback only â€” non-loopback hostnames are refused
+ok 117 - GUI: binds loopback only â€” non-loopback hostnames are refused
+  ---
+  duration_ms: 0.4465
+  type: 'test'
+  ...
+# Subtest: memberState: honest three-state mapping (no fabricated busy signal)
+ok 118 - memberState: honest three-state mapping (no fabricated busy signal)
+  ---
+  duration_ms: 0.0626
+  type: 'test'
+  ...
+# Subtest: join-command helper: real commands per host, fail-closed unknown host
+ok 119 - join-command helper: real commands per host, fail-closed unknown host
+  ---
+  duration_ms: 0.0834
+  type: 'test'
+  ...
+# Subtest: P0 repro: GUI-created empty session joined by an MCP-style caller (sentinel id) succeeds
+ok 120 - P0 repro: GUI-created empty session joined by an MCP-style caller (sentinel id) succeeds
+  ---
+  duration_ms: 8.7674
+  type: 'test'
+  ...
+# Subtest: P0: empty operator session ADOPTS the first joiner's real host identity; later joiners compare strictly
+ok 121 - P0: empty operator session ADOPTS the first joiner's real host identity; later joiners compare strictly
+  ---
+  duration_ms: 0.2884
+  type: 'test'
+  ...
+# Subtest: P0: mixed-host round-trip from the join-command output (opencode ↔ MCP)
+ok 122 - P0: mixed-host round-trip from the join-command output (opencode ↔ MCP)
+  ---
+  duration_ms: 0.4518
+  type: 'test'
+  ...
+# Subtest: P1: spoofed (rebound/non-loopback) Host header is rejected with 403
+ok 123 - P1: spoofed (rebound/non-loopback) Host header is rejected with 403
+  ---
+  duration_ms: 13.2925
+  type: 'test'
+  ...
+# Subtest: SSE: archive-only changes (no state.json write) still fire refresh (stale-GUI regression)
+ok 124 - SSE: archive-only changes (no state.json write) still fire refresh (stale-GUI regression)
+  ---
+  duration_ms: 1032.9026
+  type: 'test'
+  ...
+# Subtest: P1: cross-site write (simulated simple-request CSRF) is rejected with 403
+ok 125 - P1: cross-site write (simulated simple-request CSRF) is rejected with 403
+  ---
+  duration_ms: 34.4516
+  type: 'test'
+  ...
+# Subtest: installed Claude hook runs without subcommand, binds identity and delivers framed queued mail
+ok 126 - installed Claude hook runs without subcommand, binds identity and delivers framed queued mail
+  ---
+  duration_ms: 86.4813
+  type: 'test'
+  ...
+# Subtest: installed Codex MCP artifact answers JSON-RPC outside the package directory
+ok 127 - installed Codex MCP artifact answers JSON-RPC outside the package directory
+  ---
+  duration_ms: 97.8731
+  type: 'test'
+  ...
+# Subtest: uninstalling either CLI retains the shared MCP bundle required by the other host
+ok 128 - uninstalling either CLI retains the shared MCP bundle required by the other host
+  ---
+  duration_ms: 128.2665
+  type: 'test'
+  ...
+# Subtest: versioning: fresh write stamps one id; per-id update preserves others
+ok 129 - versioning: fresh write stamps one id; per-id update preserves others
+  ---
+  duration_ms: 6.5829
+  type: 'test'
+  ...
+# Subtest: versioning: malformed integration.json returns null and never throws
+ok 130 - versioning: malformed integration.json returns null and never throws
+  ---
+  duration_ms: 4.8863
+  type: 'test'
+  ...
+# Subtest: versioning: atomic write leaves no temp files behind
+ok 131 - versioning: atomic write leaves no temp files behind
+  ---
+  duration_ms: 1.377
+  type: 'test'
+  ...
+# Subtest: versioning: compareVersions is semver-ish with leading-v parity
+ok 132 - versioning: compareVersions is semver-ish with leading-v parity
+  ---
+  duration_ms: 0.2803
+  type: 'test'
+  ...
+# Subtest: manager: register/list; unknown install -> ok:false; unknown detect throws; adapter throw -> ok:false/broken
+ok 133 - manager: register/list; unknown install -> ok:false; unknown detect throws; adapter throw -> ok:false/broken
+  ---
+  duration_ms: 2.1699
+  type: 'test'
+  ...
+# Subtest: opencode: fresh project detects absent; fresh install stamps marker
+ok 134 - opencode: fresh project detects absent; fresh install stamps marker
+  ---
+  duration_ms: 28.3572
+  type: 'test'
+  ...
+# Subtest: opencode: repeated install is idempotent (single plugin entry)
+ok 135 - opencode: repeated install is idempotent (single plugin entry)
+  ---
+  duration_ms: 27.9563
+  type: 'test'
+  ...
+# Subtest: opencode: outdated marker -> detect outdated -> update bumps marker
+ok 136 - opencode: outdated marker -> detect outdated -> update bumps marker
+  ---
+  duration_ms: 31.8934
+  type: 'test'
+  ...
+# Subtest: opencode: broken (registered but file missing) -> repair restores file
+ok 137 - opencode: broken (registered but file missing) -> repair restores file
+  ---
+  duration_ms: 6.6726
+  type: 'test'
+  ...
+# Subtest: opencode: foreign plugin.js is broken via clobber guard (never silently overwritten)
+ok 138 - opencode: foreign plugin.js is broken via clobber guard (never silently overwritten)
+  ---
+  duration_ms: 2.618
+  type: 'test'
+  ...
+# Subtest: opencode: preserves unrelated config keys across install+update
+ok 139 - opencode: preserves unrelated config keys across install+update
+  ---
+  duration_ms: 28.7065
+  type: 'test'
+  ...
+# Subtest: opencode: .jsonc with $schema URL + comments parses identically to installer (P2-6)
+ok 140 - opencode: .jsonc with $schema URL + comments parses identically to installer (P2-6)
+  ---
+  duration_ms: 27.4996
+  type: 'test'
+  ...
+# Subtest: opencode: malformed opencode.json -> detect broken (never throws); verify fails honestly
+ok 141 - opencode: malformed opencode.json -> detect broken (never throws); verify fails honestly
+  ---
+  duration_ms: 1.9811
+  type: 'test'
+  ...
+# Subtest: opencode: installer refusal (bad plugin field) -> ok:false, marker untouched (rollback)
+ok 142 - opencode: installer refusal (bad plugin field) -> ok:false, marker untouched (rollback)
+  ---
+  duration_ms: 2.8856
+  type: 'test'
+  ...
+# Subtest: claude-code: fresh install carries placeholder -> broken; pin replacement -> installed; verify only after pin
+ok 143 - claude-code: fresh install carries placeholder -> broken; pin replacement -> installed; verify only after pin
+  ---
+  duration_ms: 63.0747
+  type: 'test'
+  ...
+# Subtest: claude-code: outdated (pinned) -> update bumps marker
+ok 144 - claude-code: outdated (pinned) -> update bumps marker
+  ---
+  duration_ms: 52.7337
+  type: 'test'
+  ...
+# Subtest: claude-code: preserves unrelated settings hooks + mcp servers
+ok 145 - claude-code: preserves unrelated settings hooks + mcp servers
+  ---
+  duration_ms: 54.3743
+  type: 'test'
+  ...
+# Subtest: claude-code: malformed settings -> install ok:false with zero partial writes (parse-before-copy)
+ok 146 - claude-code: malformed settings -> install ok:false with zero partial writes (parse-before-copy)
+  ---
+  duration_ms: 23.8985
+  type: 'test'
+  ...
+# Subtest: claude-code: malformed integration.json -> detect still works; repair restamps
+ok 147 - claude-code: malformed integration.json -> detect still works; repair restamps
+  ---
+  duration_ms: 49.9971
+  type: 'test'
+  ...
+# Subtest: codex: fresh install carries placeholder -> broken; pin replacement -> installed
+ok 148 - codex: fresh install carries placeholder -> broken; pin replacement -> installed
+  ---
+  duration_ms: 109.1695
+  type: 'test'
+  ...
+# Subtest: codex: orphan env block without parent section is broken; repair rewrites full block
+ok 149 - codex: orphan env block without parent section is broken; repair rewrites full block
+  ---
+  duration_ms: 102.1669
+  type: 'test'
+  ...
+# Subtest: codex: outdated (pinned) -> update; broken bundle -> repair
+ok 150 - codex: outdated (pinned) -> update; broken bundle -> repair
+  ---
+  duration_ms: 145.8424
+  type: 'test'
+  ...
+# Subtest: codex: preserves unrelated config.toml sections
+ok 151 - codex: preserves unrelated config.toml sections
+  ---
+  duration_ms: 99.0483
+  type: 'test'
+  ...
+# Subtest: capabilities stay honest: claude/codex never claim FULL push
+ok 152 - capabilities stay honest: claude/codex never claim FULL push
+  ---
+  duration_ms: 71.8051
+  type: 'test'
+  ...
+# Subtest: claude-desktop: fresh project detects absent; verify fails honestly
+ok 153 - claude-desktop: fresh project detects absent; verify fails honestly
+  ---
+  duration_ms: 0.7602
+  type: 'test'
+  ...
+# Subtest: claude-desktop: install lays out bundle + stamps marker; verify passes
+ok 154 - claude-desktop: install lays out bundle + stamps marker; verify passes
+  ---
+  duration_ms: 6.1874
+  type: 'test'
+  ...
+# Subtest: claude-desktop: repeated install idempotent; outdated marker -> update bumps
+ok 155 - claude-desktop: repeated install idempotent; outdated marker -> update bumps
+  ---
+  duration_ms: 12.3154
+  type: 'test'
+  ...
+# Subtest: claude-desktop: broken (server deleted) -> repair restores; unrelated files preserved
+ok 156 - claude-desktop: broken (server deleted) -> repair restores; unrelated files preserved
+  ---
+  duration_ms: 8.1555
+  type: 'test'
+  ...
+# Subtest: claude-desktop: partial bundle (manifest without server) is broken; capabilities stay honest
+ok 157 - claude-desktop: partial bundle (manifest without server) is broken; capabilities stay honest
+  ---
+  duration_ms: 2.1109
+  type: 'test'
+  ...
+# Subtest: claude-desktop: invalid manifest is broken (never installed)
+ok 158 - claude-desktop: invalid manifest is broken (never installed)
+  ---
+  duration_ms: 1.5621
+  type: 'test'
+  ...
+# Subtest: chatgpt: fresh absent; install scaffolds + stamps marker; verify passes
+ok 159 - chatgpt: fresh absent; install scaffolds + stamps marker; verify passes
+  ---
+  duration_ms: 4.6743
+  type: 'test'
+  ...
+# Subtest: chatgpt: repeated install idempotent; outdated marker -> update bumps
+ok 160 - chatgpt: repeated install idempotent; outdated marker -> update bumps
+  ---
+  duration_ms: 7.7871
+  type: 'test'
+  ...
+# Subtest: chatgpt: broken (one file deleted) -> repair restores; unrelated project files preserved
+ok 161 - chatgpt: broken (one file deleted) -> repair restores; unrelated project files preserved
+  ---
+  duration_ms: 4.1242
+  type: 'test'
+  ...
+# Subtest: chatgpt: malformed integration.json -> detect still works; repair restamps
+ok 162 - chatgpt: malformed integration.json -> detect still works; repair restamps
+  ---
+  duration_ms: 5.5888
+  type: 'test'
+  ...
+# Subtest: chatgpt: capabilities honest — PULL ONLY scaffold, never FULL
+ok 163 - chatgpt: capabilities honest — PULL ONLY scaffold, never FULL
+  ---
+  duration_ms: 2.5791
+  type: 'test'
+  ...
+# Subtest: manager: registers all five adapters; detectAll covers desktop + chatgpt without throwing
+ok 164 - manager: registers all five adapters; detectAll covers desktop + chatgpt without throwing
+  ---
+  duration_ms: 1.0607
+  type: 'test'
+  ...
+# Subtest: manager: register + list exposes adapters by id
+ok 165 - manager: register + list exposes adapters by id
+  ---
+  duration_ms: 1.4297
+  type: 'test'
+  ...
+# Subtest: manager: unknown id returns ok:false Reports; detect throws
+ok 166 - manager: unknown id returns ok:false Reports; detect throws
+  ---
+  duration_ms: 0.7656
+  type: 'test'
+  ...
+# Subtest: manager: adapter throw maps to ok:false Report and broken detection
+ok 167 - manager: adapter throw maps to ok:false Report and broken detection
+  ---
+  duration_ms: 2.6213
+  type: 'test'
+  ...
+# Subtest: manager update: absent -> install, broken -> repair
+ok 168 - manager update: absent -> install, broken -> repair
+  ---
+  duration_ms: 1.8142
+  type: 'test'
+  ...
+# Subtest: manager update: marker version drift triggers adapter.update; current marker is a no-op
+ok 169 - manager update: marker version drift triggers adapter.update; current marker is a no-op
+  ---
+  duration_ms: 5.0777
+  type: 'test'
+  ...
+# Subtest: manager update: adapter outdated status triggers adapter.update
+ok 170 - manager update: adapter outdated status triggers adapter.update
+  ---
+  duration_ms: 1.1215
+  type: 'test'
+  ...
+# Subtest: versioning: fresh write then read round-trips
+ok 171 - versioning: fresh write then read round-trips
+  ---
+  duration_ms: 1.8826
+  type: 'test'
+  ...
+# Subtest: versioning: malformed JSON returns null and never throws
+ok 172 - versioning: malformed JSON returns null and never throws
+  ---
+  duration_ms: 4.1974
+  type: 'test'
+  ...
+# Subtest: versioning: per-id update preserves other ids and is idempotent
+ok 173 - versioning: per-id update preserves other ids and is idempotent
+  ---
+  duration_ms: 6.4358
+  type: 'test'
+  ...
+# Subtest: versioning: atomic write leaves no temp files behind
+ok 174 - versioning: atomic write leaves no temp files behind
+  ---
+  duration_ms: 1.3886
+  type: 'test'
+  ...
+# Subtest: versioning: compareVersions handles major/minor/patch and suffixes
+ok 175 - versioning: compareVersions handles major/minor/patch and suffixes
+  ---
+  duration_ms: 0.174
+  type: 'test'
+  ...
+# Subtest: versioning: compareVersions strips a leading v (update.ts parity)
+ok 176 - versioning: compareVersions strips a leading v (update.ts parity)
+  ---
+  duration_ms: 0.1044
+  type: 'test'
+  ...
+# Subtest: versioning: readIntegrationFile mirrors readIntegrationMarkers; removeIntegrationMarker drops one id
+ok 177 - versioning: readIntegrationFile mirrors readIntegrationMarkers; removeIntegrationMarker drops one id
+  ---
+  duration_ms: 5.2974
+  type: 'test'
+  ...
+# Subtest: manager update: installed + marker absent triggers adoption update, not a no-op
+ok 178 - manager update: installed + marker absent triggers adoption update, not a no-op
+  ---
+  duration_ms: 0.8553
+  type: 'test'
+  ...
+# Subtest: manager update: installed + marker current is a strict no-op (single action, no writes)
+ok 179 - manager update: installed + marker current is a strict no-op (single action, no writes)
+  ---
+  duration_ms: 2.0564
+  type: 'test'
+  ...
+# Subtest: manager: ok:false never leaves a success stamp (rollback restores pre-op marker)
+ok 180 - manager: ok:false never leaves a success stamp (rollback restores pre-op marker)
+  ---
+  duration_ms: 8.2959
+  type: 'test'
+  ...
+# Subtest: manager: two parallel installs serialize — no lost markers, file stays valid
+ok 181 - manager: two parallel installs serialize — no lost markers, file stays valid
+  ---
+  duration_ms: 76.9816
+  type: 'test'
+  ...
+# Subtest: manager + real claude-code adapter: corrupt settings => ok:false, marker untouched, never throws
+ok 182 - manager + real claude-code adapter: corrupt settings => ok:false, marker untouched, never throws
+  ---
+  duration_ms: 27.311
+  type: 'test'
+  ...
+# Subtest: manager.uninstall: delegates to adapters with the member; ok:false 'uninstall unsupported' without it
+ok 183 - manager.uninstall: delegates to adapters with the member; ok:false 'uninstall unsupported' without it
+  ---
+  duration_ms: 1.7637
+  type: 'test'
+  ...
+# Subtest: PLACEHOLDER_ISSUE is the exact string both claude-code and codex adapters emit
+ok 184 - PLACEHOLDER_ISSUE is the exact string both claude-code and codex adapters emit
+  ---
+  duration_ms: 26.2734
+  type: 'test'
+  ...
+# Subtest: opencode uninstall: fresh->install->uninstall->absent->re-uninstall no-op
+ok 185 - opencode uninstall: fresh->install->uninstall->absent->re-uninstall no-op
+  ---
+  duration_ms: 34.8841
+  type: 'test'
+  ...
+# Subtest: opencode uninstall: preserves unrelated keys + other markers; foreign plugin.js never deleted
+ok 186 - opencode uninstall: preserves unrelated keys + other markers; foreign plugin.js never deleted
+  ---
+  duration_ms: 43.8708
+  type: 'test'
+  ...
+# Subtest: opencode uninstall: malformed config => ok:false, marker untouched, zero writes
+ok 187 - opencode uninstall: malformed config => ok:false, marker untouched, zero writes
+  ---
+  duration_ms: 28.9829
+  type: 'test'
+  ...
+# Subtest: claude-code uninstall: removes hooks + mcp entry + bundles; state/pins survive
+ok 188 - claude-code uninstall: removes hooks + mcp entry + bundles; state/pins survive
+  ---
+  duration_ms: 40.1614
+  type: 'test'
+  ...
+# Subtest: claude-code uninstall: malformed settings => ok:false, marker untouched, zero writes
+ok 189 - claude-code uninstall: malformed settings => ok:false, marker untouched, zero writes
+  ---
+  duration_ms: 32.3933
+  type: 'test'
+  ...
+# Subtest: codex uninstall: removes ALL opencomms sections + bundle; others survive
+ok 190 - codex uninstall: removes ALL opencomms sections + bundle; others survive
+  ---
+  duration_ms: 60.7266
+  type: 'test'
+  ...
+# Subtest: codex uninstall: orphan env block is fully removed (no reinstall ghost)
+ok 191 - codex uninstall: orphan env block is fully removed (no reinstall ghost)
+  ---
+  duration_ms: 2.437
+  type: 'test'
+  ...
+# Subtest: claude-desktop uninstall: bundle dir removed; re-uninstall no-op
+ok 192 - claude-desktop uninstall: bundle dir removed; re-uninstall no-op
+  ---
+  duration_ms: 8.3783
+  type: 'test'
+  ...
+# Subtest: chatgpt uninstall: scaffold dir removed; re-uninstall no-op
+ok 193 - chatgpt uninstall: scaffold dir removed; re-uninstall no-op
+  ---
+  duration_ms: 6.6661
+  type: 'test'
+  ...
+# Subtest: manager uninstall: delegates, refuses member-less adapters, rejects unknown ids
+ok 194 - manager uninstall: delegates, refuses member-less adapters, rejects unknown ids
+  ---
+  duration_ms: 5.572
+  type: 'test'
+  ...
+# Subtest: uninstall removes only its own marker (other ids preserved)
+ok 195 - uninstall removes only its own marker (other ids preserved)
+  ---
+  duration_ms: 29.4709
+  type: 'test'
+  ...
+# Subtest: linked OpenCode persists stale cleanup when no host prompt is dispatched
+ok 196 - linked OpenCode persists stale cleanup when no host prompt is dispatched
+  ---
+  duration_ms: 8.4627
+  type: 'test'
+  ...
+# Subtest: linked spawn delivery persists stale cleanup without starting a vendor process
+ok 197 - linked spawn delivery persists stale cleanup without starting a vendor process
+  ---
+  duration_ms: 6.032
+  type: 'test'
+  ...
+# Subtest: linked OpenCode persists rejected cleanup when no host prompt is dispatched
+ok 198 - linked OpenCode persists rejected cleanup when no host prompt is dispatched
+  ---
+  duration_ms: 4.5539
+  type: 'test'
+  ...
+# Subtest: linked spawn delivery persists rejected cleanup without starting a vendor process
+ok 199 - linked spawn delivery persists rejected cleanup without starting a vendor process
+  ---
+  duration_ms: 3.6472
+  type: 'test'
+  ...
+# Subtest: managed creation durably reserves an operation, rejects a concurrent retry and reuses its exact successful identity
+ok 200 - managed creation durably reserves an operation, rejects a concurrent retry and reuses its exact successful identity
+  ---
+  duration_ms: 34.4317
+  type: 'test'
+  ...
+# Subtest: explicit managed isolation creates a real detached Git checkout of source HEAD and persists that runtime working directory
+ok 201 - explicit managed isolation creates a real detached Git checkout of source HEAD and persists that runtime working directory
+  ---
+  duration_ms: 499.5399
+  type: 'test'
+  ...
+# Subtest: nonGit isolation and unsupported required capabilities fail before runtime creation
+ok 202 - nonGit isolation and unsupported required capabilities fail before runtime creation
+  ---
+  duration_ms: 39.1717
+  type: 'test'
+  ...
+# Subtest: managed delivery: busy endpoint stays queued; idle accepts persisted in-flight batch and commits delivery
+ok 203 - managed delivery: busy endpoint stays queued; idle accepts persisted in-flight batch and commits delivery
+  ---
+  duration_ms: 20.33
+  type: 'test'
+  ...
+# Subtest: managed delivery: uncertain host acceptance stays visible and is not replayed by another tick or controller restart
+ok 204 - managed delivery: uncertain host acceptance stays visible and is not replayed by another tick or controller restart
+  ---
+  duration_ms: 19.8038
+  type: 'test'
+  ...
+# Subtest: managed delivery: known host rejection requeues instead of reporting delivery
+ok 205 - managed delivery: known host rejection requeues instead of reporting delivery
+  ---
+  duration_ms: 10.1217
+  type: 'test'
+  ...
+# Subtest: managed delivery: pause applied during host status lookup prevents draining
+ok 206 - managed delivery: pause applied during host status lookup prevents draining
+  ---
+  duration_ms: 10.5773
+  type: 'test'
+  ...
+# Subtest: managed delivery: emergency close during host status lookup preserves queued work
+ok 207 - managed delivery: emergency close during host status lookup preserves queued work
+  ---
+  duration_ms: 8
+  type: 'test'
+  ...
+# Subtest: managed delivery: stopped lifecycle wins over stale idle lookup before drain
+ok 208 - managed delivery: stopped lifecycle wins over stale idle lookup before drain
+  ---
+  duration_ms: 9.2654
+  type: 'test'
+  ...
+# Subtest: managed delivery persists rejected queued envelopes even when no batch is handed over
+ok 209 - managed delivery persists rejected queued envelopes even when no batch is handed over
+  ---
+  duration_ms: 13.6127
+  type: 'test'
+  ...
+# Subtest: managed delivery publishes changed status and persists redacted actionable connection details
+ok 210 - managed delivery publishes changed status and persists redacted actionable connection details
+  ---
+  duration_ms: 12.0346
+  type: 'test'
+  ...
+# Subtest: unpinned environment is denied for every operation (fail closed)
+ok 211 - unpinned environment is denied for every operation (fail closed)
+  ---
+  duration_ms: 1.2498
+  type: 'test'
+  ...
+# Subtest: pinned member identity authorizes only that member
+ok 212 - pinned member identity authorizes only that member
+  ---
+  duration_ms: 0.177
+  type: 'test'
+  ...
+# Subtest: kicked member's pin stops granting access immediately (fail closed)
+ok 213 - kicked member's pin stops granting access immediately (fail closed)
+  ---
+  duration_ms: 0.3286
+  type: 'test'
+  ...
+# Subtest: two members on one machine cannot send as each other (identity is per-instance)
+ok 214 - two members on one machine cannot send as each other (identity is per-instance)
+  ---
+  duration_ms: 0.1291
+  type: 'test'
+  ...
+# Subtest: pinnedMember ignores blank/whitespace ids
+ok 215 - pinnedMember ignores blank/whitespace ids
+  ---
+  duration_ms: 0.0747
+  type: 'test'
+  ...
+# Subtest: M4.6 principal: pin class read + member default (additive backfill)
+ok 216 - M4.6 principal: pin class read + member default (additive backfill)
+  ---
+  duration_ms: 3.4336
+  type: 'test'
+  ...
+# Subtest: M4.6 condition A: member-class pin invoking an operator tool is DENIED at dispatch
+ok 217 - M4.6 condition A: member-class pin invoking an operator tool is DENIED at dispatch
+  ---
+  duration_ms: 3.1482
+  type: 'test'
+  ...
+# Subtest: M4.6 condition B: --admin gate has both deny paths (no flag / no operator identity)
+ok 218 - M4.6 condition B: --admin gate has both deny paths (no flag / no operator identity)
+  ---
+  duration_ms: 2.864
+  type: 'test'
+  ...
+# Subtest: M4.6 condition C: human-present token flows through the OrchestratorApi gate; token never lands in output
+ok 219 - M4.6 condition C: human-present token flows through the OrchestratorApi gate; token never lands in output
+  ---
+  duration_ms: 9.4452
+  type: 'test'
+  ...
+# Subtest: M4.6 registry: tool list is identity-scoped (member pin sees no operator tools)
+ok 220 - M4.6 registry: tool list is identity-scoped (member pin sees no operator tools)
+  ---
+  duration_ms: 1.8339
+  type: 'test'
+  ...
+# Subtest: M4.6 wiring: the production MCP server registry includes the orchestrator tools (P2 wiring gap)
+ok 221 - M4.6 wiring: the production MCP server registry includes the orchestrator tools (P2 wiring gap)
+  ---
+  duration_ms: 823.4648
+  type: 'test'
+  ...
+# Subtest: goose exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+ok 222 - goose exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+  ---
+  duration_ms: 112.0195
+  type: 'test'
+  ...
+# Subtest: cursor exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+ok 223 - cursor exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+  ---
+  duration_ms: 93.5301
+  type: 'test'
+  ...
+# Subtest: cline exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+ok 224 - cline exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+  ---
+  duration_ms: 94.6337
+  type: 'test'
+  ...
+# Subtest: roo exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+ok 225 - roo exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+  ---
+  duration_ms: 94.2322
+  type: 'test'
+  ...
+# Subtest: continue exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+ok 226 - continue exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+  ---
+  duration_ms: 110.7206
+  type: 'test'
+  ...
+# Subtest: vscode-copilot exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+ok 227 - vscode-copilot exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+  ---
+  duration_ms: 94.6857
+  type: 'test'
+  ...
+# Subtest: windsurf-cascade exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+ok 228 - windsurf-cascade exported profile launches actual standalone MCP, preserves host label and pulls framed mail
+  ---
+  duration_ms: 93.1283
+  type: 'test'
+  ...
+# Subtest: MCP profile CLI prints reviewable config without altering project files and rejects unsafe/missing inputs
+ok 229 - MCP profile CLI prints reviewable config without altering project files and rejects unsafe/missing inputs
+  ---
+  duration_ms: 1.9221
+  type: 'test'
+  ...
+# Subtest: opencomms_pull drains and MARKS DELIVERED (second pull returns nothing)
+ok 230 - opencomms_pull drains and MARKS DELIVERED (second pull returns nothing)
+  ---
+  duration_ms: 12.1398
+  type: 'test'
+  ...
+# Subtest: opencomms_inbox previews WITHOUT consuming (messages stay pending)
+ok 231 - opencomms_inbox previews WITHOUT consuming (messages stay pending)
+  ---
+  duration_ms: 7.7261
+  type: 'test'
+  ...
+# Subtest: unpinned member cannot pull (fail closed)
+ok 232 - unpinned member cannot pull (fail closed)
+  ---
+  duration_ms: 3.7714
+  type: 'test'
+  ...
+# Subtest: JSON-RPC round-trip over a real stdio pipe: initialize -> tools/list -> tools/call(pull)
+ok 233 - JSON-RPC round-trip over a real stdio pipe: initialize -> tools/list -> tools/call(pull)
+  ---
+  duration_ms: 109.3857
+  type: 'test'
+  ...
+# Subtest: oversized frame gets -32700 and the server survives (initialize afterwards still works)
+ok 234 - oversized frame gets -32700 and the server survives (initialize afterwards still works)
+  ---
+  duration_ms: 86.5985
+  type: 'test'
+  ...
+# Subtest: MCP accepts a x frame exactly at the UTF-8 byte limit
+ok 235 - MCP accepts a x frame exactly at the UTF-8 byte limit
+  ---
+  duration_ms: 65.3902
+  type: 'test'
+  ...
+# Subtest: MCP rejects a x frame one byte over the limit and recovers
+ok 236 - MCP rejects a x frame one byte over the limit and recovers
+  ---
+  duration_ms: 65.5296
+  type: 'test'
+  ...
+# Subtest: MCP accepts a 😀 frame exactly at the UTF-8 byte limit
+ok 237 - MCP accepts a 😀 frame exactly at the UTF-8 byte limit
+  ---
+  duration_ms: 365.8646
+  type: 'test'
+  ...
+# Subtest: MCP rejects a 😀 frame one byte over the limit and recovers
+ok 238 - MCP rejects a 😀 frame one byte over the limit and recovers
+  ---
+  duration_ms: 116.0974
+  type: 'test'
+  ...
+# Subtest: MCP accepts a 界 frame exactly at the UTF-8 byte limit
+ok 239 - MCP accepts a 界 frame exactly at the UTF-8 byte limit
+  ---
+  duration_ms: 98.7311
+  type: 'test'
+  ...
+# Subtest: MCP rejects a 界 frame one byte over the limit and recovers
+ok 240 - MCP rejects a 界 frame one byte over the limit and recovers
+  ---
+  duration_ms: 126.1036
+  type: 'test'
+  ...
+# Subtest: MCP accumulates UTF-8 bytes across chunks for the buffer limit and recovers
+ok 241 - MCP accumulates UTF-8 bytes across chunks for the buffer limit and recovers
+  ---
+  duration_ms: 87.8389
+  type: 'test'
+  ...
+# Subtest: v1 state migrates to v2 on first load: members enriched, queues/messages preserved
+ok 242 - v1 state migrates to v2 on first load: members enriched, queues/messages preserved
+  ---
+  duration_ms: 11.2732
+  type: 'test'
+  ...
+# Subtest: second load does NOT re-migrate (marker discipline)
+ok 243 - second load does NOT re-migrate (marker discipline)
+  ---
+  duration_ms: 8.9087
+  type: 'test'
+  ...
+# Subtest: legacy state recovers over an empty GUI placeholder with the same channel name
+ok 244 - legacy state recovers over an empty GUI placeholder with the same channel name
+  ---
+  duration_ms: 11.7677
+  type: 'test'
+  ...
+# Subtest: tampered legacy state is never migrated; starts empty with recorded reason
+ok 245 - tampered legacy state is never migrated; starts empty with recorded reason
+  ---
+  duration_ms: 2.9929
+  type: 'test'
+  ...
+# Subtest: no legacy dir: plain empty state, no migration noise
+ok 246 - no legacy dir: plain empty state, no migration noise
+  ---
+  duration_ms: 0.7601
+  type: 'test'
+  ...
+# Subtest: (1)(4)(5) two Claude + two Codex members coexist in one session
+ok 247 - (1)(4)(5) two Claude + two Codex members coexist in one session
+  ---
+  duration_ms: 1.8914
+  type: 'test'
+  ...
+# Subtest: (6)(8) multiple providers -> one target; direct member-to-member
+ok 248 - (6)(8) multiple providers -> one target; direct member-to-member
+  ---
+  duration_ms: 1.7995
+  type: 'test'
+  ...
+# Subtest: (7) broadcast across all providers; PULL member queued too
+ok 249 - (7) broadcast across all providers; PULL member queued too
+  ---
+  duration_ms: 0.322
+  type: 'test'
+  ...
+# Subtest: (9) PUSH + PULL + spawn_push coexist; drains respect the mode (PULL survives until read)
+ok 250 - (9) PUSH + PULL + spawn_push coexist; drains respect the mode (PULL survives until read)
+  ---
+  duration_ms: 0.5124
+  type: 'test'
+  ...
+# Subtest: (16)(17) rate limit counts logical sends; concurrent different members progress independently
+ok 251 - (16)(17) rate limit counts logical sends; concurrent different members progress independently
+  ---
+  duration_ms: 0.3377
+  type: 'test'
+  ...
+# Subtest: budgets: max_delivered_messages caps lifetime handovers (retries included)
+ok 252 - budgets: max_delivered_messages caps lifetime handovers (retries included)
+  ---
+  duration_ms: 0.3406
+  type: 'test'
+  ...
+# Subtest: budgets: max_runtime_ms stops a conversation past its runtime cap
+ok 253 - budgets: max_runtime_ms stops a conversation past its runtime cap
+  ---
+  duration_ms: 0.2035
+  type: 'test'
+  ...
+# Subtest: retry cap: failed deliveries dead-letter after MAX_DELIVERY_ATTEMPTS (no amplification)
+ok 254 - retry cap: failed deliveries dead-letter after MAX_DELIVERY_ATTEMPTS (no amplification)
+  ---
+  duration_ms: 0.4152
+  type: 'test'
+  ...
+# Subtest: concurrent members: interleaved sends to DIFFERENT targets never cross
+ok 255 - concurrent members: interleaved sends to DIFFERENT targets never cross
+  ---
+  duration_ms: 0.7048
+  type: 'test'
+  ...
+# Subtest: max_members: 8 is the DEFAULT, not the ceiling (configurable up to 32)
+ok 256 - max_members: 8 is the DEFAULT, not the ceiling (configurable up to 32)
+  ---
+  duration_ms: 0.2611
+  type: 'test'
+  ...
+# Subtest: plugin startup recovers linked deliveries and preserves managed uncertain acceptance without prompting managed queues
+ok 257 - plugin startup recovers linked deliveries and preserves managed uncertain acceptance without prompting managed queues
+  ---
+  duration_ms: 14.0218
+  type: 'test'
+  ...
+# Subtest: managed OpenCode verifies recorded identity, reads busy/idle and commits acceptance independently of work completion
+ok 258 - managed OpenCode verifies recorded identity, reads busy/idle and commits acceptance independently of work completion
+  ---
+  duration_ms: 89.5253
+  type: 'test'
+  ...
+# Subtest: managed OpenCode retains an uncertain delivery after transport loss and distinguishes rejection
+ok 259 - managed OpenCode retains an uncertain delivery after transport loss and distinguishes rejection
+  ---
+  duration_ms: 0.5826
+  type: 'test'
+  ...
+# Subtest: managed OpenCode permissions use the official list/reply routes and restrict replies to the recorded session
+ok 260 - managed OpenCode permissions use the official list/reply routes and restrict replies to the recorded session
+  ---
+  duration_ms: 61.8491
+  type: 'test'
+  ...
+# Subtest: managed OpenCode session creation and delivery carry the exact selected worktree directory
+ok 261 - managed OpenCode session creation and delivery carry the exact selected worktree directory
+  ---
+  duration_ms: 47.0544
+  type: 'test'
+  ...
+# Subtest: orchestrator store: fresh project -> local node online, deterministic id per worktree
+ok 262 - orchestrator store: fresh project -> local node online, deterministic id per worktree
+  ---
+  duration_ms: 7.7116
+  type: 'test'
+  ...
+# Subtest: orchestrator state: tampered file fails closed and records the reason
+ok 263 - orchestrator state: tampered file fails closed and records the reason
+  ---
+  duration_ms: 14.4865
+  type: 'test'
+  ...
+# Subtest: orchestrator state: multiple designated leads in a persisted file are rejected
+ok 264 - orchestrator state: multiple designated leads in a persisted file are rejected
+  ---
+  duration_ms: 2.5827
+  type: 'test'
+  ...
+# Subtest: orchestrator api: second designated:'lead' create is a 409-style conflict
+ok 265 - orchestrator api: second designated:'lead' create is a 409-style conflict
+  ---
+  duration_ms: 26.6728
+  type: 'test'
+  ...
+# Subtest: orchestrator api: REDACTION BY VALUE — password value absent from every persisted field
+ok 266 - orchestrator api: REDACTION BY VALUE — password value absent from every persisted field
+  ---
+  duration_ms: 17.1865
+  type: 'test'
+  ...
+# Subtest: orchestrator api: model pinning is required and validated
+ok 267 - orchestrator api: model pinning is required and validated
+  ---
+  duration_ms: 3.8941
+  type: 'test'
+  ...
+# Subtest: orchestrator api: trust approve/revoke require the owner confirm token (403 + audit)
+ok 268 - orchestrator api: trust approve/revoke require the owner confirm token (403 + audit)
+  ---
+  duration_ms: 18.1284
+  type: 'test'
+  ...
+# Subtest: M5 audit log: owner-only, append-only, secret-free, cursor-paginated
+ok 269 - M5 audit log: owner-only, append-only, secret-free, cursor-paginated
+  ---
+  duration_ms: 16.3863
+  type: 'test'
+  ...
+# Subtest: orchestrator events: ring cap + cursor pagination
+ok 270 - orchestrator events: ring cap + cursor pagination
+  ---
+  duration_ms: 1.6364
+  type: 'test'
+  ...
+# Subtest: orchestrator api M2: REAL restart adopts the existing session (no duplicate identity)
+ok 271 - orchestrator api M2: REAL restart adopts the existing session (no duplicate identity)
+  ---
+  duration_ms: 23.963
+  type: 'test'
+  ...
+# Subtest: orchestrator restart preserves identity on failed resume; replacement requires explicit authorization
+ok 272 - orchestrator restart preserves identity on failed resume; replacement requires explicit authorization
+  ---
+  duration_ms: 29.7902
+  type: 'test'
+  ...
+# Subtest: orchestrator api M2: stop is graceful, lead-protected, and idempotent
+ok 273 - orchestrator api M2: stop is graceful, lead-protected, and idempotent
+  ---
+  duration_ms: 44.7319
+  type: 'test'
+  ...
+# Subtest: orchestrator state M2: restart_policy backfills to manual and validates
+ok 274 - orchestrator state M2: restart_policy backfills to manual and validates
+  ---
+  duration_ms: 4.441
+  type: 'test'
+  ...
+# Subtest: orchestrator state M3: node identity fields backfill; tampered tier/grants fail closed
+ok 275 - orchestrator state M3: node identity fields backfill; tampered tier/grants fail closed
+  ---
+  duration_ms: 4.6299
+  type: 'test'
+  ...
+# Subtest: orchestrator api M3: pairing flow — owner generates code, node claims, owner approves
+ok 276 - orchestrator api M3: pairing flow — owner generates code, node claims, owner approves
+  ---
+  duration_ms: 80.9121
+  type: 'test'
+  ...
+# Subtest: orchestrator api M3: revoke marks remote agents failed (never deleted) with audit evidence
+ok 277 - orchestrator api M3: revoke marks remote agents failed (never deleted) with audit evidence
+  ---
+  duration_ms: 32.385
+  type: 'test'
+  ...
+# Subtest: M4 condition C: assertRemoteActionAllowed — the four deny cases + pass case
+ok 278 - M4 condition C: assertRemoteActionAllowed — the four deny cases + pass case
+  ---
+  duration_ms: 7.5017
+  type: 'test'
+  ...
+# Subtest: M4 condition C: remote spawn + remote task assignment are gated with 403 + audit
+ok 279 - M4 condition C: remote spawn + remote task assignment are gated with 403 + audit
+  ---
+  duration_ms: 23.8157
+  type: 'test'
+  ...
+# Subtest: node-ca M3: issuance, verification, expiry, and LOAD-BEARING revocation (binding B)
+ok 280 - node-ca M3: issuance, verification, expiry, and LOAD-BEARING revocation (binding B)
+  ---
+  duration_ms: 9.1483
+  type: 'test'
+  ...
+# Subtest: node-transport M3: bearer auth is nonce-bound, revocation-gated, and wss-only
+ok 281 - node-transport M3: bearer auth is nonce-bound, revocation-gated, and wss-only
+  ---
+  duration_ms: 2.2215
+  type: 'test'
+  ...
+# Subtest: node-transport M3: cursor+ack window (P3-2 composition: redelivery bounded, idempotent)
+ok 282 - node-transport M3: cursor+ack window (P3-2 composition: redelivery bounded, idempotent)
+  ---
+  duration_ms: 0.2454
+  type: 'test'
+  ...
+# Subtest: node-transport M3.5: dedupeForNode — node-side dedup (P2-A single implementation point)
+ok 283 - node-transport M3.5: dedupeForNode — node-side dedup (P2-A single implementation point)
+  ---
+  duration_ms: 0.3365
+  type: 'test'
+  ...
+# Subtest: node-server M3.5: NodeTransportServer contract — auth gate, deliver, ack routing
+ok 284 - node-server M3.5: NodeTransportServer contract — auth gate, deliver, ack routing
+  ---
+  duration_ms: 0.4163
+  type: 'test'
+  ...
+# Subtest: node-server M3.5: watchdog speaker — READY after dial+heartbeat, derived cadence, no hardcoding
+ok 285 - node-server M3.5: watchdog speaker — READY after dial+heartbeat, derived cadence, no hardcoding
+  ---
+  duration_ms: 0.3259
+  type: 'test'
+  ...
+# Subtest: node-server M3.5: enrollment output + auth headers contract
+ok 286 - node-server M3.5: enrollment output + auth headers contract
+  ---
+  duration_ms: 0.6065
+  type: 'test'
+  ...
+# Subtest: node-wire M3.5: COMPOSED auth chain at admission — revoked node rejected AT THE SERVER (binding B)
+ok 287 - node-wire M3.5: COMPOSED auth chain at admission — revoked node rejected AT THE SERVER (binding B)
+  ---
+  duration_ms: 7.0898
+  type: 'test'
+  ...
+# Subtest: orchestrator feed: emit persists via locked mutate and broadcasts with seq
+ok 288 - orchestrator feed: emit persists via locked mutate and broadcasts with seq
+  ---
+  duration_ms: 63.3301
+  type: 'test'
+  ...
+# Subtest: opencode models catalog: parses provider/model lines into grouped providers
+ok 289 - opencode models catalog: parses provider/model lines into grouped providers
+  ---
+  duration_ms: 0.694
+  type: 'test'
+  ...
+# Subtest: opencode runtime detect: execFileSync import is available (catalog helper wiring)
+ok 290 - opencode runtime detect: execFileSync import is available (catalog helper wiring)
+  ---
+  duration_ms: 0.2208
+  type: 'test'
+  ...
+# Subtest: resolveOpencodeBinary: checked path == returned path (regression: checked != returned)
+ok 291 - resolveOpencodeBinary: checked path == returned path (regression: checked != returned)
+  ---
+  duration_ms: 0.625
+  type: 'test'
+  ...
+# Subtest: orchestrator api: managed agents use the selected source tree and do not claim empty folders are worktrees
+ok 292 - orchestrator api: managed agents use the selected source tree and do not claim empty folders are worktrees
+  ---
+  duration_ms: 36.7869
+  type: 'test'
+  ...
+# Subtest: orchestrator api M2: tasks/assign rides the engine and GET /tasks derives honestly
+ok 293 - orchestrator api M2: tasks/assign rides the engine and GET /tasks derives honestly
+  ---
+  duration_ms: 35.4863
+  type: 'test'
+  ...
+# Subtest: orchestrator api M2: permissionsDrain surface is operator-only and honest about support
+ok 294 - orchestrator api M2: permissionsDrain surface is operator-only and honest about support
+  ---
+  duration_ms: 26.3563
+  type: 'test'
+  ...
+# Subtest: ensureServe: fake serve child reports listening -> ok with port; no password in argv
+ok 295 - ensureServe: fake serve child reports listening -> ok with port; no password in argv
+  ---
+  duration_ms: 22.5274
+  type: 'test'
+  ...
+# Subtest: ensureServe: idempotent — a live existing child returns the same port without respawning
+ok 296 - ensureServe: idempotent — a live existing child returns the same port without respawning
+  ---
+  duration_ms: 0.8773
+  type: 'test'
+  ...
+# Subtest: ensureServe: startup timeout kills the child and fails cleanly (no open-ended poll)
+ok 297 - ensureServe: startup timeout kills the child and fails cleanly (no open-ended poll)
+  ---
+  duration_ms: 311.5076
+  type: 'test'
+  ...
+# Subtest: ensureServe: a THROWING spawn (ENOENT class) fails cleanly without escaping the catch
+ok 298 - ensureServe: a THROWING spawn (ENOENT class) fails cleanly without escaping the catch
+  ---
+  duration_ms: 1.2671
+  type: 'test'
+  ...
+# Subtest: ensureServe: an 'error'-event child (post-spawn error) settles without hanging
+ok 299 - ensureServe: an 'error'-event child (post-spawn error) settles without hanging
+  ---
+  duration_ms: 1514.495
+  type: 'test'
+  ...
+# Subtest: bridge M4.5: handshake announcement + section-2 surface completeness
+ok 300 - bridge M4.5: handshake announcement + section-2 surface completeness
+  ---
+  duration_ms: 0.5016
+  type: 'test'
+  ...
+# Subtest: bridge M4.5: run loop - handshake FIRST, pre-ack stdin ignored, one-line-per-request
+ok 301 - bridge M4.5: run loop - handshake FIRST, pre-ack stdin ignored, one-line-per-request
+  ---
+  duration_ms: 315.6902
+  type: 'test'
+  ...
+# Subtest: bridge M5: hardening — oversized line rejected, partial line cannot wedge, sequential order kept
+ok 302 - bridge M5: hardening — oversized line rejected, partial line cannot wedge, sequential order kept
+  ---
+  duration_ms: 531.4506
+  type: 'test'
+  ...
+# Subtest: Windows installer definition is per-user, GUI-safe, and project-state preserving
+ok 303 - Windows installer definition is per-user, GUI-safe, and project-state preserving
+  ---
+  duration_ms: 8.469
+  type: 'test'
+  ...
+# Subtest: 21: new sessions are ACTIVE with no description and no parent
+ok 304 - 21: new sessions are ACTIVE with no description and no parent
+  ---
+  duration_ms: 1.5635
+  type: 'test'
+  ...
+# Subtest: 25-28: save archives messages, metadata, roster, prompts, and the structured summary
+ok 305 - 25-28: save archives messages, metadata, roster, prompts, and the structured summary
+  ---
+  duration_ms: 5.1974
+  type: 'test'
+  ...
+# Subtest: save purges live state; 29: the saved session can no longer send or join
+ok 306 - save purges live state; 29: the saved session can no longer send or join
+  ---
+  duration_ms: 3.8917
+  type: 'test'
+  ...
+# Subtest: 30-31: resume creates a NEW linked session; joiners get COMPACT context, never the transcript
+ok 307 - 30-31: resume creates a NEW linked session; joiners get COMPACT context, never the transcript
+  ---
+  duration_ms: 3.1114
+  type: 'test'
+  ...
+# Subtest: resume name ladder: name taken → -r2; ladder bounded
+ok 308 - resume name ladder: name taken → -r2; ladder bounded
+  ---
+  duration_ms: 0.5689
+  type: 'test'
+  ...
+# Subtest: 24: deletion is destructive and gated on confirm; archive is removed
+ok 309 - 24: deletion is destructive and gated on confirm; archive is removed
+  ---
+  duration_ms: 1.9112
+  type: 'test'
+  ...
+# Subtest: 24b: ACTIVE session deletion requires membership
+ok 310 - 24b: ACTIVE session deletion requires membership
+  ---
+  duration_ms: 0.1781
+  type: 'test'
+  ...
+# Subtest: 32: description is set ONCE by the first responding agent; later values ignored
+ok 311 - 32: description is set ONCE by the first responding agent; later values ignored
+  ---
+  duration_ms: 0.2961
+  type: 'test'
+  ...
+# Subtest: 33: description failure does not break the session
+ok 312 - 33: description failure does not break the session
+  ---
+  duration_ms: 0.1979
+  type: 'test'
+  ...
+# Subtest: endpoint capabilities: derived defaults + explicit override + spawn gate honors them
+ok 313 - endpoint capabilities: derived defaults + explicit override + spawn gate honors them
+  ---
+  duration_ms: 0.6583
+  type: 'test'
+  ...
+# Subtest: claude spawn argv contract: --resume <id> --print, message appended LAST, no shell
+ok 314 - claude spawn argv contract: --resume <id> --print, message appended LAST, no shell
+  ---
+  duration_ms: 0.9955
+  type: 'test'
+  ...
+# Subtest: codex spawn argv contract: exec resume <id>, message appended LAST
+ok 315 - codex spawn argv contract: exec resume <id>, message appended LAST
+  ---
+  duration_ms: 0.1017
+  type: 'test'
+  ...
+# Subtest: builder lookup is host-gated (fail closed for unsupported hosts)
+ok 316 - builder lookup is host-gated (fail closed for unsupported hosts)
+  ---
+  duration_ms: 0.0743
+  type: 'test'
+  ...
+# Subtest: spawnDeliveryRefusal: requires spawn_push mode + bound host session id + supported host
+ok 317 - spawnDeliveryRefusal: requires spawn_push mode + bound host session id + supported host
+  ---
+  duration_ms: 0.2814
+  type: 'test'
+  ...
+# Subtest: deliverViaSpawn happy path: drains, spawns with framed batch, commits delivered
+ok 318 - deliverViaSpawn happy path: drains, spawns with framed batch, commits delivered
+  ---
+  duration_ms: 2.0448
+  type: 'test'
+  ...
+# Subtest: deliverViaSpawn failure: CLI error requeues in FIFO order + records error
+ok 319 - deliverViaSpawn failure: CLI error requeues in FIFO order + records error
+  ---
+  duration_ms: 0.7895
+  type: 'test'
+  ...
+# Subtest: deliverViaSpawn skips ineligible members without spawning
+ok 320 - deliverViaSpawn skips ineligible members without spawning
+  ---
+  duration_ms: 0.2398
+  type: 'test'
+  ...
+# Subtest: deliverViaSpawn: per-member in-flight guard prevents overlapping spawns
+ok 321 - deliverViaSpawn: per-member in-flight guard prevents overlapping spawns
+  ---
+  duration_ms: 0.3076
+  type: 'test'
+  ...
+# Subtest: spawn delivery reserves the recipient before asynchronous drain and leaves concurrent new mail queued
+ok 322 - spawn delivery reserves the recipient before asynchronous drain and leaves concurrent new mail queued
+  ---
+  duration_ms: 7.6311
+  type: 'test'
+  ...
+# Subtest: actual failed CLI process does not expose its peer argv or stdout/stderr in recorded errors
+ok 323 - actual failed CLI process does not expose its peer argv or stdout/stderr in recorded errors
+  ---
+  duration_ms: 56.5925
+  type: 'test'
+  ...
+# Subtest: codex member spawn uses codex exec resume argv
+ok 324 - codex member spawn uses codex exec resume argv
+  ---
+  duration_ms: 0.4377
+  type: 'test'
+  ...
+# Subtest: join with spawn_push flag records spawn_push delivery mode (MCP schema)
+ok 325 - join with spawn_push flag records spawn_push delivery mode (MCP schema)
+  ---
+  duration_ms: 0.2718
+  type: 'test'
+  ...
+# Subtest: parseCommandTemplate: quote-aware split, no shell semantics
+ok 326 - parseCommandTemplate: quote-aware split, no shell semantics
+  ---
+  duration_ms: 0.4395
+  type: 'test'
+  ...
+# Subtest: resolveBinaryOverride: plain value = argv[0]; template = executable + prepended args
+ok 327 - resolveBinaryOverride: plain value = argv[0]; template = executable + prepended args
+  ---
+  duration_ms: 0.293
+  type: 'test'
+  ...
+# Subtest: template override flows through the builders (extra argv before host args)
+ok 328 - template override flows through the builders (extra argv before host args)
+  ---
+  duration_ms: 0.2405
+  type: 'test'
+  ...
+# Subtest: shim detection: .cmd/.bat on win32 only
+ok 329 - shim detection: .cmd/.bat on win32 only
+  ---
+  duration_ms: 0.1026
+  type: 'test'
+  ...
+# Subtest: P2-1: spawn failure with EINVAL carries the actionable shim hint
+ok 330 - P2-1: spawn failure with EINVAL carries the actionable shim hint
+  ---
+  duration_ms: 0.3864
+  type: 'test'
+  ...
+# Subtest: P2-2: oversized batch refused BEFORE draining; queue untouched; no spawn
+ok 331 - P2-2: oversized batch refused BEFORE draining; queue untouched; no spawn
+  ---
+  duration_ms: 1.3065
+  type: 'test'
+  ...
+# Subtest: spawn argv budget is platform-aware and conservative
+ok 332 - spawn argv budget is platform-aware and conservative
+  ---
+  duration_ms: 0.0756
+  type: 'test'
+  ...
+# Subtest: normal messages unaffected by the size guard (fit within budget)
+ok 333 - normal messages unaffected by the size guard (fit within budget)
+  ---
+  duration_ms: 0.2547
+  type: 'test'
+  ...
+# Subtest: PULL member's envelope survives far beyond the 5-minute window
+ok 334 - PULL member's envelope survives far beyond the 5-minute window
+  ---
+  duration_ms: 2.6288
+  type: 'test'
+  ...
+# Subtest: PUSH member's envelope still goes stale after the window (unchanged v1 behavior)
+ok 335 - PUSH member's envelope still goes stale after the window (unchanged v1 behavior)
+  ---
+  duration_ms: 0.3125
+  type: 'test'
+  ...
+# Subtest: mixed PUSH+PULL channel: PUSH copy goes stale, PULL copy stays readable
+ok 336 - mixed PUSH+PULL channel: PUSH copy goes stale, PULL copy stays readable
+  ---
+  duration_ms: 1.0058
+  type: 'test'
+  ...
+# Subtest: PUSH default preserved for v1-migrated members (window policy)
+ok 337 - PUSH default preserved for v1-migrated members (window policy)
+  ---
+  duration_ms: 0.195
+  type: 'test'
+  ...
+# Subtest: task assignment targets only its owner on a three-member channel; concurrent retries dispatch once
+ok 338 - task assignment targets only its owner on a three-member channel; concurrent retries dispatch once
+  ---
+  duration_ms: 21.1929
+  type: 'test'
+  ...
+# Subtest: operator reassignment cancels queued prior delivery atomically, preserves task evidence/context, and deduplicates concurrent retries
+ok 339 - operator reassignment cancels queued prior delivery atomically, preserves task evidence/context, and deduplicates concurrent retries
+  ---
+  duration_ms: 38.9637
+  type: 'test'
+  ...
+# Subtest: reassignment refuses active or uncertain execution and requires confirmation for already received work
+ok 340 - reassignment refuses active or uncertain execution and requires confirmation for already received work
+  ---
+  duration_ms: 35.6558
+  type: 'test'
+  ...
+# Subtest: deterministic refused handoff retains prior owner and queue; retrying that operation never repeats dispatch
+ok 341 - deterministic refused handoff retains prior owner and queue; retrying that operation never repeats dispatch
+  ---
+  duration_ms: 26.0276
+  type: 'test'
+  ...
+# Subtest: interrupted handoff before queue persistence is visibly uncertain and cannot be blindly retried
+ok 342 - interrupted handoff before queue persistence is visibly uncertain and cannot be blindly retried
+  ---
+  duration_ms: 25.0057
+  type: 'test'
+  ...
+# Subtest: handoff recovery after persisted queue but interrupted final save uses its exact envelope and never resends
+ok 343 - handoff recovery after persisted queue but interrupted final save uses its exact envelope and never resends
+  ---
+  duration_ms: 22.8533
+  type: 'test'
+  ...
+# Subtest: saved team templates are project-local editable intent; save/delete never launches or alters live agents
+ok 344 - saved team templates are project-local editable intent; save/delete never launches or alters live agents
+  ---
+  duration_ms: 25.0359
+  type: 'test'
+  ...
+# Subtest: team template validation bounds prompts/teams/budgets and rejects unavailable capability names or secret values
+ok 345 - team template validation bounds prompts/teams/budgets and rejects unavailable capability names or secret values
+  ---
+  duration_ms: 4.7299
+  type: 'test'
+  ...
+# Subtest: template and emergency fields backfill old orchestration stores without altering existing agent/task rows
+ok 346 - template and emergency fields backfill old orchestration stores without altering existing agent/task rows
+  ---
+  duration_ms: 5.0128
+  type: 'test'
+  ...
+# Subtest: acknowledgement is delivery evidence only; completion requires matching behavior evidence and accepted independent review
+ok 347 - acknowledgement is delivery evidence only; completion requires matching behavior evidence and accepted independent review
+  ---
+  duration_ms: 50.4214
+  type: 'test'
+  ...
+# Subtest: task revisions, dependency admission, advisory ownership conflicts and bounded review cycles are enforced
+ok 348 - task revisions, dependency admission, advisory ownership conflicts and bounded review cycles are enforced
+  ---
+  duration_ms: 42.088
+  type: 'test'
+  ...
+# Subtest: uncertain dispatch is durable and is never blindly repeated after a restart
+ok 349 - uncertain dispatch is durable and is never blindly repeated after a restart
+  ---
+  duration_ms: 9.9212
+  type: 'test'
+  ...
+# Subtest: an interrupted save after queued delivery reconciles the journal and does not dispatch twice
+ok 350 - an interrupted save after queued delivery reconciles the journal and does not dispatch twice
+  ---
+  duration_ms: 12.9936
+  type: 'test'
+  ...
+# Subtest: legacy task migration preserves original data and never turns old replies into completed work
+ok 351 - legacy task migration preserves original data and never turns old replies into completed work
+  ---
+  duration_ms: 21.8188
+  type: 'test'
+  ...
+# Subtest: project context separates proposals, decisions and verified findings and remains project-local
+ok 352 - project context separates proposals, decisions and verified findings and remains project-local
+  ---
+  duration_ms: 13.681
+  type: 'test'
+  ...
+# Subtest: unreadable orchestration files are preserved during recovery
+ok 353 - unreadable orchestration files are preserved during recovery
+  ---
+  duration_ms: 3.6796
+  type: 'test'
+  ...
+# Subtest: later malformed orchestration recovery preserves exact bytes even after the legacy migration backup exists
+ok 354 - later malformed orchestration recovery preserves exact bytes even after the legacy migration backup exists
+  ---
+  duration_ms: 8.0658
+  type: 'test'
+  ...
+# Subtest: remote or inactive permission records never access the local runtime even when host session ids collide
+ok 355 - remote or inactive permission records never access the local runtime even when host session ids collide
+  ---
+  duration_ms: 50.7065
+  type: 'test'
+  ...
+# Subtest: orchestration mutations delegate to the existing channel lock with the correct receiver
+ok 356 - orchestration mutations delegate to the existing channel lock with the correct receiver
+  ---
+  duration_ms: 6.1667
+  type: 'test'
+  ...
+# Subtest: production MCP task assignment persists its queue instead of reporting a fabricated send
+ok 357 - production MCP task assignment persists its queue instead of reporting a fabricated send
+  ---
+  duration_ms: 21.8812
+  type: 'test'
+  ...
+# Subtest: MCP task reports bind the live endpoint and cannot impersonate an operator or verify completion
+ok 358 - MCP task reports bind the live endpoint and cannot impersonate an operator or verify completion
+  ---
+  duration_ms: 33.9379
+  type: 'test'
+  ...
+# Subtest: known coordinator credentials cannot enter task records, evidence or shared context
+ok 359 - known coordinator credentials cannot enter task records, evidence or shared context
+  ---
+  duration_ms: 4.3054
+  type: 'test'
+  ...
+# Subtest: task CLI reports execution separately and sends revisioned evidence through the shared routes
+ok 360 - task CLI reports execution separately and sends revisioned evidence through the shared routes
+  ---
+  duration_ms: 5.9137
+  type: 'test'
+  ...
+# Subtest: real HTTP and native backend execute assignment through evidence review with intact persisted state
+ok 361 - real HTTP and native backend execute assignment through evidence review with intact persisted state
+  ---
+  duration_ms: 221.7434
+  type: 'test'
+  ...
+# Subtest: createChannel registers the exact calling session
+ok 362 - createChannel registers the exact calling session
+  ---
+  duration_ms: 1.6506
+  type: 'test'
+  ...
+# Subtest: createChannel rejects duplicate channel names
+ok 363 - createChannel rejects duplicate channel names
+  ---
+  duration_ms: 0.326
+  type: 'test'
+  ...
+# Subtest: joinChannel missing channel tells agents to stop instead of creating a fallback
+ok 364 - joinChannel missing channel tells agents to stop instead of creating a fallback
+  ---
+  duration_ms: 0.278
+  type: 'test'
+  ...
+# Subtest: createChannel enforces the slug pattern and max_members bounds
+ok 365 - createChannel enforces the slug pattern and max_members bounds
+  ---
+  duration_ms: 0.2324
+  type: 'test'
+  ...
+# Subtest: joinChannel registers the second exact session as Reviewer
+ok 366 - joinChannel registers the second exact session as Reviewer
+  ---
+  duration_ms: 0.2828
+  type: 'test'
+  ...
+# Subtest: joinChannel rejects joining the same session twice
+ok 367 - joinChannel rejects joining the same session twice
+  ---
+  duration_ms: 0.1607
+  type: 'test'
+  ...
+# Subtest: joinChannel rejects one session holding both roles
+ok 368 - joinChannel rejects one session holding both roles
+  ---
+  duration_ms: 0.1824
+  type: 'test'
+  ...
+# Subtest: joinChannel rejects replacing an existing member without confirmation
+ok 369 - joinChannel rejects replacing an existing member without confirmation
+  ---
+  duration_ms: 0.1844
+  type: 'test'
+  ...
+# Subtest: joinChannel enforces the membership cap before anything else
+ok 370 - joinChannel enforces the membership cap before anything else
+  ---
+  duration_ms: 0.1503
+  type: 'test'
+  ...
+# Subtest: open-vocabulary roles work end-to-end (create, targeted send)
+ok 371 - open-vocabulary roles work end-to-end (create, targeted send)
+  ---
+  duration_ms: 1.0464
+  type: 'test'
+  ...
+# Subtest: sendMessage on 3+ member channels requires an explicit target or broadcast
+ok 372 - sendMessage on 3+ member channels requires an explicit target or broadcast
+  ---
+  duration_ms: 0.3053
+  type: 'test'
+  ...
+# Subtest: sendMessage queues a full envelope for the peer
+ok 373 - sendMessage queues a full envelope for the peer
+  ---
+  duration_ms: 0.1506
+  type: 'test'
+  ...
+# Subtest: sendMessage rejects when not a member
+ok 374 - sendMessage rejects when not a member
+  ---
+  duration_ms: 0.0819
+  type: 'test'
+  ...
+# Subtest: sendMessage rejects paused channels
+ok 375 - sendMessage rejects paused channels
+  ---
+  duration_ms: 0.0905
+  type: 'test'
+  ...
+# Subtest: sendMessage rejects reserved and unknown message types
+ok 376 - sendMessage rejects reserved and unknown message types
+  ---
+  duration_ms: 0.0792
+  type: 'test'
+  ...
+# Subtest: sendMessage rejects duplicate content within the stale window, scoped per sender
+ok 377 - sendMessage rejects duplicate content within the stale window, scoped per sender
+  ---
+  duration_ms: 0.1335
+  type: 'test'
+  ...
+# Subtest: reply chains increment hop count and are capped
+ok 378 - reply chains increment hop count and are capped
+  ---
+  duration_ms: 0.3008
+  type: 'test'
+  ...
+# Subtest: drainQueue delivers once and preserves ordering
+ok 379 - drainQueue delivers once and preserves ordering
+  ---
+  duration_ms: 0.2882
+  type: 'test'
+  ...
+# Subtest: drainQueue respects pause
+ok 380 - drainQueue respects pause
+  ---
+  duration_ms: 0.1046
+  type: 'test'
+  ...
+# Subtest: resume allows delivery to continue
+ok 381 - resume allows delivery to continue
+  ---
+  duration_ms: 0.1127
+  type: 'test'
+  ...
+# Subtest: drainQueue rejects stale events
+ok 382 - drainQueue rejects stale events
+  ---
+  duration_ms: 0.1
+  type: 'test'
+  ...
+# Subtest: drainQueue respects delivery cooldown
+ok 383 - drainQueue respects delivery cooldown
+  ---
+  duration_ms: 0.1419
+  type: 'test'
+  ...
+# Subtest: requeueFailedDelivery restores FIFO order and pending status
+ok 384 - requeueFailedDelivery restores FIFO order and pending status
+  ---
+  duration_ms: 0.6882
+  type: 'test'
+  ...
+# Subtest: crash between drain and prompt: startup sweep restores pending and FIFO (no silent loss)
+ok 385 - crash between drain and prompt: startup sweep restores pending and FIFO (no silent loss)
+  ---
+  duration_ms: 0.2656
+  type: 'test'
+  ...
+# Subtest: sweepInFlight is a no-op after a committed delivery (no duplicate prompt)
+ok 386 - sweepInFlight is a no-op after a committed delivery (no duplicate prompt)
+  ---
+  duration_ms: 0.1282
+  type: 'test'
+  ...
+# Subtest: sweepInFlight with mixed in_flight and pending keeps FIFO across both
+ok 387 - sweepInFlight with mixed in_flight and pending keeps FIFO across both
+  ---
+  duration_ms: 0.1376
+  type: 'test'
+  ...
+# Subtest: pendingRecipients lists only recipients with pending entries
+ok 388 - pendingRecipients lists only recipients with pending entries
+  ---
+  duration_ms: 0.1444
+  type: 'test'
+  ...
+# Subtest: eight-member channel: targeted routing, broadcast fan-out, never-guess
+ok 389 - eight-member channel: targeted routing, broadcast fan-out, never-guess
+  ---
+  duration_ms: 0.2675
+  type: 'test'
+  ...
+# Subtest: simultaneous senders targeting one recipient: every message survives, FIFO holds
+ok 390 - simultaneous senders targeting one recipient: every message survives, FIFO holds
+  ---
+  duration_ms: 0.3056
+  type: 'test'
+  ...
+# Subtest: kickChannel: channel coordinator kicks another member with notification
+ok 391 - kickChannel: channel coordinator kicks another member with notification
+  ---
+  duration_ms: 0.7991
+  type: 'test'
+  ...
+# Subtest: kickChannel denies non-coordinators, self-kick, and unknown targets
+ok 392 - kickChannel denies non-coordinators, self-kick, and unknown targets
+  ---
+  duration_ms: 0.1219
+  type: 'test'
+  ...
+# Subtest: kickChannel authority follows first membership, not a role name
+ok 393 - kickChannel authority follows first membership, not a role name
+  ---
+  duration_ms: 0.0948
+  type: 'test'
+  ...
+# Subtest: kickChannel stops cleanly after removal and timer folds
+ok 394 - kickChannel stops cleanly after removal and timer folds
+  ---
+  duration_ms: 0.2219
+  type: 'test'
+  ...
+# Subtest: kickChannel keeps single-member channels alive for rejoin
+ok 395 - kickChannel keeps single-member channels alive for rejoin
+  ---
+  duration_ms: 0.1164
+  type: 'test'
+  ...
+# Subtest: pruneMessages caps persisted envelopes and cleans references
+ok 396 - pruneMessages caps persisted envelopes and cleans references
+  ---
+  duration_ms: 333.8278
+  type: 'test'
+  ...
+# Subtest: 5k-message churn completes promptly under retention
+ok 397 - 5k-message churn completes promptly under retention
+  ---
+  duration_ms: 2084.8419
+  type: 'test'
+  ...
+# Subtest: formatUntrustedMessage frames peer content as data with provenance
+ok 398 - formatUntrustedMessage frames peer content as data with provenance
+  ---
+  duration_ms: 0.2768
+  type: 'test'
+  ...
+# Subtest: provenance uses the message's own channel when a session spans two channels
+ok 399 - provenance uses the message's own channel when a session spans two channels
+  ---
+  duration_ms: 0.2635
+  type: 'test'
+  ...
+# Subtest: history rejects non-members (no transcript leakage)
+ok 400 - history rejects non-members (no transcript leakage)
+  ---
+  duration_ms: 0.1674
+  type: 'test'
+  ...
+# Subtest: inbox rejects non-members too
+ok 401 - inbox rejects non-members too
+  ---
+  duration_ms: 0.0897
+  type: 'test'
+  ...
+# Subtest: markStale folds and stops a running timer segment of the departing member
+ok 402 - markStale folds and stops a running timer segment of the departing member
+  ---
+  duration_ms: 0.1444
+  type: 'test'
+  ...
+# Subtest: normalizeRole accepts open-vocabulary labels and rejects malformed ones
+ok 403 - normalizeRole accepts open-vocabulary labels and rejects malformed ones
+  ---
+  duration_ms: 0.0507
+  type: 'test'
+  ...
+# Subtest: contentHash is deterministic
+ok 404 - contentHash is deterministic
+  ---
+  duration_ms: 0.2818
+  type: 'test'
+  ...
+# Subtest: assertNotChildSession rejects child sessions and accepts root sessions
+ok 405 - assertNotChildSession rejects child sessions and accepts root sessions
+  ---
+  duration_ms: 0.0995
+  type: 'test'
+  ...
+# Subtest: timerAction start/stop tracks elapsed time per member
+ok 406 - timerAction start/stop tracks elapsed time per member
+  ---
+  duration_ms: 0.0837
+  type: 'test'
+  ...
+# Subtest: timerAction switch hands the clock to the peer
+ok 407 - timerAction switch hands the clock to the peer
+  ---
+  duration_ms: 0.1256
+  type: 'test'
+  ...
+# Subtest: sendMessage auto-switches the timer to the recipient (by member id)
+ok 408 - sendMessage auto-switches the timer to the recipient (by member id)
+  ---
+  duration_ms: 0.3329
+  type: 'test'
+  ...
+# Subtest: timer attributes time correctly across three members
+ok 409 - timer attributes time correctly across three members
+  ---
+  duration_ms: 0.2108
+  type: 'test'
+  ...
+# Subtest: set_limit scopes to TOTAL by default and accepts NaN-free garbage rejection
+ok 410 - set_limit scopes to TOTAL by default and accepts NaN-free garbage rejection
+  ---
+  duration_ms: 0.1173
+  type: 'test'
+  ...
+# Subtest: timerAction reset zeroes everything
+ok 411 - timerAction reset zeroes everything
+  ---
+  duration_ms: 0.0628
+  type: 'test'
+  ...
+# Subtest: timerAction set_limit scopes to a member via to= and status reports limit_reached
+ok 412 - timerAction set_limit scopes to a member via to= and status reports limit_reached
+  ---
+  duration_ms: 0.1483
+  type: 'test'
+  ...
+# Subtest: timerAction clear_limit removes the cap
+ok 413 - timerAction clear_limit removes the cap
+  ---
+  duration_ms: 0.0583
+  type: 'test'
+  ...
+# Subtest: timerAction rejects non-members
+ok 414 - timerAction rejects non-members
+  ---
+  duration_ms: 0.043
+  type: 'test'
+  ...
+# Subtest: timer status reports the RUNNING segment without stopping it (regression R1)
+ok 415 - timer status reports the RUNNING segment without stopping it (regression R1)
+  ---
+  duration_ms: 0.0843
+  type: 'test'
+  ...
+# Subtest: total-scope timer limit trips while the segment is still running (regression R1)
+ok 416 - total-scope timer limit trips while the segment is still running (regression R1)
+  ---
+  duration_ms: 0.0882
+  type: 'test'
+  ...
+# Subtest: join rejects whitespace/case variants of a held role (regression R2)
+ok 417 - join rejects whitespace/case variants of a held role (regression R2)
+  ---
+  duration_ms: 0.059
+  type: 'test'
+  ...
+# Subtest: join validates role structure before channel lookup (normalize-first order)
+ok 418 - join validates role structure before channel lookup (normalize-first order)
+  ---
+  duration_ms: 0.0332
+  type: 'test'
+  ...
+# Subtest: sendMessage returns structured reason code for invalid message types (regression R5)
+ok 419 - sendMessage returns structured reason code for invalid message types (regression R5)
+  ---
+  duration_ms: 0.046
+  type: 'test'
+  ...
+# Subtest: status scopes the roster to the calling session's channels (regression R4)
+ok 420 - status scopes the roster to the calling session's channels (regression R4)
+  ---
+  duration_ms: 0.2983
+  type: 'test'
+  ...
+# Subtest: StateStore immediately preserves EACCES from lock creation
+ok 421 - StateStore immediately preserves EACCES from lock creation
+  ---
+  duration_ms: 2.53
+  type: 'test'
+  ...
+# Subtest: StateStore immediately preserves EROFS from lock creation
+ok 422 - StateStore immediately preserves EROFS from lock creation
+  ---
+  duration_ms: 0.7225
+  type: 'test'
+  ...
+# Subtest: StateStore immediately preserves EMFILE from lock creation
+ok 423 - StateStore immediately preserves EMFILE from lock creation
+  ---
+  duration_ms: 0.6481
+  type: 'test'
+  ...
+# Subtest: StateStore retries EEXIST and releases the acquired lock
+ok 424 - StateStore retries EEXIST and releases the acquired lock
+  ---
+  duration_ms: 22.4617
+  type: 'test'
+  ...
+# Subtest: OrchestratorStore immediately preserves EACCES from lock creation
+ok 425 - OrchestratorStore immediately preserves EACCES from lock creation
+  ---
+  duration_ms: 1.0922
+  type: 'test'
+  ...
+# Subtest: OrchestratorStore immediately preserves EROFS from lock creation
+ok 426 - OrchestratorStore immediately preserves EROFS from lock creation
+  ---
+  duration_ms: 0.8175
+  type: 'test'
+  ...
+# Subtest: OrchestratorStore immediately preserves EMFILE from lock creation
+ok 427 - OrchestratorStore immediately preserves EMFILE from lock creation
+  ---
+  duration_ms: 0.9326
+  type: 'test'
+  ...
+# Subtest: OrchestratorStore retries EEXIST and releases the acquired lock
+ok 428 - OrchestratorStore retries EEXIST and releases the acquired lock
+  ---
+  duration_ms: 12.6578
+  type: 'test'
+  ...
+# Subtest: opencomms_status tool scopes the roster to the calling session
+ok 429 - opencomms_status tool scopes the roster to the calling session
+  ---
+  duration_ms: 11.9463
+  type: 'test'
+  ...
+# Subtest: opencomms_history tool returns message history, not a status report (R4 wiring regression)
+ok 430 - opencomms_history tool returns message history, not a status report (R4 wiring regression)
+  ---
+  duration_ms: 14.737
+  type: 'test'
+  ...
+# Subtest: StateStore persists and reloads state
+ok 431 - StateStore persists and reloads state
+  ---
+  duration_ms: 4.9867
+  type: 'test'
+  ...
+# Subtest: StateStore recovers from corrupt state
+ok 432 - StateStore recovers from corrupt state
+  ---
+  duration_ms: 2.0622
+  type: 'test'
+  ...
+# Subtest: StateStore writes atomically (temp file + rename)
+ok 433 - StateStore writes atomically (temp file + rename)
+  ---
+  duration_ms: 1.695
+  type: 'test'
+  ...
+# Subtest: load rejects a wrong schema_version and starts empty
+ok 434 - load rejects a wrong schema_version and starts empty
+  ---
+  duration_ms: 2.623
+  type: 'test'
+  ...
+# Subtest: load rejects tampered member rows (bad shape / bad role label)
+ok 435 - load rejects tampered member rows (bad shape / bad role label)
+  ---
+  duration_ms: 13.8489
+  type: 'test'
+  ...
+# Subtest: load backfills max_members and migrates legacy role-keyed timers
+ok 436 - load backfills max_members and migrates legacy role-keyed timers
+  ---
+  duration_ms: 5.1003
+  type: 'test'
+  ...
+# Subtest: withLock serializes concurrent processes: no lost updates under contention
+ok 437 - withLock serializes concurrent processes: no lost updates under contention
+  ---
+  duration_ms: 131.6003
+  type: 'test'
+  ...
+# Subtest: withLock waiting yields the event loop (regression R6)
+ok 438 - withLock waiting yields the event loop (regression R6)
+  ---
+  duration_ms: 313.7266
+  type: 'test'
+  ...
+1..438
+# tests 438
+# suites 0
+# pass 438
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 26098.4059

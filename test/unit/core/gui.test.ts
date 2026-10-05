@@ -216,9 +216,9 @@ test("GUI: members endpoint returns live roster with honest states; remove sever
     assert.equal(members.ok, true)
     assert.equal(members.data.agents.length, 2)
     const reviewer = members.data.agents.find((a) => a.role === "Reviewer")!
-    assert.equal(reviewer.state, "Working", "member with queued mail reports Working")
+    assert.equal(reviewer.state, "Queued", "queued mail is not evidence of a running model")
     const builder = members.data.agents.find((a) => a.role === "Builder")!
-    assert.equal(builder.state, "Idle")
+    assert.equal(builder.state, "Unknown")
 
     const removed = (await (
       await fetch(`${base}/api/sessions/app/members/remove`, {
@@ -327,8 +327,8 @@ test("GUI: binds loopback only â€” non-loopback hostnames are refused", asy
 
 test("memberState: honest three-state mapping (no fabricated busy signal)", () => {
   assert.equal(memberState({ stale: true }, 0), "Offline")
-  assert.equal(memberState({ stale: false }, 0), "Idle")
-  assert.equal(memberState({ stale: false }, 3), "Working")
+  assert.equal(memberState({ stale: false }, 0), "Unknown")
+  assert.equal(memberState({ stale: false }, 3), "Queued")
 })
 
 test("join-command helper: real commands per host, fail-closed unknown host", () => {

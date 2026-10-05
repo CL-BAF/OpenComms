@@ -1,0 +1,7 @@
+{
+  "installer_exit_code": 1,
+  "packaged_installer_smoke_exit_code": 1,
+  "rust_check_exit_code": null,
+  "graphify_exit_code": null,
+  "publication_note": "Local validation snapshot; user-profile/workspace paths redacted for publication. No live vendor or packaged native acceptance is inferred."
+}

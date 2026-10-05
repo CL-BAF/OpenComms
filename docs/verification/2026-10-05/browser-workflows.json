@@ -1,0 +1,72 @@
+{
+  "version": "1.4.0",
+  "node": "v24.19.0",
+  "browser": "154.0.8037.98",
+  "at": "2026-10-05T01:58:00.388Z",
+  "evidence": [
+    {
+      "surface": "browser",
+      "result": "passed",
+      "task_id": "tsk_57ef963fac77c6e8037c0054",
+      "checks": [
+        "create",
+        "unsupported folder picker capability disables HTTP only",
+        "join query",
+        "remove persisted",
+        "save",
+        "saved tab refresh",
+        "resume",
+        "diagnostics navigation",
+        "unsupported GUI Updates visibly provides CLI recovery",
+        "integration onboarding stages and unverified round trip",
+        "missing-catalog disabled",
+        "team template save and refresh without launch",
+        "linked preparation with persisted budgets",
+        "unconfigured isolated worktree option disabled with recovery",
+        "template delete preserves sessions",
+        "three-member targeted task assignment",
+        "running and review transitions",
+        "unverified completion rejected",
+        "criterion evidence and independent review completion",
+        "task filter and detail refresh",
+        "pagination cursor refresh",
+        "context query refresh",
+        "emergency pause"
+      ],
+      "uncaught_errors": []
+    },
+    {
+      "surface": "native-contract",
+      "result": "passed",
+      "task_id": "tsk_ed1990b161e0364ea6764ea7",
+      "checks": [
+        "create",
+        "unsupported folder picker capability disables HTTP only",
+        "join query",
+        "remove persisted",
+        "save",
+        "saved tab refresh",
+        "resume",
+        "diagnostics navigation",
+        "unsupported GUI Updates visibly provides CLI recovery",
+        "integration onboarding stages and unverified round trip",
+        "missing-catalog disabled",
+        "team template save and refresh without launch",
+        "linked preparation with persisted budgets",
+        "unconfigured isolated worktree option disabled with recovery",
+        "template delete preserves sessions",
+        "three-member targeted task assignment",
+        "running and review transitions",
+        "unverified completion rejected",
+        "criterion evidence and independent review completion",
+        "task filter and detail refresh",
+        "pagination cursor refresh",
+        "context query refresh",
+        "emergency pause"
+      ],
+      "uncaught_errors": []
+    }
+  ],
+  "limits": "Native seam emulation verifies UI routing and persisted backend only; no packaged desktop, authenticated vendor host or external attack behavior. Managed workers are persisted fixtures and are never launched.",
+  "publication_note": "Local validation snapshot; user-profile/workspace paths redacted for publication. No live vendor or packaged native acceptance is inferred."
+}

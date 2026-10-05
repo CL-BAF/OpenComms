@@ -1,0 +1,1 @@
+cargo check --locked: not launched; cargo is unavailable on PATH.

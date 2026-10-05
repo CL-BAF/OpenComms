@@ -1,0 +1,32 @@
+{
+  "version": "1.4.0",
+  "mode": "installed npm tarball; real local backend and adapter child processes; no live vendor or installer claim",
+  "actions": [
+    {
+      "action": "version",
+      "exit_code": 0
+    },
+    {
+      "action": "install opencode",
+      "exit_code": 0
+    },
+    {
+      "action": "install claude-code",
+      "exit_code": 0
+    },
+    {
+      "action": "install codex",
+      "exit_code": 0
+    },
+    {
+      "action": "install gemini-cli",
+      "exit_code": 0
+    },
+    {
+      "action": "install claude-desktop",
+      "exit_code": 0
+    }
+  ],
+  "gui": "passed",
+  "publication_note": "Local validation snapshot; user-profile/workspace paths redacted for publication. No live vendor or packaged native acceptance is inferred."
+}

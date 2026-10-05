@@ -15,18 +15,10 @@
  * never touches the terminal UI.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { join, resolve, dirname } from "node:path"
-import { fileURLToPath } from "node:url"
-
-const here = (() => {
-  try {
-    return dirname(fileURLToPath(import.meta.url))
-  } catch {
-    return process.cwd()
-  }
-})()
+import { readAdapterResource } from "../../cli/adapter-resources.js"
 
 export interface CodexInstallReport {
   ok: boolean
@@ -47,6 +39,8 @@ export function detectCodex(): { detected: boolean; version: string | null } {
       const out = execFileSync("cmd.exe", ["/d", "/s", "/c", "codex --version"], {
         encoding: "utf8",
         timeout: 15_000,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
       })
       return { detected: true, version: out.trim() }
     }
@@ -83,31 +77,26 @@ export function installCodex(
 
   // 1. Copy the MCP server bundle into .opencomms/. Compiled tests resolve
   //    the repo root by package.json (works from dist/ and dist-test/).
-  const distMain =
-    opts.distMain ??
-    (() => {
-      let dir = here
-      for (;;) {
-        if (existsSync(join(dir, "package.json"))) return join(dir, "dist", "mcp", "main.js")
-        const parent = dirname(dir)
-        if (parent === dir) return join(here, "..", "..", "..", "dist", "mcp", "main.js")
-        dir = parent
-      }
-    })()
-  if (!existsSync(distMain)) {
+  let mcpServer: string
+  try {
+    mcpServer = readAdapterResource(
+      "opencomms-mcp",
+      opts.distMain ?? (opts.bundleDir ? join(opts.bundleDir, "mcp", "main.js") : undefined),
+    )
+  } catch (error) {
     return {
       ok: false,
       codexDetected: detection.detected,
       codexVersion: detection.version,
       configPath,
       patches: [],
-      warnings: ["dist/mcp/main.js missing — run `npm run build` first."],
+      warnings: [(error as Error).message],
       capabilities: CODEX_CAPABILITIES,
     }
   }
   const opencommsDir = join(target, ".opencomms")
   mkdirSync(opencommsDir, { recursive: true })
-  copyFileSync(distMain, join(opencommsDir, "opencomms-mcp.mjs"))
+  writeFileSync(join(opencommsDir, "opencomms-mcp.mjs"), mcpServer, "utf8")
 
   // 2. Append/patch the [mcp_servers.opencomms] section (idempotent).
   //    Launch cwd is EXPLICIT (documented `cwd` option; Codex docs do not
@@ -155,7 +144,7 @@ export const CODEX_CAPABILITIES: Record<string, string> = {
   installation: "PARTIAL (.codex/config.toml MCP registration)",
   delivery: "PULL (MCP tools); hook-boundary possible with user-reviewed hooks",
   existingSessionPush: "UNSUPPORTED (no documented injection into TUI sessions)",
-  managedThreads: "EXPERIMENTAL (App Server client â€” separate, clearly labeled)",
+  managedThreads: "UNSUPPORTED (App Server runtime is not implemented in this build)",
   roleInjection: "PARTIAL (AGENTS.md global; hooks trust-gated)",
   memberIdentity: "PARTIAL (pinned per-instance env in config.toml)",
 }

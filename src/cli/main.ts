@@ -14,7 +14,7 @@
  * Never prints secrets (env values, pin contents are summarized, not dumped).
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, unlinkSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, unlinkSync, statSync } from "node:fs"
 import { join, resolve, dirname } from "node:path"
 import { tmpdir } from "node:os"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
@@ -37,10 +37,22 @@ import { WIZARD_PS1 } from "./wizard.js"
 import { iconIcoBytes } from "./icon-base64.js"
 import { updateCommand } from "./update.js"
 import { runAgentCommand } from "./agent.js"
-import { taskList, taskAssign, membersRemove, sessionCreate } from "./tasks.js"
+import {
+  taskList,
+  taskAssign,
+  taskShow,
+  taskTransition,
+  taskReassign,
+  taskContext,
+  membersRemove,
+  sessionCreate,
+} from "./tasks.js"
 import { VERSION } from "../version.js"
 import { doctorReport } from "./doctor.js"
 import { runBridge } from "../orchestrator/bridge.js"
+import { createDefaultManager } from "../integrations/registry.js"
+import { sharedMcpBundleInUse } from "../integrations/shared-artifacts.js"
+import { createMcpProfile, MCP_PROFILE_HOSTS } from "../integrations/mcp-profiles.js"
 
 /** Package version, derived from package.json so the CLI can never drift. */
 function flagValue(tokens: string[], name: string): string | undefined {
@@ -323,6 +335,9 @@ function detectWsl(): { available: boolean; detail: string } {
 /** opencomms install <host> [project] */
 function runInstall(host: string | undefined, projectDir: string): CliResult {
   switch ((host ?? "").toLowerCase()) {
+    case "gemini-cli": {
+      return fail("Gemini installation uses the async integration manager (CLI main handles this).")
+    }
     case "opencode": {
       // De-repo'd (SEA fix): bundled install logic, embedded plugin asset
       // under the exe, dist bundle in development — never install.mjs, never
@@ -379,13 +394,18 @@ function runInstall(host: string | undefined, projectDir: string): CliResult {
       )
     }
     default:
-      return fail(`Unknown host "${host ?? ""}". Supported: opencode, claude-code, claude-desktop, codex, chatgpt.`)
+      return fail(
+        `Unknown host "${host ?? ""}". Supported: opencode, claude-code, claude-desktop, codex, chatgpt, gemini-cli.`,
+      )
   }
 }
 
 /** opencomms uninstall <host> [project] */
 function runUninstall(host: string | undefined, projectDir: string): CliResult {
   switch ((host ?? "").toLowerCase()) {
+    case "gemini-cli": {
+      return fail("Gemini uninstall uses the async integration manager (CLI main handles this).")
+    }
     case "claude-code": {
       // Remove ONLY OpenComms entries; never touch unrelated config.
       // Reviewer P2-5: uninstall must ALSO remove the .mcp.json server
@@ -432,6 +452,7 @@ function runUninstall(host: string | undefined, projectDir: string): CliResult {
         }
       }
       for (const bundle of ["claude-code-hooks.mjs", "opencomms-mcp.mjs"]) {
+        if (bundle === "opencomms-mcp.mjs" && sharedMcpBundleInUse(target, "claude-code")) continue
         const bundlePath = join(target, ".opencomms", bundle)
         if (existsSync(bundlePath)) {
           try {
@@ -754,6 +775,7 @@ async function startBridge(projectDir: string, bootstrap = false): Promise<void>
     await runBridge(
       {
         ...coreDeps,
+        getCoreDeps: handle.bridgeDeps,
         write: (line) => process.stdout.write(line + "\n"),
         error: (message) => process.stderr.write(message + "\n"),
       },
@@ -932,6 +954,29 @@ export function runCli(argv: string[]): CliResult {
       return fail("Update commands are async: await updateCommand(...) (CLI main handles this).")
     case "install":
       return runInstall(positional, projectDir)
+    case "mcp-profile": {
+      const memberId = flagValue(tokens, "--id")
+      if (!memberId)
+        return fail("MCP profile requires --id <OpenComms-member-id>; native conversation identity is unknown.")
+      const serverPath = resolve(flagValue(tokens, "--server") ?? join(projectDir, ".opencomms/opencomms-mcp.mjs"))
+      if (!existsSync(serverPath) || !statSync(serverPath).isFile())
+        return fail(
+          "Standalone MCP bundle is missing. Pass --server <installed bundle or npm dist/mcp/main.js>; no configuration was changed.",
+        )
+      try {
+        return ok(
+          createMcpProfile({
+            host: positional ?? "",
+            projectDir,
+            memberId,
+            serverPath,
+            nodeCommand: flagValue(tokens, "--node"),
+          }).content.trimEnd(),
+        )
+      } catch (error) {
+        return fail(error instanceof Error ? error.message : "MCP profile could not be generated.")
+      }
+    }
     case "gui":
       return startGui(
         explicitProjectDir,
@@ -950,7 +995,6 @@ export function runCli(argv: string[]): CliResult {
       // Async (loopback HTTP): handled on the async path below.
       return fail("Agent commands are async: await runAgentCommand(...) (CLI main handles this).")
     case "task":
-    case "members":
     case "serve":
       // Async (loopback HTTP / thin alias): handled on the async path below.
       return fail("Task/member/serve commands are async: see the async dispatch in the CLI entry (main handles this).")
@@ -975,8 +1019,9 @@ export function runCli(argv: string[]): CliResult {
           "  opencomms channels [--project <dir>]",
           "  opencomms members <channel> [--project <dir>]",
           "  opencomms doctor [--project <dir>] [--fix]   # --fix repairs safe, understood problems",
-          "  opencomms install <opencode|claude-code|claude-desktop|codex|chatgpt> [--project <dir>]",
+          "  opencomms install <opencode|claude-code|claude-desktop|codex|chatgpt|gemini-cli> [--project <dir>]",
           "  opencomms install-member [--host <id>] [--id <memberId> | --name <name>] [--project <dir>]",
+          `  opencomms mcp-profile <${MCP_PROFILE_HOSTS.join("|")}> --id <member> [--project <dir>] [--server <bundle>] [--node <executable>]  # read-only config export`,
           "  opencomms session <list|get|save|delete|resume> [name] [--summary ...] [--as name] [--confirm]",
           "  opencomms gui [--project <dir>] [--port <port>] [--server]  # embedded HTML console",
           "  opencomms bridge [--project <dir>]  # native GUI stdio sidecar",
@@ -1007,6 +1052,22 @@ if (isCliEntry) {
   const argv = process.argv.slice(2)
   if (shouldLaunchWizard(argv)) {
     emit(launchWizard())
+  } else if ((argv[0] === "install" || argv[0] === "uninstall") && argv[1] === "gemini-cli") {
+    const manager = createDefaultManager()
+    const context = {
+      projectDir: resolve(projectDirFromFlag(argv, "--project") ?? process.cwd()),
+      currentVersion: VERSION,
+    }
+    const operation =
+      argv[0] === "install" ? manager.install(context, "gemini-cli") : manager.uninstall(context, "gemini-cli")
+    void operation
+      .then((report) =>
+        emit({
+          code: report.ok ? 0 : 1,
+          output: [...report.actions, ...report.warnings.map((warning) => `! ${warning}`)].join("\n"),
+        }),
+      )
+      .catch((error: Error) => emit({ code: 1, output: `Gemini integration failed: ${error.message}` }))
   } else if (argv[0] === "gui") {
     // The GUI server blocks; never take the sync exit path.
     const guiResult = runCli(argv)
@@ -1037,8 +1098,16 @@ if (isCliEntry) {
       void taskList(argv.slice(2)).then(emit)
     } else if (sub === "assign") {
       void taskAssign(argv.slice(2)).then(emit)
+    } else if (sub === "show") {
+      void taskShow(argv.slice(2)).then(emit)
+    } else if (sub === "transition") {
+      void taskTransition(argv.slice(2)).then(emit)
+    } else if (sub === "reassign") {
+      void taskReassign(argv.slice(2)).then(emit)
+    } else if (sub === "context") {
+      void taskContext(argv.slice(2)).then(emit)
     } else {
-      emit({ code: 2, output: "Usage: opencomms task <list|assign> [--json] [...]" })
+      emit({ code: 2, output: "Usage: opencomms task <list|assign|show|transition|reassign|context> [--json] [...]" })
     }
   } else if (argv[0] === "members" && argv[1] === "remove") {
     void membersRemove(argv.slice(2)).then(emit)
@@ -1049,39 +1118,6 @@ if (isCliEntry) {
     argv[0] = "gui"
     const guiResult = runCli(argv)
     if (guiResult.output) process.stdout.write(guiResult.output + "\n")
-  } else if (argv[0] === "bridge") {
-    // M4.5: the native Tauri GUI's stdio JSON-RPC bridge. Speaks the
-    // handshake FIRST, then one request line -> one response line until
-    // stdin closes. Blocks (like gui); never takes the sync exit path.
-    const projectDir = projectDirFromFlag(argv, "--project") ?? initialWorkspaceProject()
-    const port = Number(flagValue(argv, "--port") ?? "4919")
-    void (async () => {
-      try {
-        const handle = await startGuiServer({
-          projectDir: projectDir ?? undefined,
-          port: Number.isFinite(port) && port > 0 ? port : 4919,
-          hostname: "127.0.0.1",
-        })
-        const coreDeps = handle.bridgeDeps()
-        if (!coreDeps) {
-          process.stderr.write("bridge: no project selected — set --project or open a project in the console first.\n")
-          await handle.close()
-          process.exitCode = 2
-          return
-        }
-        await runBridge(
-          {
-            ...coreDeps,
-            write: (line) => process.stdout.write(line + "\n"),
-            error: (m) => process.stderr.write(m + "\n"),
-          },
-          process.stdin,
-        )
-      } catch (error) {
-        process.stderr.write(`bridge failed: ${(error as Error).message}\n`)
-        process.exitCode = 1
-      }
-    })()
   } else {
     emit(runCli(argv))
   }

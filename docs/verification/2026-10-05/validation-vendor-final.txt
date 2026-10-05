@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: LIVE managed ACP handshake/new/prompt/load preserves identity and receives a real agent text reply
+ok 1 - LIVE managed ACP handshake/new/prompt/load preserves identity and receives a real agent text reply # SKIP
+  ---
+  duration_ms: 0.4439
+  type: 'test'
+  ...
+# Subtest: LIVE managed OpenCode create/accept/complete/resume observes an actual assistant reply
+ok 2 - LIVE managed OpenCode create/accept/complete/resume observes an actual assistant reply # SKIP
+  ---
+  duration_ms: 0.0922
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 0
+# cancelled 0
+# skipped 2
+# todo 0
+# duration_ms 68.1563

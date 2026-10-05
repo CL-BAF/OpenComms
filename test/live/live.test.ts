@@ -55,9 +55,11 @@ function client() {
 
 async function serverReachable(): Promise<boolean> {
   try {
-    const c = client()
-    const res = await c.session.list({})
-    return Array.isArray(res.data)
+    const res = await fetch(new URL("/session", SERVER_URL), {
+      headers: { Authorization: authHeader() },
+      signal: AbortSignal.timeout(10_000),
+    })
+    return res.ok && Array.isArray(await res.json())
   } catch {
     return false
   }
@@ -104,18 +106,21 @@ async function waitForToolResult(
 
 // All tests are guarded by server reachability so they no-op (skip) when the
 // runtime is absent. When present, they perform the full end-to-end flow.
-test("live: OpenCode server reachable, or suite skips", async () => {
+test("live: OpenCode server reachable, or suite skips", async (t) => {
   if (!(await serverReachable())) {
-    console.log("SKIP: OpenCode server not reachable at", SERVER_URL)
+    t.skip("OpenCode server is unavailable or unauthenticated")
     return
   }
   assert.ok(true, "server reachable")
 })
 
-test("live: full Builder<->Reviewer acceptance flow", async () => {
-  if (!(await serverReachable())) return
+test("live: full Builder<->Reviewer acceptance flow", async (t) => {
+  if (!(await serverReachable())) {
+    t.skip("OpenCode server is unavailable or unauthenticated")
+    return
+  }
   if (!PROJECT_DIR) {
-    console.log("SKIP: set OPENCOMMS_LIVE_PROJECT to run the full live flow")
+    t.skip("Set OPENCOMMS_LIVE_PROJECT to run the full live flow")
     return
   }
   const c = client()
@@ -244,11 +249,14 @@ test("live: full Builder<->Reviewer acceptance flow", async () => {
  * via opencomms_send must reach A automatically. Requires a model that can
  * actually call tools: set OPENCODE_LIVE_MODEL=providerID/modelID.
  */
-test("live: two sessions exchange >=2 turns autonomously (no manual wake)", async () => {
-  if (!(await serverReachable())) return
+test("live: two sessions exchange >=2 turns autonomously (no manual wake)", async (t) => {
+  if (!(await serverReachable())) {
+    t.skip("OpenCode server is unavailable or unauthenticated")
+    return
+  }
   const model = parseModel()
   if (!PROJECT_DIR || !model) {
-    console.log("SKIP: set OPENCOMMS_LIVE_PROJECT and OPENCODE_LIVE_MODEL=provider/model to run the wake scenario")
+    t.skip("Set OPENCOMMS_LIVE_PROJECT and OPENCODE_LIVE_MODEL=provider/model to run the wake scenario")
     return
   }
   const c = client()

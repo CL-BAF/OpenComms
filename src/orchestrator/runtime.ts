@@ -8,9 +8,9 @@
  * / codex CLIs (research report §1A–1C).
  *
  * Rules anchored in the M0 spike (docs/spike-spawn-opencode.md):
- *  - Models are ALWAYS pinned and pre-verified; server defaults fail or hang.
+ *  - OpenCode models are explicitly pinned; ACP keeps its host's configured model.
  *  - Turn-waits are timeout-based (never open-ended).
- *  - Status is event-driven (SSE); status() is a best-effort snapshot only.
+ *  - Status comes from the host or a currently owned ACP request; never invented.
  *  - Child processes are spawned argv-only (no shell); secrets are env-only.
  *  - Delivery preserves OpenComms untrusted framing — one protocol surface
  *    local vs remote (MessageEnvelope content moves verbatim).
@@ -45,7 +45,7 @@ export interface SpawnResult {
  */
 export interface AgentHandle {
   /** Hand one FRAMED batch to the agent (OpenComms framing, envelope intact). */
-  deliver(framed: string): Promise<"delivered" | "failed">
+  deliver(framed: string): Promise<"delivered" | "failed" | "uncertain">
   /** Best-effort interrupt of the current turn. */
   abort(): Promise<void>
   /** Best-effort status snapshot (event stream remains the authority). */
@@ -63,9 +63,8 @@ export interface AgentHandle {
 }
 
 /**
- * A pending host permission prompt (M2 §9b-4). Shaped by the opencode
- * permission endpoint (POST /session/:id/permissions/:permissionID);
- * other runtimes map their native prompts onto this shape.
+ * A pending host permission prompt. OpenCode uses /permission and
+ * /permission/:requestID/reply; ACP maps session/request_permission here.
  */
 export interface PendingPermission {
   permission_id: string
@@ -75,25 +74,6 @@ export interface PendingPermission {
 
 /** Response for a permission prompt ("allow" | "deny" per host vocabulary). */
 export type PermissionResponse = "allow" | "deny"
-
-export interface AgentHandle {
-  /** Hand one FRAMED batch to the agent (OpenComms framing, envelope intact). */
-  deliver(framed: string): Promise<"delivered" | "failed">
-  /** Best-effort interrupt of the current turn. */
-  abort(): Promise<void>
-  /** Best-effort status snapshot (event stream remains the authority). */
-  status(): Promise<{ status: AgentRuntimeStatus; detail?: string }>
-  /**
-   * Structured permission-prompt drain (M2 §9b-4). Returns null when the
-   * runtime's host exposes no permission API — callers must treat null as
-   * "unsupported", never as "no pending prompts".
-   */
-  permissionsDrain?(): Promise<Array<PendingPermission> | null>
-  /** Answer ONE pending permission prompt (operator-only action upstream). */
-  permissionsRespond?(permissionId: string, response: PermissionResponse): Promise<{ ok: boolean; message: string }>
-  /** Process-level termination; force escalates after a grace period. */
-  stop(force?: boolean): Promise<void>
-}
 
 export interface RuntimeDetectResult {
   available: boolean

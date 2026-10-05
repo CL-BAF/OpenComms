@@ -1,0 +1,140 @@
+{
+  "recorded_at": "2026-10-05T02:00:31.672Z",
+  "tested_source_snapshot_sha256": "111856faebd9aacb10930d6f16712b5563829b248f320710553fba5cb258dc36",
+  "version": "1.4.0",
+  "versions": {
+    "node_tests": "24.19.0",
+    "node_sea_and_artifact_smoke": "22.14.0",
+    "npm": "11.17.0",
+    "chrome": "154.0.8037.98",
+    "codex_detected_only": "0.159.0-alpha.12.1",
+    "opencode": null,
+    "claude_code": null,
+    "gemini_cli": null,
+    "rust": null,
+    "inno_setup": null
+  },
+  "commands": [
+    {
+      "command": "npm run typecheck",
+      "exit_code": 0,
+      "log": "validation-typecheck-final.log"
+    },
+    {
+      "command": "npm run format:check",
+      "exit_code": 0,
+      "log": "validation-format-final.log"
+    },
+    {
+      "command": ".build-tools/node-v22.14.0.exe scripts/build-exe.mjs --out dist-release",
+      "environment": {
+        "OPENCOMMS_NPM_CLI": "<configured npm CLI path omitted>"
+      },
+      "exit_code": 0,
+      "log": "validation-build-exe-final.log"
+    },
+    {
+      "command": "npm run test:unit",
+      "exit_code": 0,
+      "tests": 438,
+      "passed": 438,
+      "failed": 0,
+      "skipped": 0,
+      "log": "validation-unit-final.log"
+    },
+    {
+      "command": "node --test --test-reporter=tap --test-concurrency=1 dist-test/test/contract/*.test.js",
+      "exit_code": 0,
+      "tests": 2,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "log": "validation-contract-final.log"
+    },
+    {
+      "command": "node --test --test-reporter=tap --test-concurrency=1 --test-timeout=300000 dist-test/test/live/live.test.js",
+      "exit_code": 0,
+      "tests": 3,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 3,
+      "log": "validation-live-final.log"
+    },
+    {
+      "command": "node --test --test-reporter=tap --test-concurrency=1 dist-test/test/live/managed-vendor.test.js",
+      "exit_code": 0,
+      "tests": 2,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 2,
+      "log": "validation-vendor-final.log"
+    },
+    {
+      "command": "node scripts/build-shell-asset.mjs",
+      "exit_code": 0,
+      "log": ".verification/validation-native-build.log"
+    },
+    {
+      "command": "node scripts/test-native-assets.mjs",
+      "exit_code": 0,
+      "log": ".verification/validation-native-assets.log"
+    },
+    {
+      "command": "node scripts/test-browser-workflows.mjs",
+      "environment": {
+        "OPENCOMMS_PLAYWRIGHT_PATH": "<configured Playwright module path omitted>"
+      },
+      "exit_code": 0,
+      "checks_per_surface": 23,
+      "surfaces": [
+        "browser",
+        "native-contract"
+      ],
+      "uncaught_ui_errors": 0,
+      "log": ".verification/validation-browser.log"
+    },
+    {
+      "command": ".build-tools/node-v22.14.0.exe scripts/test-standalone-artifacts.mjs dist-release/opencomms.exe",
+      "exit_code": 0,
+      "log": "validation-standalone-final.log"
+    },
+    {
+      "command": "npm pack --pack-destination dist-release --cache .npm-cache --json",
+      "exit_code": 0,
+      "log": "validation-npm-pack.log"
+    },
+    {
+      "command": ".build-tools/node-v22.14.0.exe scripts/test-standalone-artifacts.mjs dist-release/opencomms-1.4.0.tgz --npm",
+      "environment": {
+        "OPENCOMMS_NPM_CLI": "<configured npm CLI path omitted>"
+      },
+      "exit_code": 0,
+      "log": "validation-npm-smoke-final.log"
+    },
+    {
+      "command": "npm run build:installer",
+      "exit_code": 1,
+      "gate": "ISCC.exe missing",
+      "log": "validation-installer.log"
+    },
+    {
+      "command": "npm run test:windows-release",
+      "exit_code": 1,
+      "gate": "No produced installer",
+      "log": "validation-windows-release.log"
+    },
+    {
+      "command": "cargo check --locked",
+      "exit_code": null,
+      "gate": "Not launched; cargo unavailable",
+      "log": "validation-rust.log"
+    },
+    {
+      "command": "graphify update .",
+      "exit_code": null,
+      "gate": "Not launched; graphify unavailable and graph absent",
+      "log": "validation-graphify.log"
+    }
+  ],
+  "publication_note": "Local validation snapshot; user-profile/workspace paths redacted for publication. No live vendor or packaged native acceptance is inferred."
+}

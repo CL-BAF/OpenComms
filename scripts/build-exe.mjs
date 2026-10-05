@@ -16,7 +16,9 @@ import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(join(here, ".."))
-const outDir = resolve(join(repoRoot, process.argv[2]?.startsWith("--out") ? (process.argv[3] ?? "dist-opencomms") : "dist-opencomms"))
+const outDir = resolve(
+  join(repoRoot, process.argv[2]?.startsWith("--out") ? (process.argv[3] ?? "dist-opencomms") : "dist-opencomms"),
+)
 
 /**
  * SEA builds are only reproducible on the pinned build Node (package.json
@@ -27,7 +29,8 @@ const outDir = resolve(join(repoRoot, process.argv[2]?.startsWith("--out") ? (pr
 function enforceBuildNodePinned() {
   const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
   const required = packageJson.engines?.buildNode
-  if (!required) throw new Error("package.json engines.buildNode is missing — SEA builds must be pinned to an exact Node version.")
+  if (!required)
+    throw new Error("package.json engines.buildNode is missing — SEA builds must be pinned to an exact Node version.")
   if (process.version !== `v${required}`) {
     console.error(`[opencomms-exe] ERROR: SEA builds require Node ${required} exactly.`)
     console.error(`  found:    ${process.version}`)
@@ -48,10 +51,12 @@ function run(cmd, args) {
 /** Windows npm is a .cmd shim Node refuses to spawn — run npm's JS directly. */
 function npmRun(script) {
   const candidates = [
+    process.env["OPENCOMMS_NPM_CLI"],
+    process.env["npm_execpath"],
     join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
     join(repoRoot, "node_modules", "npm", "bin", "npm-cli.js"),
   ]
-  const npmCli = candidates.find((p) => existsSync(p))
+  const npmCli = candidates.find((p) => p && existsSync(p))
   const args = npmCli ? [process.execPath, npmCli, "run", script] : ["npm", "run", script]
   console.log(`+ ${args.join(" ")}`)
   execFileSync(args[0], args.slice(1), { cwd: repoRoot, stdio: "inherit" })
@@ -64,7 +69,15 @@ npmRun("build")
 
 // 2. Bundle the CLI to CommonJS (SEA runs CJS; dist is ESM).
 const bundle = join(repoRoot, "dist", "cli", "cli-bundle.cjs")
-run(process.execPath, [join(repoRoot, "scripts", "bundle.mjs"), "--entry", join(repoRoot, "dist", "cli", "main.js"), "--format", "cjs", "--outfile", bundle])
+run(process.execPath, [
+  join(repoRoot, "scripts", "bundle.mjs"),
+  "--entry",
+  join(repoRoot, "dist", "cli", "main.js"),
+  "--format",
+  "cjs",
+  "--outfile",
+  bundle,
+])
 if (!existsSync(bundle)) throw new Error("CLI bundle was not produced")
 
 // 2b. SEA assets: the opencode plugin bundle is EMBEDDED (asset key
@@ -72,6 +85,16 @@ if (!existsSync(bundle)) throw new Error("CLI bundle was not produced")
 // standalone exe with NO repo (docs/adr-sea-path-resolution.md).
 const pluginBundle = join(repoRoot, "dist", "plugin.bundled.js")
 if (!existsSync(pluginBundle)) throw new Error("dist/plugin.bundled.js missing — run npm run build first")
+const embeddedAssets = {
+  "opencode-plugin-bundle": "dist/plugin.bundled.js",
+  "opencomms-mcp": "dist/mcp/main.js",
+  "claude-hook": "dist/adapters/claude-code/hook-cli.js",
+  "gemini-hook": "dist/adapters/gemini-cli/hook-cli.js",
+  "claude-desktop-manifest": "dist/adapters/claude-desktop/manifest.json",
+}
+for (const asset of Object.values(embeddedAssets)) {
+  if (!existsSync(join(repoRoot, asset))) throw new Error(`Missing standalone adapter asset: ${asset}`)
+}
 
 // 3. SEA preparation blob (assets are declared in the sea-config).
 const seaConfig = join(repoRoot, "sea-config.json")
@@ -82,7 +105,7 @@ writeFileSync(
       main: "dist/cli/cli-bundle.cjs",
       output: "sea-prep.blob",
       disableExperimentalSEAWarning: true,
-      assets: { "opencode-plugin-bundle": "dist/plugin.bundled.js" },
+      assets: embeddedAssets,
     },
     null,
     2,
@@ -120,5 +143,8 @@ console.log(`[opencomms-exe] smoke: ${smoke.trim()}`)
 try {
   rmSync(blob)
 } catch {}
-writeFileSync(join(outDir, "README.txt"), `opencomms standalone executable (built from source at repo root).\nUsage: ${exeName} help | gui [--port N] | session list ...\n`)
+writeFileSync(
+  join(outDir, "README.txt"),
+  `opencomms standalone executable (built from source at repo root).\nUsage: ${exeName} help | gui [--port N] | session list ...\n`,
+)
 console.log(`[opencomms-exe] done: ${target}`)

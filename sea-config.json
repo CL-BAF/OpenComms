@@ -3,6 +3,10 @@
   "output": "sea-prep.blob",
   "disableExperimentalSEAWarning": true,
   "assets": {
-    "opencode-plugin-bundle": "dist/plugin.bundled.js"
+    "opencode-plugin-bundle": "dist/plugin.bundled.js",
+    "opencomms-mcp": "dist/mcp/main.js",
+    "claude-hook": "dist/adapters/claude-code/hook-cli.js",
+    "gemini-hook": "dist/adapters/gemini-cli/hook-cli.js",
+    "claude-desktop-manifest": "dist/adapters/claude-desktop/manifest.json"
   }
 }

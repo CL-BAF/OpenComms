@@ -14,10 +14,10 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-test("codex capability claims stay honest (PULL, no TUI push, app-server EXPERIMENTAL)", () => {
+test("codex capabilities distinguish usable PULL tools from an unimplemented App Server runtime", () => {
   assert.match(CODEX_CAPABILITIES["delivery"]!, /PULL/i)
   assert.match(CODEX_CAPABILITIES["existingSessionPush"]!, /UNSUPPORTED/i)
-  assert.match(CODEX_CAPABILITIES["managedThreads"]!, /EXPERIMENTAL/i)
+  assert.match(CODEX_CAPABILITIES["managedThreads"]!, /UNSUPPORTED/i)
 })
 
 test("installCodex registers the MCP server section and copies the bundle", () => {

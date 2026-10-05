@@ -87,7 +87,7 @@ test("doctor: registry covers all five hosts", () => {
     .list()
     .map((a) => a.id)
     .sort()
-  assert.deepEqual(ids, [...HOST_IDS].sort())
+  assert.deepEqual(ids, [...HOST_IDS, "gemini-cli"].sort())
 })
 
 test("doctor: all five installed => all host checks ok", async (t) => {

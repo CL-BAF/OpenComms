@@ -1,0 +1,1 @@
+Native bundled assets: version, hashes, CSP, script syntax and named IPC references passed.

@@ -1,73 +1,102 @@
-# OpenComms Tauri Desktop GUI
+# OpenComms Tauri desktop
 
-The desktop application for OpenComms: a Tauri v2 shell (Windows + Linux)
-hosting the orchestrator console. This is **not** a web GUI — the loopback
-HTML console served by `opencomms gui` remains the documented CLI/headless
-fallback surface; the Tauri app is the owner-facing desktop GUI.
+The Tauri v2 shell loads the same offline console as the browser build from
+`dist-shell`. It communicates with the Node coordinator through newline
+delimited JSON over the child's stdin/stdout. It does not load a loopback
+webpage or expose a generic IPC-to-HTTP proxy.
 
-## What it does
+The Rust host permits only `ALLOWED_COMMANDS` in
+`src-tauri/src/main.rs`. Its operation set must match
+`src/orchestrator/bridge.ts`; the TypeScript bridge forwards each named
+operation to the same backend used by the browser. Backend validation,
+project boundaries and owner approval tokens also apply to native requests.
+The folder picker returns a candidate directory; the backend validates it.
 
-1. Spawns the **existing** OpenComms coordinator server as a child process
-   (`node dist/cli/main.js gui --port 1455 --server --project <repo root>`
-   in dev; the real per-triple Node coordinator sidecar in release builds).
-   The child is killed on shell exit via `Drop`.
-2. Opens a webview pointed at `http://127.0.0.1:1455/`, rendering the full
-   seven-route console: **Overview / Sessions / Team / Tasks / Nodes /
-   Activity / Settings** — live orchestrator surfaces (docs/gui-ia.md).
-3. Owns **no business logic** — the shell only wraps the server and consumes
-   the Orchestrator API (docs/orchestrator-api.md contract v0.3), per the
-   Decision Log in `docs/OVERHAUL_PLAN.md`.
+On the first request the shell starts the bundled coordinator beside the
+executable. Development builds may use `node dist/cli/main.js bridge`
+from this checkout. Release builds fail with repair instructions when their
+sidecar is missing; they do not use a machine-specific build directory.
+The sidecar announces its identity, protocol and operation allowlist before
+any operation is sent. The shell kills and reaps it on an invalid handshake.
 
-## Security posture
+Native handshake reads have an independent 10 second deadline. Operation
+writing and response reading share a 120 second deadline. Frames are bounded
+and response identifiers must match the originating request. Bridge failures
+discard the connection; a later explicit request reconnects. An operation
+with an uncertain result is not automatically retried. Check persisted state
+before retrying a mutation. Native errors include a request identifier,
+operation and whether execution was prevented or the outcome is unknown.
 
-- Real CSP pinned to the loopback origin (`default-src`/`connect-src`
-  `'self' http://127.0.0.1:1455`, `script-src 'self'`, no `unsafe-eval`).
-- Deny-by-default capabilities: the ONLY grant is `shell:allow-spawn` for
-  the bundled coordinator sidecar with fixed arg validators.
-- Updater wired from M0 (`createUpdaterArtifacts: true`,
-  `windows.installMode: "passive"`); signing happens in CI — no key
-  material ever lives in this repo.
+The blocking pipe work runs outside the webview thread. On shell exit the
+coordinator child is killed and reaped. Connection logs contain no request
+bodies and live under the per-user `OpenComms/bridge-runtime/logs` directory.
+The webview has no shell or filesystem permission grant. Its CSP permits
+the bundled assets and the Tauri IPC origin only.
 
-## Prerequisites (Windows-first)
+## Build and launch
 
-- Repo built: `npm run build` at the repo root (the shell loads
-  `dist/cli/main.js` in dev).
-- Node.js available on PATH (`node.exe`).
-- Rust toolchain (stable) + Tauri v2 prerequisites:
-  - Windows: WebView2 (preinstalled on Win11) + Visual Studio Build Tools (C++).
-  - Linux: `libwebkit2gtk-4.1-dev`, `build-essential`, `curl`, `wget`,
-    `libssl-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`.
+Windows builds require Node.js, a stable Rust toolchain, Visual Studio C++
+Build Tools and WebView2. Linux requires the Tauri WebKit/GTK prerequisites.
 
-## Run (dev)
+From the repository root:
 
 ```powershell
-cd desktop
-npm install
+npm ci
+npm run build
+node scripts/build-shell-asset.mjs
+```
+
+Then from `desktop`:
+
+```powershell
+npm ci
 npm run tauri dev
 ```
 
-The window titled "OpenComms" opens and renders the full orchestrator
-console. Diagnostics (under Settings) shows the loopback port when the
-server is up.
+For a release build, first produce the target-specific coordinator sidecar
+using the repository's release scripts, then run `npm run tauri build` in
+`desktop`. See the root build documentation for executable and installer
+requirements. Never publish a release without separately testing its
+packaged executable and installer on Windows.
 
-## Release-readiness state (owner directive)
+## Verification
 
-- [x] Shell wraps the live server; 7 routes render real endpoints.
-- [x] CSP + capabilities + updater config (no key material in repo).
-- [x] Node/trust-gate token-entry flows (Reviewer-approved posture).
-- [x] Real Node coordinator sidecar: `binaries/opencomms-coordinator-<triple>.exe`
-      built from the pinned 22.14.0 toolchain (Platform artifact, per-triple
-      named; verified serving the full console + orchestrator API standalone).
-- [ ] CI-signed release artifacts (tag naming: **OpenComms Tauri Desktop
-      GUI**; Reviewer gates the artifact + naming).
+```powershell
+# Repository root
+npm run build:test
+node --test dist-test/test/unit/core/bridge-parity.test.js
+node scripts/build-shell-asset.mjs
+node scripts/test-native-assets.mjs
+node scripts/test-browser-workflows.mjs
 
-## Linux
+# desktop/src-tauri
+cargo fmt --check
+cargo test
+cargo check
+```
 
-Prereqs above; config exists in-tree. Bundling verification is scheduled
-with the release gates (Platform co-verification).
+The bridge test checks Rust/TypeScript allowlist parity, every visible route's
+named operation, native create/stop/restart/assign/remove routing, framing,
+correlation and exception redaction. Its packaged sidecar probe is skipped
+when the Windows executable is absent. When present, the probe checks the
+handshake acknowledgement, response correlation and runtime discovery.
+Unavailable hosts must report a typed capability state and recovery guidance;
+an unknown command or protocol error fails the gate.
 
-## Never-stage list (desktop/)
+The browser workflow gate requires Playwright and Chrome. Set
+`OPENCOMMS_PLAYWRIGHT_PATH` to an installed Playwright `index.mjs` when it is
+outside this repository's dependencies. It exercises the real persisted
+backend through HTTP and a native IPC seam, including task evidence/review,
+team plans, disabled capabilities and refresh preservation. It writes its
+report and screenshots to `.verification`. The seam uses persisted test
+workers and never launches an authenticated vendor host.
 
-`src-tauri/target/`, `src-tauri/gen/schemas/`, `dist-shell/`,
-`node_modules/`, `binaries/*.exe` are gitignored; `binaries/README.md` and
-`Cargo.lock` stay tracked.
+The asset gate checks the generated document, external JavaScript, hashes,
+version, CSP and named IPC references. Neither these checks nor the browser
+seam establish live host interoperability or verify the Tauri installer.
+
+This upgrade environment has Node.js and Windows. A coordinator sidecar was
+built separately after initial inspection. The Rust toolchain and packaged
+Tauri executable remain unavailable. Rust compilation, Rust unit tests,
+native WebView workflows and packaged desktop/installer smoke checks still
+require those prerequisites. Skipped checks are not successful verification.

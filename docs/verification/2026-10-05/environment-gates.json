@@ -1,0 +1,50 @@
+{
+  "recorded_at": "2026-10-05T12:09:53.9684868+10:30",
+  "os": "Microsoft Windows NT 10.0.26200.0",
+  "commands": [
+    {
+      "name": "cargo",
+      "detected": false,
+      "path": null
+    },
+    {
+      "name": "rustc",
+      "detected": false,
+      "path": null
+    },
+    {
+      "name": "graphify",
+      "detected": false,
+      "path": null
+    },
+    {
+      "name": "opencode",
+      "detected": false,
+      "path": null
+    },
+    {
+      "name": "claude",
+      "detected": false,
+      "path": null
+    },
+    {
+      "name": "codex",
+      "detected": true,
+      "path": "<omitted for publication>"
+    },
+    {
+      "name": "gemini",
+      "detected": false,
+      "path": null
+    },
+    {
+      "name": "ISCC",
+      "detected": false,
+      "path": null
+    }
+  ],
+  "inno_standard_paths_present": null,
+  "git_metadata_present": false,
+  "graph_present": false,
+  "publication_note": "Local validation snapshot; machine-specific executable paths omitted and user-profile/workspace paths redacted for publication. No live vendor or packaged native acceptance is inferred."
+}

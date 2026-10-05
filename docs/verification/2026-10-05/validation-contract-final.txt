@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: src/core contains no host-specific identifiers (host neutrality)
+ok 1 - src/core contains no host-specific identifiers (host neutrality)
+  ---
+  duration_ms: 5.4172
+  type: 'test'
+  ...
+# Subtest: host capability profiles cover every supported host and are internally consistent
+ok 2 - host capability profiles cover every supported host and are internally consistent
+  ---
+  duration_ms: 0.9514
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 67.6145

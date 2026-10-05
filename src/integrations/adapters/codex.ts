@@ -15,6 +15,7 @@ import { join, resolve } from "node:path"
 import { installCodex, CODEX_CAPABILITIES } from "../../adapters/codex/install.js"
 import { compareVersions, getInstalledVersion, removeIntegrationMarker, setInstalledVersion } from "../versioning.js"
 import { PLACEHOLDER_ISSUE } from "../types.js"
+import { sharedMcpBundleInUse } from "../shared-artifacts.js"
 import type { HostIntegration, IntegrationContext, IntegrationDetection, IntegrationReport } from "../types.js"
 
 async function detectCodex(ctx: IntegrationContext): Promise<IntegrationDetection> {
@@ -52,6 +53,8 @@ async function detectCodex(ctx: IntegrationContext): Promise<IntegrationDetectio
 
   const marker = getInstalledVersion(target, "codex")
   if (marker) details.push(`marker version ${marker}`)
+  if (!sectionPresent && !orphanEnv && !marker)
+    return { status: "absent", installedVersion: marker, currentVersion: ctx.currentVersion, details, issues }
 
   // Orphan env block (env present without its parent section) is a partial
   // install: repair rewrites the full block.
@@ -210,7 +213,7 @@ export const codexAdapter: HostIntegration = {
     }
 
     const bundle = join(target, ".opencomms", "opencomms-mcp.mjs")
-    if (existsSync(bundle)) {
+    if (existsSync(bundle) && !sharedMcpBundleInUse(target, "codex")) {
       try {
         unlinkSync(bundle)
         changedFiles.push(".opencomms/opencomms-mcp.mjs")

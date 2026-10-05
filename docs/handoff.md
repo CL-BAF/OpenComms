@@ -1,4 +1,6 @@
-# OpenComms Overhaul — Handoff Log (FINAL)
+# Historical OpenComms Overhaul — Handoff Log
+
+> Historical record supplied with the source archive. Release tags, commits, test counts and deployment claims below have not been reproduced by the current upgrade. Do not use this log as current acceptance evidence or follow its publication instructions. The current implementation, local artifacts and outstanding gates are in [UPGRADE_HANDOFF.md](UPGRADE_HANDOFF.md).
 
 > Maintained by Lead. Updated after every major milestone per OrganisationalLeader's standing directive.
 > This is the FINAL version as of the session close — all specialists kicked, session destroyed per owner directive.

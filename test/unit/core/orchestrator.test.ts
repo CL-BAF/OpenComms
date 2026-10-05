@@ -421,7 +421,17 @@ test("orchestrator events: ring cap + cursor pagination", () => {
     const newest = state.events[state.events.length - 1]
     assert.ok(newest && newest.message.includes(String(MAX_ORCHESTRATOR_EVENTS + 49)))
     const page = listEvents(state, 10)
-    assert.equal(page.cursor, newest.seq)
+    assert.equal(page.events.length, 100)
+    assert.equal(page.cursor, page.events.at(-1)?.seq)
+    let cursor = page.cursor
+    const collected = [...page.events]
+    while (cursor < newest.seq) {
+      const next = listEvents(state, cursor)
+      assert.ok(next.cursor > cursor, "pagination must advance")
+      cursor = next.cursor
+      collected.push(...next.events)
+    }
+    assert.equal(new Set(collected.map((e) => e.seq)).size, state.events.length)
     assert.ok(page.events.every((e) => e.seq > 10))
     assert.equal(eventsSince(state, newest.seq).length, 0)
   } finally {
@@ -456,7 +466,7 @@ test("orchestrator api M2: REAL restart adopts the existing session (no duplicat
   }
 })
 
-test("orchestrator api M2: restart after resume failure re-creates and events the identity change", async () => {
+test("orchestrator restart preserves identity on failed resume; replacement requires explicit authorization", async () => {
   const dir = tmpProject()
   try {
     const store = new OrchestratorStore(dir)
@@ -477,7 +487,11 @@ test("orchestrator api M2: restart after resume failure re-creates and events th
     assert.ok(created.ok)
     const data = created.data as { id: string; host_session_id: string }
     const oldSession = data.host_session_id
-    const restarted = await api.restartAgent({ agent_id: data.id })
+    const refused = await api.restartAgent({ agent_id: data.id })
+    assert.equal(refused.ok, false)
+    assert.match(refused.message, /allow_replacement/)
+    assert.equal((api.getAgent(data.id).data as { host_session_id: string }).host_session_id, oldSession)
+    const restarted = await api.restartAgent({ agent_id: data.id, allow_replacement: true })
     assert.ok(restarted.ok, restarted.message)
     const payload = restarted.data as { mode: string; host_session_id: string; old_host_session_id: string }
     assert.equal(payload.mode, "recreated")
@@ -1244,7 +1258,7 @@ test("resolveOpencodeBinary: checked path == returned path (regression: checked 
   assert.equal(resolveOpencodeBinary({ OPENCOMMS_OPENCODE_BIN: "/custom/opencode" }), "/custom/opencode")
 })
 
-test("orchestrator api: agent worktree dir is created idempotently under .opencomms/agents", async () => {
+test("orchestrator api: managed agents use the selected source tree and do not claim empty folders are worktrees", async () => {
   const dir = tmpProject()
   try {
     const first = agentWorktreeDir(dir, "agt_abc")
@@ -1256,7 +1270,8 @@ test("orchestrator api: agent worktree dir is created idempotently under .openco
     assert.ok(created.ok)
     const createdTwice = await api.createAgent({ name: "w2", host: "opencode", role: "Worker2", role_prompt: "p" })
     assert.ok(createdTwice.ok)
-    assert.ok(existsSync(join(dir, ".opencomms", "agents")))
+    assert.ok(store.load().agents.every((a) => a.worktree === dir))
+    assert.equal(existsSync(join(dir, ".opencomms", "agents")), false)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -1289,7 +1304,7 @@ test("orchestrator api M2: tasks/assign rides the engine and GET /tasks derives 
       loadChannelEngineState: () => ({ messages: engineMessages }),
       engineSend: (
         state: unknown,
-        input: { channel: string; content: string; message_type: "review_request" },
+        input: { channel: string; content: string; message_type: "review_request"; to?: string },
         sender: string,
       ) => {
         void state
@@ -1302,7 +1317,7 @@ test("orchestrator api M2: tasks/assign rides the engine and GET /tasks derives 
             message_id: `msg_${counter}`,
             channel_id: input.channel,
             sender_session_id: sender,
-            recipient_session_id: "ses_worker",
+            recipient_session_id: input.to ?? "ses_worker",
             timestamp: Date.now(),
             message_type: input.message_type,
             content: input.content,
@@ -1355,7 +1370,7 @@ test("orchestrator api M2: tasks/assign rides the engine and GET /tasks derives 
       msg_reply: {
         message_id: "msg_reply",
         channel_id: "m1-proof",
-        sender_session_id: "ses_worker",
+        sender_session_id: engineMessages["msg_1"]?.recipient_session_id ?? "ses_worker",
         recipient_session_id: "operator",
         timestamp: Date.now() + 1,
         message_type: "review_response",
@@ -1581,7 +1596,7 @@ test("bridge M4.5: handshake announcement + section-2 surface completeness", () 
   assert.equal(announcement.hello, BRIDGE_IDENTITY)
   assert.equal(announcement.protocol, BRIDGE_PROTOCOL)
   assert.ok(announcement.version.length > 0)
-  assert.equal(BRIDGE_COMMANDS.length, 26)
+  assert.deepEqual(announcement.api, BRIDGE_COMMANDS)
   for (const cmd of [
     "nodes_list",
     "agents_list",

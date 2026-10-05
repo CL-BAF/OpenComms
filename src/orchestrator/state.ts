@@ -20,10 +20,36 @@
  * from agent-facing tool arguments.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, statSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  openSync,
+  closeSync,
+  unlinkSync,
+  statSync,
+  copyFileSync,
+  constants,
+} from "node:fs"
 import { join } from "node:path"
 import { replaceStateFile } from "../core/atomic-file.js"
 import { randomBytes, createHash } from "node:crypto"
+import {
+  TASK_SCHEMA_VERSION,
+  MAX_TASKS,
+  MAX_CONTEXT_RECORDS,
+  validTask,
+  validContext,
+  type TaskRecord,
+  type ProjectContextRecord,
+} from "./tasks.js"
+import {
+  TEAM_TEMPLATE_SCHEMA_VERSION,
+  MAX_TEAM_TEMPLATES,
+  validTeamTemplate,
+  type TeamTemplate,
+} from "./team-templates.js"
 
 export const ORCHESTRATOR_FILE = "orchestrator.json"
 export const ORCHESTRATOR_SCHEMA_VERSION = 1
@@ -139,6 +165,8 @@ export interface AgentRecord {
   node_id: string
   worktree: string
   status: AgentRuntimeStatus
+  /** Bounded, redacted recovery detail from the latest managed observation. */
+  status_detail?: string | null
   host_session_id: string | null
   spawn_cmd_redacted: string
   /** Contract v0.3 §9: exactly ONE agent per project may hold "lead". Immutable. */
@@ -148,6 +176,10 @@ export interface AgentRecord {
   created_at: number
   restart_count: number
   model: string | null
+  /** Optional idempotency journal for explicitly managed creation. */
+  operation_id?: string
+  operation_fingerprint?: string
+  required_capabilities?: string[]
 }
 
 export interface TrustState {
@@ -172,6 +204,14 @@ export interface OrchestratorState {
   events_cursor: number
   serve: { port: number | null; password_redacted: boolean }
   trust: TrustState
+  /** Additive versioned extension of the existing orchestration store. */
+  task_schema_version: number
+  tasks: TaskRecord[]
+  project_context: ProjectContextRecord[]
+  team_template_schema_version: number
+  team_templates: TeamTemplate[]
+  /** Durable operator emergency state, scoped to this project. */
+  coordination?: { stopped: boolean; emergency_paused_channels: string[] }
 }
 
 export function emptyOrchestratorState(worktree: string): OrchestratorState {
@@ -200,6 +240,11 @@ export function emptyOrchestratorState(worktree: string): OrchestratorState {
     events: [],
     events_cursor: 0,
     serve: { port: null, password_redacted: true },
+    task_schema_version: TASK_SCHEMA_VERSION,
+    tasks: [],
+    project_context: [],
+    team_template_schema_version: TEAM_TEMPLATE_SCHEMA_VERSION,
+    team_templates: [],
     trust: {
       owner_confirm_token: newConfirmToken(),
       approved_node_ids: [],
@@ -252,10 +297,23 @@ function isValidAgent(a: unknown): boolean {
     typeof a["worktree"] === "string" &&
     typeof a["status"] === "string" &&
     AGENT_STATUSES.includes(a["status"]) &&
+    (a["status_detail"] === undefined ||
+      a["status_detail"] === null ||
+      (typeof a["status_detail"] === "string" && a["status_detail"].length <= 2_000)) &&
     (typeof a["host_session_id"] === "string" || a["host_session_id"] === null) &&
     typeof a["spawn_cmd_redacted"] === "string" &&
     (designated === "lead" || designated === null) &&
-    Array.isArray(a["channel_ids"])
+    Array.isArray(a["channel_ids"]) &&
+    (a["operation_id"] === undefined ||
+      (typeof a["operation_id"] === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(a["operation_id"]))) &&
+    (a["operation_fingerprint"] === undefined ||
+      (typeof a["operation_fingerprint"] === "string" && /^[0-9a-f]{64}$/.test(a["operation_fingerprint"]))) &&
+    (a["required_capabilities"] === undefined ||
+      (Array.isArray(a["required_capabilities"]) &&
+        a["required_capabilities"].length <= 16 &&
+        a["required_capabilities"].every(
+          (cap: unknown) => typeof cap === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(cap),
+        )))
   )
 }
 
@@ -308,11 +366,62 @@ export function validateOrchestratorState(
     return { ok: false, reason: "trust has invalid shape" }
   }
   if (!isRecord(parsed["serve"])) return { ok: false, reason: "serve is not an object" }
+  const taskVersion = parsed["task_schema_version"]
+  const coordination = parsed["coordination"]
+  if (
+    coordination !== undefined &&
+    (!isRecord(coordination) ||
+      typeof coordination["stopped"] !== "boolean" ||
+      !Array.isArray(coordination["emergency_paused_channels"]) ||
+      coordination["emergency_paused_channels"].length > 256 ||
+      !coordination["emergency_paused_channels"].every(
+        (name: unknown) => typeof name === "string" && /^[a-z0-9][a-z0-9-_]{0,63}$/.test(name),
+      ))
+  )
+    return { ok: false, reason: "coordination has invalid shape" }
+  if (
+    parsed["team_template_schema_version"] !== undefined &&
+    parsed["team_template_schema_version"] !== TEAM_TEMPLATE_SCHEMA_VERSION
+  )
+    return { ok: false, reason: "team_template_schema_version mismatch" }
+  const templates = parsed["team_templates"]
+  if (
+    templates !== undefined &&
+    (!Array.isArray(templates) ||
+      templates.length > MAX_TEAM_TEMPLATES ||
+      !templates.every(validTeamTemplate) ||
+      new Set(templates.map((t) => (t as TeamTemplate).id)).size !== templates.length)
+  )
+    return { ok: false, reason: "team_templates has invalid shape" }
+  if (taskVersion !== undefined && taskVersion !== TASK_SCHEMA_VERSION)
+    return { ok: false, reason: "task_schema_version mismatch" }
+  if (
+    parsed["tasks"] !== undefined &&
+    (!Array.isArray(parsed["tasks"]) || parsed["tasks"].length > MAX_TASKS || !parsed["tasks"].every(validTask))
+  )
+    return { ok: false, reason: "tasks has invalid shape" }
+  if (
+    parsed["project_context"] !== undefined &&
+    (!Array.isArray(parsed["project_context"]) ||
+      parsed["project_context"].length > MAX_CONTEXT_RECORDS ||
+      !parsed["project_context"].every(validContext))
+  )
+    return { ok: false, reason: "project_context has invalid shape" }
+  if (
+    Array.isArray(parsed["tasks"]) &&
+    new Set(parsed["tasks"].map((t) => (t as TaskRecord).task_id)).size !== parsed["tasks"].length
+  )
+    return { ok: false, reason: "duplicate task ids" }
   return { ok: true, state: parsed as unknown as OrchestratorState }
 }
 
 /** Backfill optional fields on freshly-read state (additive evolution). */
 export function backfillOrchestratorState(state: OrchestratorState): void {
+  state.task_schema_version ??= TASK_SCHEMA_VERSION
+  state.tasks ??= []
+  state.project_context ??= []
+  state.team_template_schema_version ??= TEAM_TEMPLATE_SCHEMA_VERSION
+  state.team_templates ??= []
   for (const agent of state.agents) {
     if (agent.designated === undefined) agent.designated = null
     if (!Array.isArray(agent.channel_ids)) agent.channel_ids = []
@@ -364,7 +473,7 @@ export class OrchestratorStore {
     this.dir = join(projectDir, ".opencomms")
     this.file = join(this.dir, ORCHESTRATOR_FILE)
     this.lockPath = join(this.dir, ORCHESTRATOR_LOCK)
-    this.sharedLock = sharedLock as unknown as ((fn: () => unknown) => Promise<unknown>) | null
+    this.sharedLock = sharedLock ? (fn) => sharedLock.withLock(fn) : null
   }
 
   /** Exclusive cross-process lock; delegates to StateStore.withLock when wired. */
@@ -432,6 +541,12 @@ export class OrchestratorStore {
       const parsed: unknown = JSON.parse(readFileSync(this.file, "utf8"))
       const result = validateOrchestratorState(parsed)
       if (!result.ok) {
+        // Preserve rejected/forward-version data before fail-closed recovery.
+        copyFileSync(
+          this.file,
+          join(this.dir, `orchestrator.rejected.${Date.now()}.${randomBytes(4).toString("hex")}.json`),
+          constants.COPYFILE_EXCL,
+        )
         const base = emptyOrchestratorState(this.projectDir)
         base.events.push({
           seq: 1,
@@ -467,6 +582,35 @@ export class OrchestratorStore {
 
   save(state: OrchestratorState): void {
     mkdirSync(this.dir, { recursive: true })
+    // First write of the additive task extension preserves the exact legacy
+    // orchestration document. Channel messages remain untouched and legacy
+    // acknowledgements migrate only as delivery, never execution evidence.
+    // Malformed bytes must be preserved before ANY overwrite, including
+    // later recoveries after the one-time legacy migration backup exists.
+    if (existsSync(this.file)) {
+      let old: unknown
+      try {
+        old = JSON.parse(readFileSync(this.file, "utf8"))
+      } catch {
+        copyFileSync(
+          this.file,
+          join(this.dir, `orchestrator.unreadable.${Date.now()}.${randomBytes(4).toString("hex")}.json`),
+          constants.COPYFILE_EXCL,
+        )
+      }
+      if (
+        isRecord(old) &&
+        !existsSync(join(this.dir, "orchestrator.pre-tasks-v1.json")) &&
+        old["orchestrator_schema_version"] === ORCHESTRATOR_SCHEMA_VERSION &&
+        old["task_schema_version"] === undefined
+      ) {
+        try {
+          copyFileSync(this.file, join(this.dir, "orchestrator.pre-tasks-v1.json"), constants.COPYFILE_EXCL)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        }
+      }
+    }
     const tmp = join(this.dir, `.orchestrator.${process.pid}.${randomBytes(4).toString("hex")}.tmp`)
     replaceStateFile(this.file, tmp, JSON.stringify(state, null, 2))
   }

@@ -1,0 +1,3 @@
+# Local verification evidence
+
+Recorded for the 2026-10-05 local OpenComms 1.4.0 build. Published evidence is text only: workspace/user-profile paths are redacted and machine-specific executable/tool paths are omitted; counts, request identifiers and outcomes are retained. Original screenshots remain local and are excluded from publication. JSON snapshots and checksums describe that local validation, before Git metadata was restored. These records do not prove authenticated vendor interoperability or Rust/WebView/installer acceptance. Binaries, caches and runtime project data are not published.

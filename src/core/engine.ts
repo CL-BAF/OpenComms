@@ -390,7 +390,7 @@ function clampOptionalPositive(value: number | undefined | null, min: number, ma
   return Math.max(min, Math.min(max, Math.floor(value)))
 }
 
-/** Conversation budget guard shared by sends (runtime + lifetime caps). */
+/** Conversation budget guard shared by sends and every handover attempt. */
 function budgetRefusal(channel: Channel, now: number): string | null {
   const budgets = channel.budgets
   if (!budgets) return null
@@ -932,9 +932,19 @@ export function kickChannel(state: State, input: KickInput): ToolResult {
 /** â”€â”€ Messaging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 export function sendMessage(state: State, input: SendInput, senderSessionId: string): ToolResult {
+  return enqueueMessage(state, input, senderSessionId, false)
+}
+
+/** Trusted local operator assignment. Never available to member-facing tools. */
+export function sendMessageAsOperator(state: State, input: SendInput): ToolResult {
+  if (!input.to || input.broadcast) return fail("Operator assignments require one explicit recipient.")
+  return enqueueMessage(state, input, "operator", true)
+}
+
+function enqueueMessage(state: State, input: SendInput, senderSessionId: string, operator: boolean): ToolResult {
   const channel = findChannel(state, input.channel)
   if (!channel) return fail(`Channel "${input.channel}" does not exist.`)
-  const sender = memberOf(channel, senderSessionId)
+  const sender = operator ? { role: "Operator" } : memberOf(channel, senderSessionId)
   if (!sender) {
     return fail(`This session is not a member of channel "${input.channel}".`)
   }
@@ -1195,10 +1205,13 @@ export function commitDelivery(
  * in_flight as delivered — silently DROPS messages, which is worse for a
  * communication system. Documented in PROTOCOL.md.
  */
-export function sweepInFlight(state: State): string[] {
+export function sweepInFlight(
+  state: State,
+  shouldRecover: (message: MessageEnvelope) => boolean = () => true,
+): string[] {
   const byRecipient = new Map<string, string[]>()
   for (const msg of Object.values(state.messages)) {
-    if (msg.delivery_status !== "in_flight") continue
+    if (msg.delivery_status !== "in_flight" || !shouldRecover(msg)) continue
     msg.delivery_status = "pending"
     msg.delivered_at = null
     const list = byRecipient.get(msg.recipient_session_id) ?? []
@@ -1283,6 +1296,15 @@ export function drainQueue(
     }
 
     if (opts.canDeliver && !opts.canDeliver(msg)) {
+      remaining.push(id)
+      continue
+    }
+
+    // Sending can queue many envelopes before the first handover. Recheck
+    // for each attempt, including retries, so a batch cannot overrun its
+    // lifetime cap or deliver work after its runtime budget has elapsed.
+    // Keep the pending envelope visible for an explicit budget extension.
+    if (budgetRefusal(channel, now)) {
       remaining.push(id)
       continue
     }

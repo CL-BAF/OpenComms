@@ -24,6 +24,7 @@
  */
 
 import { execFile } from "node:child_process"
+import { existsSync } from "node:fs"
 import type { Member, State } from "../core/types.js"
 import {
   commitDelivery,
@@ -119,7 +120,7 @@ export function parseCommandTemplate(raw: string): string[] {
     current += ch
     hasContent = true
   }
-  if (inQuotes) throw new Error(`unterminated quote in command template: ${raw.slice(0, 80)}`)
+  if (inQuotes) throw new Error("unterminated quote in host command template")
   if (current.length > 0 || hasContent) tokens.push(current)
   return tokens
 }
@@ -139,6 +140,8 @@ export function resolveBinaryOverride(
 ): { command: string; prependArgs: string[] } {
   const raw = envValue?.trim()
   if (!raw) return { command: defaultBinary, prependArgs: [] }
+  // An existing unquoted path with spaces is a binary, not a template.
+  if (existsSync(raw)) return { command: raw, prependArgs: [] }
   if (!/["\s]/.test(raw)) return { command: raw, prependArgs: [] }
   const tokens = parseCommandTemplate(raw)
   if (tokens.length === 0) return { command: defaultBinary, prependArgs: [] }
@@ -177,6 +180,9 @@ export function spawnDeliveryRefusal(member: Member): string | null {
   if (!member.host_session_id || !member.host_session_id.trim()) {
     return "member has no bound host_session_id (the host lifecycle hook has not bound a session yet)"
   }
+  if (member.host_session_id.startsWith("-") || /[\r\n\0]/.test(member.host_session_id)) {
+    return "bound host_session_id is not a valid positional CLI identity"
+  }
   if (!spawnBuilderFor(member.host)) {
     return `host "${member.host}" has no documented non-interactive resume API`
   }
@@ -199,7 +205,13 @@ export function defaultSpawn(
       { cwd: cmd.cwd, timeout: 10 * 60_000, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
         if (error) {
-          resolve({ ok: false, error: `${error.message}${stdout ? ` | stdout: ${stdout.slice(0, 400)}` : ""}` })
+          // execFile's message contains the full argv, including peer content;
+          // stdout/stderr may include secrets. Persist only process metadata.
+          const failure = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string }
+          resolve({
+            ok: false,
+            error: `host CLI failed (code ${failure.code ?? "unknown"}, signal ${failure.signal ?? "none"}, timed out ${failure.killed === true})`,
+          })
         } else {
           resolve({ ok: true, stdout: stdout.slice(0, 2_000) })
         }
@@ -291,6 +303,27 @@ export interface SpawnRunnerDeps {
 
 /** Message ids already reported by the size guard (dedup per process). */
 const sizeGuardReported = new Set<string>()
+const activeSpawnDeliveries = new Set<string>()
+
+/** Conservative CreateProcess quoting / POSIX UTF-8 argument accounting. */
+export function spawnArgumentCost(value: string, platform = process.platform): number {
+  return platform === "win32" ? 2 * value.length + 3 : Buffer.byteLength(value, "utf8") + 1
+}
+
+/** Reserve the member before any asynchronous work, including the drain. */
+export async function deliverViaSpawn(deps: SpawnRunnerDeps, member: Member): Promise<SpawnOutcome> {
+  if (activeSpawnDeliveries.has(member.session_id) || deps.isDelivering?.(member.session_id)) {
+    return { status: "skipped", detail: "a spawn delivery is already in flight for this member" }
+  }
+  activeSpawnDeliveries.add(member.session_id)
+  deps.setDelivering?.(member.session_id, true)
+  try {
+    return await deliverViaSpawnInner(deps, member)
+  } finally {
+    activeSpawnDeliveries.delete(member.session_id)
+    deps.setDelivering?.(member.session_id, false)
+  }
+}
 
 /**
  * Deliver ALL pending messages for one spawn_push member by resuming its
@@ -301,12 +334,9 @@ const sizeGuardReported = new Set<string>()
  * mail is preserved untouched, one actionable error is recorded, and no
  * doomed spawn loop is ever entered. Peer content is never truncated.
  */
-export async function deliverViaSpawn(deps: SpawnRunnerDeps, member: Member): Promise<SpawnOutcome> {
+async function deliverViaSpawnInner(deps: SpawnRunnerDeps, member: Member): Promise<SpawnOutcome> {
   const refusal = spawnDeliveryRefusal(member)
   if (refusal) return { status: "skipped", detail: refusal }
-  if (deps.isDelivering?.(member.session_id)) {
-    return { status: "skipped", detail: "a spawn delivery is already in flight for this member" }
-  }
 
   // Pre-spawn argv size guard (P2-2): estimate the framed batch size from
   // the PENDING queue without draining. Framing adds ~450 chars per
@@ -319,11 +349,13 @@ export async function deliverViaSpawn(deps: SpawnRunnerDeps, member: Member): Pr
     await deps.withLock(() => {
       const state = deps.load()
       const cmd = builder.buildResumeCommand({ hostSessionId: member.host_session_id as string, cwd: deps.cwd })
-      const fixedOverhead = cmd.command.length + cmd.args.join(" ").length + 64
+      const fixedOverhead = [cmd.command, ...cmd.args].reduce((sum, arg) => sum + spawnArgumentCost(arg), 64)
       for (const id of state.queues[member.session_id] ?? []) {
         const msg = state.messages[id]
         if (!msg || msg.delivery_status !== "pending") continue
-        const framedEstimate = msg.content.length + 450
+        const channelName =
+          Object.values(state.channels).find((channel) => channel.id === msg.channel_id)?.name ?? msg.channel_id
+        const framedEstimate = spawnArgumentCost(formatUntrustedMessage(msg, channelName))
         if (fixedOverhead + estimated + framedEstimate > budget) oversizedIds.push(id)
         else estimated += framedEstimate + 6
       }
@@ -331,6 +363,7 @@ export async function deliverViaSpawn(deps: SpawnRunnerDeps, member: Member): Pr
     })
   } catch (error) {
     deps.recordError(`Spawn delivery size check for ${member.session_id} failed: ${(error as Error).message}`)
+    return { status: "failed", detail: "invalid host command; pending queue was preserved" }
   }
   if (oversizedIds.length > 0) {
     // Do NOT drain: leave the queue untouched so the operator can shrink
@@ -349,11 +382,39 @@ export async function deliverViaSpawn(deps: SpawnRunnerDeps, member: Member): Pr
   // Phase 1 (locked): drain + persist in_flight.
   let batch: Array<{ id: string; channelName: string }> = []
   let framed = ""
+  let budgetExceeded = false
   try {
     await deps.withLock(() => {
       const state = deps.load()
+      // Recheck under the SAME lock as drain: new mail can arrive after the
+      // earlier diagnostic guard. Snapshot the exact envelopes before save.
+      const cmd = builder.buildResumeCommand({ hostSessionId: member.host_session_id as string, cwd: deps.cwd })
+      const pending = (state.queues[member.session_id] ?? [])
+        .flatMap((id) => {
+          const msg = state.messages[id]
+          if (!msg || msg.delivery_status !== "pending") return []
+          const name =
+            Object.values(state.channels).find((channel) => channel.id === msg.channel_id)?.name ?? msg.channel_id
+          return [formatUntrustedMessage(msg, name)]
+        })
+        .join("\n\n---\n\n")
+      const cost = [cmd.command, ...cmd.args, pending].reduce((sum, arg) => sum + spawnArgumentCost(arg), 64)
+      if (cost > budget) {
+        budgetExceeded = true
+        return null
+      }
+      const queueSnapshot = () =>
+        JSON.stringify((state.queues[member.session_id] ?? []).map((id) => [id, state.messages[id]?.delivery_status]))
+      const before = queueSnapshot()
       const pairs = drainForDelivery(state, member.session_id)
-      if (pairs.length > 0) deps.save(state)
+      framed = pairs
+        .flatMap((pair) => {
+          const msg = state.messages[pair.message_id]
+          return msg ? [formatUntrustedMessage(msg, pair.channel_name)] : []
+        })
+        .join("\n\n---\n\n")
+      // Terminal queue cleanup is a durable outcome even without a spawn.
+      if (pairs.length > 0 || before !== queueSnapshot()) deps.save(state)
       batch = pairs.map((p) => ({ id: p.message_id, channelName: p.channel_name }))
       return null
     })
@@ -361,20 +422,9 @@ export async function deliverViaSpawn(deps: SpawnRunnerDeps, member: Member): Pr
     deps.recordError(`Spawn delivery drain for ${member.session_id} failed: ${(error as Error).message}`)
     return { status: "failed", detail: `drain failed: ${(error as Error).message}` }
   }
+  if (budgetExceeded)
+    return { status: "skipped", detail: `batch exceeds the spawn argv limit (~${budget} chars); queue left untouched` }
   if (batch.length === 0) return { status: "skipped", detail: "no pending messages" }
-
-  // Frame the batch from a fresh snapshot (per-envelope channel provenance).
-  try {
-    const snapshot = deps.load()
-    const parts: string[] = []
-    for (const item of batch) {
-      const msg = snapshot.messages[item.id]
-      if (msg) parts.push(formatUntrustedMessage(msg, item.channelName))
-    }
-    framed = parts.join("\n\n---\n\n")
-  } catch {
-    framed = ""
-  }
   if (!framed) {
     // Snapshots lost the envelopes (pruned concurrently) â€” requeue by ids.
     try {

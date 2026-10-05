@@ -5,7 +5,7 @@
  */
 import { normalizeChannelName } from "../core/engine.js"
 
-export type JoinHost = "opencode" | "claude-code" | "codex" | "claude-desktop" | "chatgpt"
+export type JoinHost = "opencode" | "claude-code" | "codex" | "gemini-cli" | "claude-desktop" | "chatgpt"
 
 export interface JoinCommandResult {
   host: string
@@ -44,6 +44,12 @@ export function joinCommandFor(sessionName: string, host: string = "opencode"): 
         where: "Inside a Claude Desktop conversation (MCP tool call; PULL delivery)",
         command: `opencomms_join(channel="${name}", role="<role>", role_prompt="...")`,
       }
+    case "gemini-cli":
+      return {
+        host: hostId,
+        where: "Inside the existing Gemini CLI session in this project (MCP tool call; hooks/pull delivery)",
+        command: `opencomms_join(channel="${name}", role="<role>", role_prompt="...")`,
+      }
     case "chatgpt":
       return {
         host: hostId,
@@ -51,6 +57,8 @@ export function joinCommandFor(sessionName: string, host: string = "opencode"): 
         command: `opencomms_join(channel="${name}", role="<role>", role_prompt="...")`,
       }
     default:
-      return { error: `Unknown host "${host}". Supported: opencode, claude-code, codex, claude-desktop, chatgpt.` }
+      return {
+        error: `Unknown host "${host}". Supported: opencode, claude-code, codex, gemini-cli, claude-desktop, chatgpt.`,
+      }
   }
 }

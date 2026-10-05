@@ -157,6 +157,21 @@ export const OLLAMA_CAPABILITIES: HostCapabilities = {
   mcpSupport: true,
 }
 
+/** Gemini CLI linked hooks/MCP; no managed runner or autonomous push claimed. */
+export const GEMINI_CLI_CAPABILITIES: HostCapabilities = {
+  sessionIdentity: true,
+  sessionDiscovery: false,
+  existingSessionLinking: true,
+  sessionResume: false,
+  promptDelivery: false,
+  idleDetection: false,
+  lifecycleEvents: true,
+  roleInjection: "hook-boundary",
+  toolRegistration: true,
+  commandRegistration: false,
+  mcpSupport: true,
+}
+
 export const HOST_CAPABILITY_PROFILES: Record<string, HostCapabilities> = {
   opencode: OPENCODE_CAPABILITIES,
   "claude-code": CLAUDE_CODE_CAPABILITIES,
@@ -165,4 +180,5 @@ export const HOST_CAPABILITY_PROFILES: Record<string, HostCapabilities> = {
   "codex-app-server": CODEX_APP_SERVER_CAPABILITIES,
   chatgpt: CHATGPT_CAPABILITIES,
   ollama: OLLAMA_CAPABILITIES,
+  "gemini-cli": GEMINI_CLI_CAPABILITIES,
 }

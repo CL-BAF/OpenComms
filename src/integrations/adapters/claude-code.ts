@@ -16,6 +16,7 @@ import { join, resolve } from "node:path"
 import { installClaudeCode } from "../../adapters/claude-code/install.js"
 import { compareVersions, getInstalledVersion, removeIntegrationMarker, setInstalledVersion } from "../versioning.js"
 import { PLACEHOLDER_ISSUE } from "../types.js"
+import { sharedMcpBundleInUse } from "../shared-artifacts.js"
 import type { HostIntegration, IntegrationContext, IntegrationDetection, IntegrationReport } from "../types.js"
 
 const CLAUDE_CAPABILITIES: Record<string, string> = {
@@ -100,6 +101,8 @@ async function detectClaudeCode(ctx: IntegrationContext): Promise<IntegrationDet
 
   const marker = getInstalledVersion(target, "claude-code")
   if (marker) details.push(`marker version ${marker}`)
+  if (!hooksPresent && !hooksRegistered && !serverRegistered && !marker)
+    return { status: "absent", installedVersion: marker, currentVersion: ctx.currentVersion, details, issues }
 
   // Placeholder env is never installed evidence: fresh installs always carry
   // it until `opencomms install-member` replaces it with a real member id.
@@ -273,6 +276,7 @@ export const claudeCodeAdapter: HostIntegration = {
     }
 
     for (const bundle of [".opencomms/claude-code-hooks.mjs", ".opencomms/opencomms-mcp.mjs"]) {
+      if (bundle.endsWith("opencomms-mcp.mjs") && sharedMcpBundleInUse(target, "claude-code")) continue
       const bundlePath = join(target, bundle)
       if (existsSync(bundlePath)) {
         try {

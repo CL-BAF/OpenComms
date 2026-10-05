@@ -1,0 +1,1 @@
+Native frontend generated: <workspace>\desktop\dist-shell

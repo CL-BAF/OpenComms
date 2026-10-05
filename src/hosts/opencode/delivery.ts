@@ -136,8 +136,24 @@ export function createDeliveryController(opts: DeliveryControllerOptions): Deliv
     try {
       const drained = await store.withLock(() => {
         const state = load()
+        // Managed API members are owned by the coordinator's runtime loop.
+        // A plugin bus event must never run their work on the plugin server.
+        if (
+          Object.values(state.channels).some((channel) =>
+            channel.members.some(
+              (member) =>
+                member.session_id === sessionId && member.surface === "api" && member.delivery_mode === "pull",
+            ),
+          )
+        )
+          return []
+        const queueSnapshot = () =>
+          JSON.stringify((state.queues[sessionId] ?? []).map((id) => [id, state.messages[id]?.delivery_status]))
+        const before = queueSnapshot()
         const pairs = drainForDelivery(state, sessionId)
-        if (pairs.length > 0) store.save(state)
+        // Draining also discards expired, rejected, and missing envelopes.
+        // Persist that cleanup even when no prompt batch is produced.
+        if (pairs.length > 0 || before !== queueSnapshot()) store.save(state)
         return pairs.map((p) => ({ id: p.message_id, channelName: p.channel_name }))
       })
       batch = drained
@@ -277,7 +293,14 @@ export function createDeliveryController(opts: DeliveryControllerOptions): Deliv
   const startupSweep = async (): Promise<void> => {
     const swept = await store.withLock(() => {
       const state = load()
-      const ids = sweepInFlight(state)
+      const managed = new Set(
+        Object.values(state.channels).flatMap((channel) =>
+          channel.members
+            .filter((member) => member.surface === "api" && member.delivery_mode === "pull")
+            .map((member) => member.session_id),
+        ),
+      )
+      const ids = sweepInFlight(state, (message) => !managed.has(message.recipient_session_id))
       if (ids.length > 0) store.save(state)
       return ids
     })

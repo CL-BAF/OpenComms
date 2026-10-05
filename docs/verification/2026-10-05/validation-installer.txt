@@ -1,0 +1,15 @@
+
+> opencomms@1.4.0 build:installer
+> node scripts/build-installer.mjs
+
+file:///<workspace>/scripts/build-installer.mjs:23
+  throw new Error("ISCC.exe not found. Install Inno Setup 6.4.x or set ISCC_EXE to its full path.")
+        ^
+
+Error: ISCC.exe not found. Install Inno Setup 6.4.x or set ISCC_EXE to its full path.
+    at file:///<workspace>/scripts/build-installer.mjs:23:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:439:25)
+    at async node:internal/modules/esm/loader:643:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.19.0

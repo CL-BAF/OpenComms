@@ -35,14 +35,7 @@ test("desktop capability claims stay honest (PULL-only, no push/identity/roleInj
   assert.match(DESKTOP_CAPABILITIES["roleInjection"]!, /UNSUPPORTED/i)
 })
 
-test("bundle layout + self-contained server end-to-end pull (packaging smoke)", async (t) => {
-  // esbuild must be available for the self-contained bundle.
-  const esbuildBin = join(repoRoot, "node_modules", "esbuild", "bin", "esbuild")
-  if (!existsSync(esbuildBin)) {
-    t.skip("esbuild not installed â€” run npm install")
-    return
-  }
-
+test("bundle layout + self-contained server end-to-end pull (packaging smoke)", async () => {
   const project = mkdtempSync(join(tmpdir(), "oc-desktop-e2e-"))
   try {
     // Target project state: an Architect (claude-desktop, PULL member) with

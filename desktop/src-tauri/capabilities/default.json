@@ -1,25 +1,14 @@
 {
   "$schema": "..\\gen\\schemas\\capabilities.json",
   "identifier": "default-capabilities",
-  "description": "Deny-by-default IPC for the OpenComms Tauri Desktop GUI: the ONLY grants are the orchestrator IPC command (orchestrator_invoke) driving the handshake-validated stdio bridge, plus spawning the bundled OpenComms coordinator sidecar with fixed arguments (the bridge subcommand — no free args). No broad shell, filesystem, or network access.",
+  "description": "Only the bundled main window may invoke the named coordinator bridge or native folder picker. Coordinator process creation belongs to Rust; orchestrator_invoke validates its explicit operation allowlist. The webview receives no shell, filesystem, or network permissions.",
   "windows": ["main"],
   "permissions": [
     {
-      "identifier": "core:event:default"
+      "identifier": "allow-orchestrator-invoke"
     },
     {
-      "identifier": "shell:allow-spawn",
-      "allow": [
-        {
-          "name": "binaries/opencomms-coordinator",
-          "sidecar": true,
-          "args": [
-            "bridge",
-            "--project",
-            { "validator": "\\S+" }
-          ]
-        }
-      ]
+      "identifier": "allow-pick-project"
     }
   ]
 }

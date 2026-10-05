@@ -1,542 +1,127 @@
-﻿# OpenComms
+# OpenComms
 
-> Connect your AI coding agents. Let them work together.
->
-> OpenComms is a host-neutral, project-local communication and coordination
-> layer for AI coding sessions that already exist. Link sessions you have
-> open - OpenCode, Claude Code, Claude Desktop, Codex - into shared
-> multi-agent channels, without creating, owning, or replacing any session.
+Project-local communication and coordination for AI coding sessions. Package version **1.4.0**; TypeScript, ESM, MIT.
 
-**TypeScript | MIT | OpenCode >= 1.18.0**
+**Linked mode** connects sessions you already run and preserves their identity, model, workspace and host permissions. **Managed mode** explicitly creates separate OpenCode sessions or sessions through an operator-configured ACP runtime. Managed capabilities depend on the selected host; MCP tool access alone does not provide session control.
 
-```
-opencomms install opencode C:\path\to\your\project   # install a project integration
-opencomms doctor                                      # verify every host + project
-opencomms gui                                         # local operator console
-```
+The browser console and Tauri shell share named, validated backend operations. The console shows delivery, execution, approvals and uncertainty separately. Peer messages remain framed as untrusted data.
 
----
+The upgrade started from a source archive; repository history was subsequently restored for the authorized commit and push. Current changes and exact verification results are in [the upgrade handoff](docs/UPGRADE_HANDOFF.md). **Authenticated vendor roundtrips and the packaged Tauri/Windows installer remain unverified in this environment.** Historical release reports are not acceptance evidence for this build.
 
-## Why OpenComms
+## Start locally
 
-Traditional orchestrators create agents, own their runtimes, and control how
-they work. OpenComms takes the opposite approach: it **connects sessions the
-user already runs** and lets each keep its own:
-
-- provider and model
-- native context and history
-- tools and permissions
-- host/runtime
-
-OpenComms provides the communication, coordination, persistence, delivery, and
-operator control *between* them. It is not a swarm runtime - agent creation
-exists only as an optional extra for providers that support it; linking
-existing sessions is the first-class flow.
-
-- **Link-only.** OpenComms never creates, replaces, or deletes host sessions.
-- **Autonomous, not runaway.** Messages deliver when a recipient is actually
-  available (idle wake, session resume, or pull). Loop protection (dedup,
-  rate limits, hop caps, cooldowns) keeps autonomy bounded.
-- **Provider-independent core.** A channel is a shared OpenComms space, not a
-  provider session. Any mix of hosts can share one channel.
-- **Honest about limits.** Where a host cannot do something, OpenComms reports
-  UNSUPPORTED instead of faking parity. See
-  [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the evidence-backed matrix.
-- **Operator console + portable CLI.** The loopback-only local GUI
-  (`opencomms gui`) and the CLI consume the same backend: sessions, member
-  rosters, project-integration lifecycle (install / update / repair / verify
-  / uninstall), and diagnostics.
-
-## Project integration & host support
-
-When the GUI opens a repository (or you run `opencomms doctor`), OpenComms
-detects whether each host integration is installed, current, outdated, or
-broken, and offers the matching action - it never silently modifies a
-repository, and uninstall removes only OpenComms-owned entries.
-
-| Host | Setup | Status | How members receive messages |
-|------|-------|--------|------------------------------|
-| **OpenCode** | `opencomms install opencode` (or the GUI button) | **FULL** (reference adapter) | **PUSH** - delivered automatically when the session is idle; full autonomous agent-to-agent loops |
-| **Claude Code** | hooks + MCP: `opencomms install claude-code` | **PUSH** (spawn-resume) | `claude --resume <id> --print "<msg>"` (documented non-interactive resume); join with `spawn_push=true`. Also hook-boundary delivery + `opencomms_pull`. Never mid-turn |
-| **Codex CLI** | `config.toml` MCP: `opencomms install codex` | **PUSH** (exec-compatible sessions) | `codex exec resume <id> "<msg>"` (documented continuation); join with `spawn_push=true`. TUI-created-session resume is UNVERIFIED. Project-scope config requires Codex `/trust`. Otherwise `opencomms_pull` |
-| **Claude Desktop** | `.mcpb` extension bundle | **PULL** (platform limit) | The agent calls `opencomms_pull`. Desktop exposes no session identity and no push path - a platform limitation, not an OpenComms one |
-| **ChatGPT** (web/desktop) | remote MCP (operator-hosted) | **BLOCKED** by platform requirements | Would be PULL via a public HTTPS MCP endpoint; ChatGPT requires operator-hosted OAuth - [docs/CHATGPT.md](docs/CHATGPT.md) |
-
-Machine-level presence (is the Claude/Codex CLI even on PATH?) is reported
-separately from project-level integration state - a project integration can
-exist before the CLI is installed, and vice versa.
-
-## Install (one command)
-
-Linux/Debian/Ubuntu/VPS (x86_64):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/CL-BAF/OpenComms/main/scripts/install.sh | bash
-```
-
-Downloads the latest release from GitHub Releases, verifies its SHA256SUMS
-checksums, test-runs the binary in an isolated staging dir, and installs to
-`~/.local/bin` (atomic replace with rollback — a failed or incomplete artifact
-is never installed). Adds a single idempotent PATH line to `~/.profile`
-(skip with `--no-path-edit`). Running via `sudo` resolves to the invoking
-user's home and says so. Project `.opencomms` state is never touched by
-install or update. For the optional systemd user service, run the installer
-from a checkout or the extracted tarball with `--service --project <dir>`
-(curl|bash defaults to binary-only). Pin a version with `--version vX.Y.Z`.
-
-```bash
-opencomms version && opencomms doctor   # verify
-opencomms gui --project /path --server --no-open   # headless daemon
-```
-
-**Update:** `opencomms update` (or `opencomms update --check` to preview).
-Explicitly user-initiated, never automatic; atomic replace, checksum-verified,
-project state preserved.
-
-Windows: download `OpenComms-Setup-<version>.exe` from
-[GitHub Releases](https://github.com/CL-BAF/OpenComms/releases).
-`opencomms update` on Windows prints the installer pointer (self-replace of a
-running exe is refused by design).
-
-## Desktop GUI (Tauri, native)
-
-**Windows (v1.3.1-gui-native and later):** download the
-`OpenComms Tauri Desktop GUI` NSIS installer from
-[GitHub Releases](https://github.com/CL-BAF/OpenComms/releases) — per-user,
-no admin required. The installer bundles the Node coordinator sidecar beside
-the desktop app; launch from the Start Menu and the native window opens with
-the bundled console UI (no browser, no URL bar). Verify via Settings →
-Diagnostics (healthy) — the coordinator is live. Uninstall removes the app +
-sidecar; project `.opencomms` state is NEVER removed.
-
-**Linux**: deb/AppImage bundle targets are configured (built by the Linux CI
-on tag pushes); install the bundle for your distro.
-
-Two installer artifacts exist, clearly named:
-- **OpenComms Tauri Desktop GUI installer** — the native desktop app
-  (Windows NSIS / Linux deb or AppImage) with the coordinator sidecar inside.
-- **OpenComms CLI installer** (Inno Setup on Windows / install.sh on Linux) —
-  the CLI/headless-only build (no desktop GUI).
-
-## Release verification checklist
-
-**Windows desktop GUI (Tauri NSIS installer)**
-1. Download the `OpenComms Tauri Desktop GUI` NSIS installer from the
-   release.
-2. Run the installer (per-user, no admin). Verify: install dir contains
-   `opencomms-coordinator.exe` (the Node coordinator sidecar) beside the
-   desktop app.
-3. Launch "OpenComms Tauri Desktop GUI" from the Start Menu. Expected: the
-   native window opens with the bundled console UI (no browser, no URL bar).
-4. Verify the coordinator is live: Settings → Diagnostics shows healthy.
-5. Uninstall (Start Menu → Uninstall OpenComms) removes the app + sidecar;
-   project `.opencomms` state is NEVER removed.
-
-**CLI / headless (server Linux)**
-1. One-command install (curl|bash above) — verifies SHA256 checksums +
-   executes the binary BEFORE installing (verify-then-install), atomic
-   replace with rollback.
-2. `opencomms version && opencomms doctor` — doctor includes the Node
-   readiness section (runtime discovery, WSL, node identity, daemon unit).
-3. Headless daemon: `opencomms serve --project /path --server --no-open`
-   (or the systemd user unit via `install.sh --service`).
-4. `opencomms update` (or `--check`) — verify-then-extract with rollback.
-5. Remote-node enrollment: `opencomms daemon enroll --code <CODE> --name
-   <label>` — prints the retention + blast-radius disclosure, claims, polls
-   for approval.
-
-**CLI parity with the GUI**
-`opencomms agent list|create|stop|restart|status`, `opencomms task
-list|assign`, `opencomms members remove`, `opencomms serve` — every GUI
-surface has a CLI verb ([docs/gui-cli-parity.md](docs/gui-cli-parity.md));
-`session create` is the declared honest PARTIAL (no loopback route in M4;
-GUI/API cover it).
-
-**Update safety**
-`opencomms update --check` (read-only) / `opencomms update` (verify-then-
-extract, atomic replace, rollback; Linux-only self-update — Windows uses
-the installer).
-
-## Supported hosts
-
-| Host | Setup | Status | How members receive messages |
-|------|-------|--------|------------------------------|
-| **OpenCode** | `opencomms install opencode` (or the GUI button) | **FULL** (reference adapter) | **PUSH** - delivered automatically when the session is idle; full autonomous agent-to-agent loops |
-| **Claude Code** | hooks + MCP: `opencomms install claude-code` | **PUSH** (spawn-resume) | `claude --resume <id> --print "<msg>"` (documented non-interactive resume); join with `spawn_push=true`. Also hook-boundary delivery + `opencomms_pull`. Never mid-turn |
-| **Codex CLI** | `config.toml` MCP: `opencomms install codex` | **PUSH** (exec-compatible sessions) | `codex exec resume <id> "<msg>"` (documented continuation); join with `spawn_push=true`. TUI-created-session resume is UNVERIFIED. Project-scope config requires Codex `/trust`. Otherwise `opencomms_pull` |
-| **Claude Desktop** | `.mcpb` extension bundle | **PULL** (platform limit) | The agent calls `opencomms_pull`. Desktop exposes no session identity and no push path - a platform limitation, not an OpenComms one |
-| **ChatGPT** (web/desktop) | remote MCP (operator-hosted) | **BLOCKED** by platform requirements | Would be PULL via a public HTTPS MCP endpoint; ChatGPT requires operator-hosted OAuth - [docs/CHATGPT.md](docs/CHATGPT.md) |
-
-Any mix of these hosts can share one channel. Delivery mode is explicit per
-member (`push | spawn_push | pull | poll | managed_thread`), with per-member
-**endpoint capabilities** (`push/pull/resume/queue_while_busy/interrupt`)
-derived from the mode and overridable. Autonomous multi-turn messaging is
-verified on OpenCode (CLI-to-CLI and Desktop,
-[docs/OPENCODE.md](docs/OPENCODE.md)); Claude Code / Codex spawn-push is
-argv-contract-verified and unit-tested but NOT yet live-verified against
-the vendor CLIs (guarded live test pending). Windows note: npm-distributed
-CLIs are `.cmd` shims that Node refuses to spawn without a shell — set
-`OPENCOMMS_CLAUDE_BIN` / `OPENCOMMS_CODEX_BIN` to a native executable or a
-command template (e.g. `OPENCOMMS_CODEX_BIN="node C:\path\to\codex.js"`);
-oversized batches are refused before spawning (30k-char Windows command
-line; never truncated).
-
-## CLI command reference (core)
-
-| CLI command | Purpose |
-|-------------|---------|
-| `opencomms install <host> [--project <dir>]` | Install a host integration into a project (idempotent, preserves unrelated config) |
-| `opencomms uninstall <host> [--project <dir>]` | Remove only OpenComms-owned entries (state.json/pins never touched) |
-| `opencomms doctor [--fix]` | Read-only diagnostics; `--fix` repairs safe, understood problems (never installs absent integrations implicitly) |
-| `opencomms gui [--project <dir>]` | Local operator console (loopback-only) |
-| `opencomms update --check` | Preview an available update (read-only) |
-| `opencomms update` | Download, verify, and atomically install the latest release (Linux; Windows prints the installer pointer) |
-
-Full inventory (agent/task/session/daemon commands): `opencomms help`.
-
-## Session lifecycle: save, resume as new, delete, description
-
-An OpenComms **session** (= channel = conversation) has a lifecycle:
-`active → saved (archived) → deleted`.
-
-- **Save** (NOT delete): stops autonomous activity and archives everything
-  OpenComms received — description, the agent-supplied structured summary,
-  final roster with role prompts, and the full message history — into
-  `.opencomms/archives/<id>.json`; live state is purged.
-- **Resume as new**: `opencomms session resume <name> [--as <new-name>]`
-  creates a NEW active session linked to the archive (`parent_channel_id`);
-  joiners receive the COMPACT archived context (purpose/summary/roster) —
-  **never the full transcript**; agents query it via `opencomms_archive`
-  (mode=summary|messages) when they need depth. Session evolution example:
-  design → implementation → security review → GUI dev.
-- **Delete**: destructive (live state AND archive); active sessions require
-  a member, saved sessions are operator-managed; `--confirm` required.
-- **Description**: set ONCE by the first responding agent — pass
-  `session_description` (≤140 chars) with any `opencomms_send`; later
-  values are ignored; failures never break the session.
-
-Operator CLI (provider-independent backend surface, GUI-ready):
-
-```bash
-opencomms session list|get|save|delete|resume
-opencomms join-command <session> [--host opencode|claude-code|codex]
-opencomms install-member --host claude-code --name architect   # human member ids
-```
-
-## Local GUI console
-
-`opencomms gui` starts the **embedded HTML** console, opens the default browser,
-and binds the backend to loopback only (no network exposure, no auth needed at
-loopback trust — the same boundary as state.json). If no project is supplied,
-the console offers the last valid/recent project or a native folder picker:
-
-> **Windows note:** the project picker's **Browse** button is still being
-> worked on. For now, paste or type the full project folder path and choose
-> **Open project**.
-
-```bash
-opencomms gui                         # opens the console
-opencomms gui --project C:\work\repo   # select a project explicitly
-opencomms gui --port 5000              # use a different loopback port
-opencomms gui --server                 # start without opening a browser
-```
-
-Features: session cards (active + archived) with agent counts and
-descriptions, click-through detail with the **real copyable join command**
-per host, agent list with honest states (Working = mail queued / Idle /
-Offline = stale), per-agent **Remove** (severs the OpenComms link only —
-never terminates provider processes), **Save Session** (with a structured
-summary prompt), **Resume as new**, and **Delete** (confirm). Live updates
-stream over SSE.
-
-## Development build (from source)
-
-```bash
-npm run build:exe        # -> dist-opencomms/opencomms(.exe)
-npm run build:release    # Windows: exe + OpenComms-Setup-<version>.exe
-```
-
-Produces a single-file executable of the full CLI (Node Single Executable
-App) - `version`, `session`, `gui` and every other command work without a
-Node.js installation. Rebuild per platform on the machine you target.
-
-**Windows release installer:** `npm run build:release` produces a per-user
-Inno Setup installer in `dist-release/`. It installs to
-`%LOCALAPPDATA%\Programs\OpenComms`, creates a Start Menu shortcut and a
-desktop shortcut by default, includes the OpenComms icon, and offers an
-opt-in user-PATH entry. Uninstall removes only the installed application files
-and its PATH entry when the installer added it; project `.opencomms` data is
-never removed. The executable also retains the legacy `install-wizard`
-fallback for portable/manual builds. `OPENCOMMS_NO_WIZARD=1` is an escape hatch
-for that fallback.
-
-The release build is pinned in Windows CI to Node 22.14.0 and Inno Setup 6.4.x.
-For a local build, install those tools first; the generated executable and
-installer are platform-specific.
-
-For macOS/Linux: prefer the one-command install above. To build from source on
-the target OS (`npm run build:exe` — note: SEA builds require exactly Node
-22.14.0, enforced by the build preflight), `sh scripts/install.sh --exe
-dist-opencomms/opencomms` copies the binary into `~/.local/bin` and wires the
-PATH. Linux CI builds are pinned to the same Node 22.14.0
-(`engines.buildNode`); the build fails closed on any other Node version (see
-`scripts/build-exe.mjs` preflight).
-
-## Quick start (OpenCode, two tabs)
-
-1. **Install the project integration** (any one of):
-
-   ```bash
-   opencomms install opencode C:\path\to\your\project   # from the installed CLI
-   # or, from a dev checkout:
-   npm run build && opencomms install opencode C:\path\to\your\project
-   # or click Install in the GUI's Settings > Integrations view
-   ```
-
-   The installer copies the plugin into the project's `.opencode/plugins/`,
-   registers it in `opencode.json` (idempotent; parse-before-merge; existing
-   config preserved verbatim), and stamps a version marker so later updates
-   can be detected. Verify with `opencomms doctor`.
-
-2. **Create a channel** in the first OpenCode tab:
-
-   ```text
-   /OpenComms Create Channel=my-feature As=Builder [Implement requests, verify your work, and send completed work to Reviewer with a summary, changed files, verification results, and uncertainties.]
-   ```
-
-3. **Join from the second tab** (same project, another root session):
-
-   ```text
-   /OpenComms Join Channel=my-feature As=Reviewer [Independently inspect Builder's work. Send prioritized findings with locations, impact, expected fixes, and verification steps. Return PASS only when no material defects remain.]
-   ```
-
-Both tabs remain ordinary OpenCode sessions. When Builder sends a review
-request, Reviewer's session receives and processes it automatically when idle -
-no manual wake-up - and Reviewer's reply reaches Builder the same way.
-
-OpenComms rejects: joining the same session twice, one session holding two
-roles, replacing a member without confirmation, linking child sessions (root
-sessions only), and linking sessions from incompatible projects or worktrees.
-
-## Multi-agent channels
-
-Channels are not limited to two members. Up to `max_members` (default 8) agents
-with **any open-vocabulary role labels** share one channel and one history:
-Coordinator / Backend / Frontend / Security / Test / Reviewer, or any shape you
-need.
-
-- **Targeting:** `opencomms_send` with `to=<session_id|role>` reaches exactly
-  one member; `broadcast=true` fans out to every other member. On a 3+ member
-  channel an omitted target is an **error**, never a guess.
-- **Cross-host members:** Claude Code / Claude Desktop / Codex agents join the
-  same channels through the OpenComms MCP tools with per-member pinned
-  identities (`.opencomms/pins/<member_id>.json`) - see
-  [docs/CLAUDE_CODE.md](docs/CLAUDE_CODE.md) and [docs/CODEX.md](docs/CODEX.md).
-- **CLI-to-CLI autonomy:** every OpenCode TUI/`serve` process runs its own
-  server, so delivery is **owner-side**: each instance prompts only the sessions
-  it hosts, and a file-watch wake routes mail queued by another process to the
-  recipient's own instance. Topology matrix and lab evidence:
-  [docs/OPENCODE.md](docs/OPENCODE.md).
-
-## Commands
-
-Slash command (user-facing, deterministic parsing - the model never interprets
-channel names or roles loosely):
-
-```text
-/OpenComms Create    Channel=<name> As=<role> [role instructions]
-/OpenComms Join      Channel=<name> As=<role> [role instructions]
-/OpenComms Status    [Channel=<name>]
-/OpenComms Inbox     Channel=<name>
-/OpenComms History   Channel=<name>
-/OpenComms Pause | Resume | Disconnect    Channel=<name>
-/OpenComms UpdateRole Channel=<name> [new role instructions]
-/OpenComms Kick      Channel=<name> Target=<member_id|role>
-/OpenComms Timer     Channel=<name> Action=<start|stop|switch|reset|status|set_limit|clear_limit> [LimitMs=<ms>] [LimitRole=<role>]
-```
-
-`LimitRole=<role>` is an alias of the member-targeting parameter
-`to=<role|session-id>`; timers are keyed per member.
-
-Agents call the same operations as deterministic tools:
-`opencomms_create`, `opencomms_join`, `opencomms_send`, `opencomms_status`,
-`opencomms_inbox`, `opencomms_history`, `opencomms_update_role`,
-`opencomms_pause`, `opencomms_resume`, `opencomms_disconnect`,
-`opencomms_timer` (+ `opencomms_kick` on privileged hosts). Full schemas:
-[docs/TOOLS_AND_COMMANDS.md](docs/TOOLS_AND_COMMANDS.md).
-
-Shared CLI for setup on any host:
-`opencomms install | install-member | uninstall | doctor | status | channels | members | version`.
-
-Role prompts (the bracketed text) are injected as persistent system instructions
-before every model dispatch - they are not pasted into visible conversation
-history. Role prompts guide behavior; they are **not a security boundary**.
-
-## Delivery, safety, and loop protection
-
-**Delivery model.** A message crosses sessions only when an agent explicitly
-calls `opencomms_send` - OpenComms never auto-forwards assistant responses.
-Delivery is two-phase: a message is marked delivered only after the host session
-actually accepted it, a startup sweep recovers anything stranded by a crash, and
-failed deliveries requeue in original FIFO order. After 5 delivery attempts an
-envelope dead-letters as `failed` (visible in status) instead of retrying
-forever, so a broken endpoint cannot create an amplification loop.
-
-**Busy recipients.** OpenComms never overlaps prompts in one session. Messages
-to a busy session queue as pending and deliver when it becomes idle - FIFO
-order, at most once, visible in `opencomms_status`.
-
-**Conversation budgets.** Each session can optionally cap autonomous operation
-with `budgets.max_runtime_ms` (conversation age) and
-`budgets.max_delivered_messages` (lifetime handover count, retries included).
-Both are off by default and configurable at creation (`rate_limit` and
-`max_hops` too); exhausted budgets refuse sends with an actionable message.
-
-**Loop protection (defaults, all configurable per channel):**
-
-| Protection | Default |
-|------------|---------|
-| Duplicate content rejection | 5-minute window, per sender |
-| Rate limit | 20 messages/minute/channel |
-| Delivery cooldown | 1s per recipient |
-| Reply-chain hop cap | 4 hops |
-| Stale-event rejection | 5 minutes |
-
-**Untrusted peers.** Peer content is framed inside
-`<<<UNTRUSTED_PEER_MESSAGE>>>` markers with provenance and treated as data, not
-instructions. Peer messages cannot modify channel configuration, permissions,
-role ownership, or safety rules. Threat model:
-[docs/SECURITY.md](docs/SECURITY.md).
-
-**Pause / Resume / Disconnect / Kick:**
-
-```text
-/OpenComms Pause Channel=my-feature       # nothing is delivered
-/OpenComms Resume Channel=my-feature      # pending messages deliver on next idle
-/OpenComms Disconnect Channel=my-feature  # remove this session; channel survives for others
-/OpenComms Kick Channel=my-feature Target=Reviewer   # privileged removal, session itself is untouched
-```
-
-No OpenCode sessions are ever created or deleted by these operations.
-
-## Persistence and privacy
-
-State lives at `<project>/.opencomms/state.json` (schema v2), written
-atomically (temp file + rename) so a crash mid-write never corrupts channels or
-queues. Corrupt state recovers automatically: OpenComms starts fresh and records
-the error in `opencomms_status` instead of bricking. The `.opencomms/` directory
-is created on first use and should be gitignored.
-
-After a restart, OpenComms restores channel metadata, validates linked sessions,
-marks vanished sessions stale (visible in status), and lets you rejoin or repair
-- it never silently creates a replacement session.
-
-OpenComms does not expose provider credentials, API keys, environment secrets,
-unrelated session content, other channels' messages, or private host
-configuration.
-
-**Upgrading from 1.x:** the first run of the new version migrates
-`.opencode-comms/state.json` (v1) to `.opencomms/state.json` (v2) automatically
-- backup + `MIGRATED_FROM_V1` marker, channels/queues/timers preserved. Do not
-run the pre-1.x plugin afterwards. Details: [docs/MIGRATION.md](docs/MIGRATION.md).
-
-**Permissions:** OpenComms does not pretend that role prompts enforce read-only
-behavior. If a member must be permission-restricted, configure that on the
-session before linking it.
-
-## Troubleshooting
-
-| Symptom | Cause / Fix |
-|---------|-------------|
-| `Channel "X" already exists` | `/OpenComms Join` it, or disconnect then recreate. |
-| `This session is already registered` | One session cannot hold two roles on one channel. Use a different root session. |
-| `Session ... is a child session` | Only root sessions can be linked. Open a root session. |
-| `belongs to a different project/worktree` | Populated sessions must match the project/worktree of every joiner. Operator-created (GUI/CLI) empty sessions instead **adopt the first joiner's** real project identity; sentinel-id members (MCP default) are accepted only from the same worktree. |
-| `peer session is marked stale` | The peer session no longer exists after a restart. Rejoin or repair. |
-| `Rate limit exceeded` | Default 20/min/channel. Wait, or pause to reset. |
-| `Duplicate message content detected` | Same content twice within 5 minutes. Vary the content or wait. |
-| `maximum hop count` | A reply chain exceeded 4 hops. Start a new message. |
-| Spawn-push fails with spawn errors | The CLI must be resolvable and spawnable. Set `OPENCOMMS_CLAUDE_BIN` / `OPENCOMMS_CODEX_BIN` when the binary is not on PATH; note that Windows npm `.cmd` shims cannot be spawned directly (Node refuses without a shell) - point the override at a native executable OR a command template (e.g. `OPENCOMMS_CODEX_BIN="node C:\path\to\codex.js"`). Batches over the argv budget are refused before spawning. Adapter limits: [docs/CODEX.md](docs/CODEX.md). |
-| Plugin not loading | Ensure `dist/plugin.js` is in `.opencode/plugins/` or referenced in `opencode.json`; run `npm run build`. |
-| `state.json` corrupt | Recovers automatically (fresh state + recorded error). Delete the file to reset. |
-
-## Requirements
-
-- Node.js >= 20 (dependencies target Node 22 types)
-- OpenCode >= 1.18.0 for the OpenCode adapter (tested against
-  `@opencode-ai/plugin`/`sdk` 1.18.23; runtime behavior verified against
-  OpenCode 1.18.25, including the two-server CLI-to-CLI topology lab)
-- Claude Code CLI / Codex CLI for those adapters (capability detection reports
-  honestly when absent)
-
-## Development
-
-```bash
-npm install
-npm run build          # tsc -> dist/ + esbuild bundle
-npm run typecheck      # strict TS, noUncheckedIndexedAccess
-npm run test           # unit tests
-npm run test:contract  # adapter-contract / host-neutrality tests
-npm run audit          # dependency audit (0 known vulns at release)
-npm run format:check   # prettier gate
-```
-
-The live integration test (`test/live/live.test.ts`) is **guarded**: it skips
-when no OpenCode server is reachable, so CI never fails on it. To run it for
-real against a running OpenCode server:
+The produced portable Windows coordinator runs without a Node installation:
 
 ```powershell
-$env:OPENCODE_SERVER_URL = "http://127.0.0.1:4096"
-$env:OPENCODE_SERVER_PASSWORD = "<your password>"
-$env:OPENCOMMS_LIVE_PROJECT = "C:\path\to\your\project"
-# optional: enables the autonomous no-manual-wake scenario (needs a tool-capable model)
-$env:OPENCODE_LIVE_MODEL = "openai/qwen3:0.6b"
-npm run test:live
+.\dist-release\opencomms.exe version
+.\dist-release\opencomms.exe gui --project "C:\path\to\project" --port 4919 --server
 ```
 
-Skipped live tests are never counted as evidence of host support.
+Open `http://127.0.0.1:4919`. Omit `--server` to open the default browser. Integration hook/MCP processes still require the host's configured Node runtime. Keep project data outside the executable installation directory.
 
-OpenComms is developed and tested on **Windows first** (Windows-safe atomic
-writes, PowerShell examples); macOS and Linux are supported by the same code
-paths.
+From source:
 
-## Project layout
+```powershell
+npm ci
+npm run build
+node dist/cli/main.js gui --project "C:\path\to\project" --port 4919 --server
+```
+
+Project selection validates the directory before switching. Paste a path or use Browse where the OS picker is available. A busy mutation or owned runtime can prevent switching; finish or stop that work first. The browser API binds to loopback and validates Host/Origin. Owner-only trust actions still require the explicit owner token.
+
+## Integration support
+
+Installation/configuration checks, runtime contact and authenticated model roundtrips are separate onboarding stages. Unknown information stays unknown. This build's matrix is in [CAPABILITIES.md](docs/CAPABILITIES.md), with official references and opt-in live commands in [INTEGRATION_VERIFICATION.md](docs/INTEGRATION_VERIFICATION.md).
+
+| Surface | Implemented path | Verification in this environment |
+| --- | --- | --- |
+| OpenCode linked | Existing root-session identity; owner-side queued idle delivery | Engine/controller regression tests; authenticated linked live tests skipped |
+| OpenCode managed | Explicit model-pinned creation, exact status/resume, asynchronous prompt acceptance, operator permissions | Real loopback HTTP fixtures; live model gate skipped |
+| Claude Code | Standalone hooks + pinned MCP pull; opt-in argv resume delivery | Copied hooks/MCP execute; CLI authentication/resume unverified |
+| Codex CLI | Project MCP registration and pull; opt-in exec-compatible resume | Copied MCP executes; actual CLI/model roundtrip and interactive TUI resume unverified |
+| Gemini CLI | Project MCP and lifecycle hooks with explicit pin/trust | Copied hooks/MCP execute; vendor trust/authentication/roundtrip unverified |
+| Configured ACP | Stdio initialize/new/prompt/cancel; pending operator permissions; load only if advertised | Real deterministic subprocess fixtures; actual vendor/model interoperability unverified |
+| Claude Desktop | Standalone MCP extension layout and explicit pull | Copied extension server executes; Desktop packing/installation/tool use unverified |
+| Goose, Cursor, Cline, Roo, Continue, VS Code/Copilot | Manual read-only MCP configuration profiles | Every exported server command tested outside checkout; editor authentication/tool use unverified |
+| Windsurf legacy Cascade | Manual profile for the documented legacy configuration | Shared MCP command tested; current default Devin Local excluded |
+| Codex App Server | No runtime client shipped | Unsupported |
+| ChatGPT connector | Configuration scaffold requiring an operator-hosted authenticated HTTPS MCP service | Deployment/OAuth/actual connector use unverified |
+
+```powershell
+.\dist-release\opencomms.exe install opencode --project "C:\path\to\project"
+.\dist-release\opencomms.exe doctor
+.\dist-release\opencomms.exe install gemini-cli --project "C:\path\to\project"
+.\dist-release\opencomms.exe mcp-profile cursor --id reviewer --project "C:\path\to\project"
+```
+
+Install/update/repair preserve unrelated host configuration; uninstall removes OpenComms-owned entries and retains project state/pins. Review host trust and approvals explicitly. Profiles print configuration for you to merge; they do not write editor settings. See [MCP_PROFILES.md](docs/MCP_PROFILES.md).
+
+On Windows, spawned resume/ACP commands use argv arrays. Supply a native executable or a documented `node <entrypoint>` template; `.cmd`/`.bat` shims are refused for shell-free spawning. Oversized batches fail before drain. No host identity is silently replaced to demonstrate success.
+
+## Linked quick start
+
+Install the OpenCode integration in a disposable project. In two existing root OpenCode sessions from that exact project/worktree:
+
+```text
+/OpenComms Create Channel=my-feature As=Builder [Implement the request and send evidence to Reviewer.]
+/OpenComms Join Channel=my-feature As=Reviewer [Inspect behavior and evidence; return specific findings.]
+```
+
+Other hosts join through their pinned MCP tools. A channel supports up to its configured member limit (default eight) with unique, case-insensitive roles. With three or more members, send to an explicit role/session or choose broadcast; omitted targeting fails. Delivery acceptance or a reply saying “done” never completes a task.
+
+Session Save archives coordinator history and summary, then removes live channel state. Resume as new creates a new OpenComms channel referencing the archive and supplies compact context to joiners. Delete is confirm-gated. These operations do not delete linked host conversations or terminate their processes.
+
+## Supervising work
+
+The overview shows host, mode, model where available, current task, actual status and bounded recovery details. Queued mail is shown as queued; unknown usage is not estimated. Tasks have criteria, owner, dependencies, advisory file ownership, messages/artifacts, blockers, evidence and independent review.
+
+Execution follows `ready → assigned → running → blocked/review → verified_complete`, with failed/cancelled outcomes. Backend revision/owner/dependency gates apply to GUI, CLI and MCP. Only the local operator can accept evidence-backed completion after independent review; the reviewer must assess the evidence's truth and relevance. OpenComms does not execute arbitrary evidence references.
+
+Saved team templates retain roles, prompts, host/runtime, model requirements and budgets. Applying one requires an explicit entry and choice to link or launch. Project context records proposals, accepted decisions, verified findings, open questions and rejected approaches; compact handoffs reference deeper records.
+
+Emergency stop durably pauses coordination, including after restart. Managed interruption is an explicit supported operation, including the lead. Linked host processes keep running. Resume unpauses only channels paused by that stop and never automatically restarts agents.
+
+See [TASK_EXECUTION.md](docs/TASK_EXECUTION.md) for migration, assignment, transitions, manual reassignment and the bounded opt-in coordination evaluation. Automatic dependency scheduling, model fallback and worktree merging are not implemented. Optional managed Git worktrees require a real repository root and retain source HEAD separately; uncommitted edits are not copied. Remote trust/enrollment records do not imply a working remote agent execution transport.
+
+## Build and verify
+
+```powershell
+npm run typecheck
+npm run format:check
+npm run test:unit
+npm run test:contract
+npm run test:live       # guarded linked-host test; skips are not passes
+npm run test:vendor     # explicit opt-in managed vendor/model tests
+```
+
+Unit builds regenerate source bundles before testing installed adapters. A failed TypeScript compile does not emit over a working bundle.
+
+SEA builds require **Node 22.14.0** exactly. In this workspace the verified pinned executable is available at `.build-tools/node-v22.14.0.exe`:
+
+```powershell
+$env:OPENCOMMS_NPM_CLI='C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js'
+& '.\.build-tools\node-v22.14.0.exe' scripts/build-exe.mjs --out dist-release
+node scripts/test-standalone-artifacts.mjs dist-release/opencomms.exe
+npm pack --pack-destination dist-release
+```
+
+The SEA embeds standalone MCP, Claude/Gemini hooks, OpenCode plugin and Desktop manifest assets. The npm package ships these assets in `dist`. Neither installation needs to rebuild source. The generated executable is an unsigned local build, not a published release.
+
+`npm run build:installer` needs Inno Setup 6.4.x. `npm run test:windows-release` needs its produced installer. Tauri needs Rust, Visual Studio C++ build tools and WebView2 on Windows; see [desktop/README.md](desktop/README.md). Static assets and the packaged coordinator bridge have been tested separately; they do not prove Rust compilation, the WebView or installer works. No current installer was produced here.
+
+Linux install/update scripts remain available for existing published releases. This upgrade did not validate a Linux package or publish any release. `opencomms update --check` previews the configured release target; Windows update directs you to its installer. Review the target/version before updating. The GUI updater is disabled, and native signing/updater configuration remains unconfigured.
+
+## Source map and documentation
 
 | Path | Role |
-|------|------|
-| `src/core/` | Host-neutral core: types, atomic store, deterministic engine (routing, queues, two-phase delivery, lifecycle, archives) |
-| `src/plugin.ts` | OpenCode adapter: tools, hooks, slash command |
-| `src/hosts/` | Delivery controllers + capability profiles (per-host, never in core) |
-| `src/mcp/` | Shared MCP stdio server + identity-pinned OpenComms tools |
-| `src/adapters/` | Claude Code / Claude Desktop / Codex / ChatGPT installers + hooks |
-| `src/gui/` | Loopback-only local console (HTTP server + embedded dark frontend) |
-| `src/cli/` | `opencomms` CLI (install, sessions, join-command, gui) |
-| `test/unit/` | Unit tests (engine, store, adapters, CLI, MCP, spawn delivery, GUI, session lifecycle) |
-| `test/contract/` | Host-neutrality + capability-consistency contracts |
-| `test/live/` | Guarded live integration test |
-| `docs/` | Architecture, API reference, per-host guides, security model |
+| --- | --- |
+| `src/core/` | Atomic channel store, deterministic engine, queues, archives |
+| `src/plugin.ts`, `src/hosts/` | Linked host tools and delivery controllers |
+| `src/orchestrator/` | Managed runtimes, task/context/template store, API, bounded native bridge |
+| `src/mcp/`, `src/adapters/`, `src/integrations/` | Pinned tools, hooks, installers, profiles and detection |
+| `src/gui/` | Shared action contracts, loopback backend and offline UI |
+| `src/cli/` | CLI and standalone resource resolution |
+| `desktop/` | Tauri shell, strict CSP, allowlisted coordinator IPC |
+| `test/`, `scripts/` | Unit/contract/live tests, browser and artifact verification |
 
-## Documentation
-
-| Document | Contents |
-|----------|----------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Data flow, lifecycle, invariants, daemon/SQLite decision |
-| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | Full function signatures (`file:line`) |
-| [docs/TOOLS_AND_COMMANDS.md](docs/TOOLS_AND_COMMANDS.md) | Tool schemas + slash command spec |
-| [docs/CAPABILITIES.md](docs/CAPABILITIES.md) | Evidence-backed per-host capability matrix |
-| [docs/ADAPTERS.md](docs/ADAPTERS.md) | Adapter contract + pinned-identity model |
-| [docs/PROTOCOL.md](docs/PROTOCOL.md) | Delivery state machine + identity rules |
-| [docs/SECURITY.md](docs/SECURITY.md) | Threat model + injection defenses |
-| [docs/MIGRATION.md](docs/MIGRATION.md) | v1 -> v2 state migration |
-| [docs/OPENCODE.md](docs/OPENCODE.md) | OpenCode topology + autonomy evidence |
-| [docs/CLAUDE_CODE.md](docs/CLAUDE_CODE.md) | Claude Code adapter guide (hooks, MCP, multi-member pins) |
-| [docs/CLAUDE_DESKTOP.md](docs/CLAUDE_DESKTOP.md) | Claude Desktop (.mcpb) guide |
-| [docs/CODEX.md](docs/CODEX.md) | Codex CLI adapter guide |
-| [docs/CHATGPT.md](docs/CHATGPT.md) | ChatGPT requirements + blocked status |
-
-`AGENTS.md` is a token-efficient entry point for AI coding assistants working in
-this repository.
-
-## License
-
-MIT
+Start with [AGENTS.md](AGENTS.md), [ARCHITECTURE.md](docs/ARCHITECTURE.md), [SECURITY.md](docs/SECURITY.md), [PROTOCOL.md](docs/PROTOCOL.md) and [TOOLS_AND_COMMANDS.md](docs/TOOLS_AND_COMMANDS.md). Host guides: [OpenCode](docs/OPENCODE.md), [Claude Code](docs/CLAUDE_CODE.md), [Codex](docs/CODEX.md), [Claude Desktop](docs/CLAUDE_DESKTOP.md), [ChatGPT](docs/CHATGPT.md). `opencomms help` lists current CLI commands.

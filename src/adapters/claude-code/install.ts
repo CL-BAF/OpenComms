@@ -12,20 +12,12 @@
  *   5. Reports capabilities honestly (hook-boundary delivery, no mid-turn push).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { join, resolve, dirname } from "node:path"
-import { fileURLToPath } from "node:url"
 import { randomBytes } from "node:crypto"
 import { saveMemberPin, listMemberPins, isValidMemberId } from "../../mcp/identity.js"
-
-const __dirname2 = (() => {
-  try {
-    return dirname(fileURLToPath(import.meta.url))
-  } catch {
-    return process.cwd()
-  }
-})()
+import { readAdapterResource } from "../../cli/adapter-resources.js"
 
 export interface ClaudeCodeInstallReport {
   ok: boolean
@@ -53,11 +45,21 @@ function writeJsonStable(path: string, value: unknown): void {
 
 export function detectClaudeCode(): { detected: boolean; version: string | null } {
   try {
-    const out = execFileSync("claude", ["--version"], {
-      encoding: "utf8",
-      timeout: 15_000,
-      shell: process.platform === "win32",
-    })
+    // This detection-only command has no user input. Fixed cmd invocation
+    // supports npm launchers without shell:true concatenating an argv array.
+    const out =
+      process.platform === "win32"
+        ? execFileSync("cmd.exe", ["/d", "/s", "/c", "claude --version"], {
+            encoding: "utf8",
+            timeout: 15_000,
+            windowsHide: true,
+            stdio: ["ignore", "pipe", "pipe"],
+          })
+        : execFileSync("claude", ["--version"], {
+            encoding: "utf8",
+            timeout: 15_000,
+            stdio: ["ignore", "pipe", "pipe"],
+          })
     return { detected: true, version: out.trim() }
   } catch {
     return { detected: false, version: null }
@@ -124,34 +126,26 @@ export function installClaudeCode(projectDir: string, opts: { bundleDir?: string
     return report
   }
 
-  const opencommsDir = join(target, ".opencomms")
-  mkdirSync(opencommsDir, { recursive: true })
-
-  // 1. Bundle dir: resolve the package root by package.json (works from
-  //    src/, dist/, and dist-test/) and use its dist/; caller can override.
-  const bundleDir =
-    opts.bundleDir ??
-    (() => {
-      let dir = __dirname2
-      for (;;) {
-        if (existsSync(join(dir, "package.json"))) return join(dir, "dist")
-        const parent = dirname(dir)
-        if (parent === dir) return join(__dirname2, "..", "..", "..", "dist")
-        dir = parent
-      }
-    })()
-  const hookRunner = join(bundleDir, "adapters", "claude-code", "hook-cli.js")
-  const mcpServer = join(bundleDir, "mcp", "main.js")
-  if (!existsSync(hookRunner) || !existsSync(mcpServer)) {
-    report.ok = false
-    report.warnings.push(
-      "Built adapter files missing (dist/adapters/claude-code/hook-cli.js, dist/mcp/main.js). Run `npm run build` first.",
+  let hookRunner: string
+  let mcpServer: string
+  try {
+    hookRunner = readAdapterResource(
+      "claude-hook",
+      opts.bundleDir ? join(opts.bundleDir, "adapters", "claude-code", "hook-cli.js") : undefined,
     )
+    mcpServer = readAdapterResource(
+      "opencomms-mcp",
+      opts.bundleDir ? join(opts.bundleDir, "mcp", "main.js") : undefined,
+    )
+  } catch (error) {
+    report.ok = false
+    report.warnings.push((error as Error).message)
     return report
   }
-
-  copyFileSync(hookRunner, join(opencommsDir, "claude-code-hooks.mjs"))
-  copyFileSync(mcpServer, join(opencommsDir, "opencomms-mcp.mjs"))
+  const opencommsDir = join(target, ".opencomms")
+  mkdirSync(opencommsDir, { recursive: true })
+  writeFileSync(join(opencommsDir, "claude-code-hooks.mjs"), hookRunner, "utf8")
+  writeFileSync(join(opencommsDir, "opencomms-mcp.mjs"), mcpServer, "utf8")
   report.filesInstalled.push(".opencomms/claude-code-hooks.mjs", ".opencomms/opencomms-mcp.mjs")
 
   // Hooks into project settings (.claude/settings.json), merged.

@@ -1,0 +1,20 @@
+[opencomms-exe] Node pin OK: v22.14.0 (engines.buildNode 22.14.0)
+[opencomms-exe] output dir: <workspace>\dist-release
++ <workspace>\.build-tools\node-v22.14.0.exe <configured npm CLI path omitted> run build
+
+> opencomms@1.4.0 build
+> tsc -p tsconfig.build.json && npm run build:bundle
+
+
+> opencomms@1.4.0 build:bundle
+> node scripts/build-bundles.mjs
+
++ <workspace>\.build-tools\node-v22.14.0.exe <workspace>\scripts\bundle.mjs --entry <workspace>\dist\cli\main.js --format cjs --outfile <workspace>\dist\cli\cli-bundle.cjs
++ <workspace>\.build-tools\node-v22.14.0.exe --experimental-sea-config sea-config.json
+Wrote single executable preparation blob to sea-prep.blob
++ <workspace>\.build-tools\node-v22.14.0.exe <workspace>\node_modules\postject\dist\cli.js <workspace>\dist-release\opencomms.exe NODE_SEA_BLOB <workspace>\sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+[36mStart injection of NODE_SEA_BLOB in <workspace>\dist-release\opencomms.exe...[0m
+warning: The signature seems corrupted!
+[32m💉 Injection done![0m
+[opencomms-exe] smoke: opencomms 1.4.0 (state schema v2)
+[opencomms-exe] done: <workspace>\dist-release\opencomms.exe

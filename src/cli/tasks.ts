@@ -8,6 +8,9 @@
  * 2 validation · 3 conflict · 4 trust_denied · 5 unknown · 6 internal.
  */
 
+import { readFileSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+
 export interface TaskCliResult {
   code: number
   output: string
@@ -132,7 +135,7 @@ export async function taskList(argv: string[]): Promise<TaskCliResult> {
   if (tasks.length === 0) return ok("No tasks.")
   const lines = tasks.map(
     (t) =>
-      `${String(t["id"])} ${String(t["title"])} | agent=${String(t["agent_id"])} | ${String(t["status"])}${t["channel"] ? ` | channel=${String(t["channel"])}` : ""}`,
+      `${String(t["task_id"])} ${String(t["title"])} | owner=${String(t["owner"] ?? t["agent_id"])} | execution=${String(t["execution_state"] ?? "unknown")} | delivery=${String(t["delivery_state"] ?? t["status"])}${t["blocker"] ? ` | blocker=${String(t["blocker"])}` : ""}${t["channel"] ? ` | channel=${String(t["channel"])}` : ""}`,
   )
   return ok(lines.join("\n"))
 }
@@ -155,14 +158,143 @@ export async function taskAssign(argv: string[]): Promise<TaskCliResult> {
     )
   }
   const asJson = argv.includes("--json")
+  const requestId = flagValue(argv, "--request-id") ?? randomUUID()
+  const repeated = (flag: string): string[] =>
+    argv.flatMap((token, i) => (token === flag && argv[i + 1] ? [argv[i + 1]!] : []))
   const { status, payload } = await fetchJson("/api/orchestrator/tasks/assign", {
     method: "POST",
-    body: { agent_id: agentId, task: { title, body, channel } },
+    body: {
+      agent_id: agentId,
+      request_id: requestId,
+      task: {
+        title,
+        body,
+        channel,
+        scope: flagValue(argv, "--scope"),
+        acceptance_criteria: repeated("--criterion"),
+        dependencies: repeated("--dependency"),
+        ownership: repeated("--owns"),
+      },
+    },
   })
   if (asJson)
-    return { code: status === 200 && payload.ok ? 0 : exitCodeForStatus(status), output: JSON.stringify(payload) }
-  if (!payload.ok) return fail(exitCodeForStatus(status), payload.message ?? `task assign failed (HTTP ${status})`)
-  return ok(String(payload.message ?? `Task assigned to ${agentId}.`))
+    return {
+      code: status === 200 && payload.ok ? 0 : exitCodeForStatus(status),
+      output: JSON.stringify({ ...payload, request_id: requestId }),
+    }
+  if (!payload.ok)
+    return fail(
+      exitCodeForStatus(status),
+      `${payload.message ?? `task assign failed (HTTP ${status})`}\nrequest_id=${requestId}`,
+    )
+  return ok(`${payload.message ?? `Task assigned to ${agentId}.`}\nrequest_id=${requestId}`)
+}
+
+/** Inspect durable execution and relevant messages using the shared API. */
+export async function taskShow(argv: string[]): Promise<TaskCliResult> {
+  const id = flagValue(argv, "--id") ?? argv.find((t) => t.startsWith("tsk_"))
+  if (!id) return fail(2, "Usage: opencomms task show <task_id> [--json]")
+  const { status, payload } = await fetchJson(`/api/orchestrator/tasks/${encodeURIComponent(id)}`)
+  return {
+    code: payload.ok && status === 200 ? 0 : exitCodeForStatus(status),
+    output: JSON.stringify(payload, null, argv.includes("--json") ? undefined : 2),
+  }
+}
+
+/** Human operator transition; evidence/review JSON files avoid shell quoting. */
+export async function taskTransition(argv: string[]): Promise<TaskCliResult> {
+  const id = flagValue(argv, "--id") ?? argv.find((t) => t.startsWith("tsk_"))
+  const state = flagValue(argv, "--state")
+  const revision = Number(flagValue(argv, "--revision"))
+  if (!id || !state || !Number.isInteger(revision) || revision < 1)
+    return fail(
+      2,
+      "Usage: opencomms task transition <task_id> --state <state> --revision <n> [--blocker <reason>] [--evidence-file <json>] [--review-file <json>] [--json]",
+    )
+  const body: Record<string, unknown> = {
+    state,
+    expected_revision: revision,
+    actor_id: "operator",
+    blocker: flagValue(argv, "--blocker"),
+  }
+  try {
+    for (const [flag, key] of [
+      ["--evidence-file", "evidence"],
+      ["--review-file", "review"],
+      ["--criteria-file", "acceptance_criteria"],
+      ["--artifacts-file", "artifacts"],
+    ]) {
+      const file = flagValue(argv, flag!)
+      if (file) body[key!] = JSON.parse(readFileSync(file, "utf8"))
+    }
+  } catch (error) {
+    return fail(2, `Cannot read transition JSON: ${(error as Error).message}`)
+  }
+  const { status, payload } = await fetchJson(`/api/orchestrator/tasks/${encodeURIComponent(id)}/transition`, {
+    method: "POST",
+    body,
+  })
+  return {
+    code: payload.ok && status === 200 ? 0 : exitCodeForStatus(status),
+    output: argv.includes("--json")
+      ? JSON.stringify(payload)
+      : (payload.message ?? `Transition failed (HTTP ${status})`),
+  }
+}
+
+export async function taskReassign(argv: string[]): Promise<TaskCliResult> {
+  const id = flagValue(argv, "--id") ?? argv.find((t) => t.startsWith("tsk_"))
+  const agent = flagValue(argv, "--agent"),
+    reason = flagValue(argv, "--reason")
+  const revision = Number(flagValue(argv, "--revision"))
+  if (!id || !agent || !reason || !Number.isInteger(revision) || revision < 1)
+    return fail(
+      2,
+      "Usage: opencomms task reassign <task_id> --agent <id> --reason <context> --revision <n> [--channel <existing>] [--handoff-confirmed] [--allow-ownership-conflict] [--request-id <id>] [--json]",
+    )
+  const requestId = flagValue(argv, "--request-id") ?? randomUUID()
+  const { status, payload } = await fetchJson(`/api/orchestrator/tasks/${encodeURIComponent(id)}/reassign`, {
+    method: "POST",
+    body: {
+      actor_id: "operator",
+      agent_id: agent,
+      expected_revision: revision,
+      request_id: requestId,
+      reason,
+      channel: flagValue(argv, "--channel"),
+      handoff_confirmed: argv.includes("--handoff-confirmed"),
+      allow_ownership_conflict: argv.includes("--allow-ownership-conflict"),
+    },
+  })
+  return {
+    code: payload.ok && status === 200 ? 0 : exitCodeForStatus(status),
+    output: argv.includes("--json")
+      ? JSON.stringify({ ...payload, request_id: requestId })
+      : `${payload.message ?? `Handoff failed (HTTP ${status})`}\nrequest_id=${requestId}`,
+  }
+}
+
+export async function taskContext(argv: string[]): Promise<TaskCliResult> {
+  const sub = argv[0] ?? "list"
+  let path = "/api/orchestrator/context"
+  let init: { method?: string; body?: unknown } | undefined
+  if (sub === "handoff") path += "/handoff"
+  else if (sub === "list") path += `?query=${encodeURIComponent(flagValue(argv, "--search") ?? "")}`
+  else if (sub === "add") {
+    const file = flagValue(argv, "--record-file")
+    if (!file) return fail(2, "Usage: opencomms task context add --record-file <context.json>")
+    try {
+      init = { method: "POST", body: JSON.parse(readFileSync(file, "utf8")) }
+    } catch (error) {
+      return fail(2, `Cannot read context JSON: ${(error as Error).message}`)
+    }
+  } else
+    return fail(2, "Usage: opencomms task context <list|add|handoff> [--search <text>] [--record-file <json>] [--json]")
+  const { status, payload } = await fetchJson(path, init)
+  return {
+    code: payload.ok && status === 200 ? 0 : exitCodeForStatus(status),
+    output: JSON.stringify(payload, null, argv.includes("--json") ? undefined : 2),
+  }
 }
 
 /**

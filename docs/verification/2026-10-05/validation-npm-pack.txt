@@ -1,0 +1,416 @@
+[
+  {
+    "id": "opencomms@1.4.0",
+    "name": "opencomms",
+    "version": "1.4.0",
+    "size": 504646,
+    "unpackedSize": 3051438,
+    "shasum": "5e1e9ec4b8f35c59df9bf2b21b0d130e6ca8cf12",
+    "integrity": "sha512-hAb3Jm7SvhetQIZ138g1/RPQUYtdO8pVFAHyFULL08CPKCn6LrPRTfH7LdMPhKAP6b5JkyXUDLZBzX51YRmV1g==",
+    "filename": "opencomms-1.4.0.tgz",
+    "files": [
+      {
+        "path": "LICENSE",
+        "size": 1071,
+        "mode": 420
+      },
+      {
+        "path": "README.md",
+        "size": 10896,
+        "mode": 420
+      },
+      {
+        "path": "dist/adapters/chatgpt/install.js",
+        "size": 7760,
+        "mode": 420
+      },
+      {
+        "path": "dist/adapters/claude-code/hook-cli.js",
+        "size": 34539,
+        "mode": 420
+      },
+      {
+        "path": "dist/adapters/claude-code/hooks.js",
+        "size": 11820,
+        "mode": 420
+      },
+      {
+        "path": "dist/adapters/claude-code/install.js",
+        "size": 10177,
+        "mode": 420
+      },
+      {
+        "path": "dist/adapters/claude-desktop/manifest.json",
+        "size": 3009,
+        "mode": 420
+      },
+      {
+        "path": "dist/adapters/claude-desktop/package.js",
+        "size": 5098,
+        "mode": 420
+      },
+      {
+        "path": "dist/adapters/codex/install.js",
+        "size": 5920,
+        "mode": 420
+      },
+      {
+        "path": "dist/adapters/gemini-cli/hook-cli.js",
+        "size": 33053,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/adapter-resources.js",
+        "size": 1642,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/agent.js",
+        "size": 10378,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/cli-bundle.cjs",
+        "size": 1104646,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/daemon.js",
+        "size": 13483,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/doctor.js",
+        "size": 10482,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/icon-base64.js",
+        "size": 493458,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/install-opencode.js",
+        "size": 9190,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/join-command.js",
+        "size": 2457,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/main.js",
+        "size": 50415,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/paths.js",
+        "size": 5758,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/tasks.js",
+        "size": 13156,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/update.js",
+        "size": 11168,
+        "mode": 420
+      },
+      {
+        "path": "dist/cli/wizard.js",
+        "size": 17331,
+        "mode": 420
+      },
+      {
+        "path": "dist/core/archive.js",
+        "size": 7989,
+        "mode": 420
+      },
+      {
+        "path": "dist/core/atomic-file.js",
+        "size": 1090,
+        "mode": 420
+      },
+      {
+        "path": "dist/core/engine.js",
+        "size": 78097,
+        "mode": 420
+      },
+      {
+        "path": "dist/core/store.js",
+        "size": 26147,
+        "mode": 420
+      },
+      {
+        "path": "dist/core/types.js",
+        "size": 1984,
+        "mode": 420
+      },
+      {
+        "path": "dist/gui/contracts.js",
+        "size": 5984,
+        "mode": 420
+      },
+      {
+        "path": "dist/gui/integrations.js",
+        "size": 11838,
+        "mode": 420
+      },
+      {
+        "path": "dist/gui/server.js",
+        "size": 95181,
+        "mode": 420
+      },
+      {
+        "path": "dist/gui/team-workflows.js",
+        "size": 10276,
+        "mode": 420
+      },
+      {
+        "path": "dist/gui/ui.js",
+        "size": 87559,
+        "mode": 420
+      },
+      {
+        "path": "dist/gui/workflows.js",
+        "size": 13889,
+        "mode": 420
+      },
+      {
+        "path": "dist/gui/workspace.js",
+        "size": 6043,
+        "mode": 420
+      },
+      {
+        "path": "dist/hosts/contract.js",
+        "size": 287,
+        "mode": 420
+      },
+      {
+        "path": "dist/hosts/opencode/delivery.js",
+        "size": 12379,
+        "mode": 420
+      },
+      {
+        "path": "dist/hosts/profiles.js",
+        "size": 7759,
+        "mode": 420
+      },
+      {
+        "path": "dist/hosts/spawn-delivery.js",
+        "size": 19554,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/adapters/chatgpt.js",
+        "size": 6601,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/adapters/claude-code.js",
+        "size": 13175,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/adapters/claude-desktop.js",
+        "size": 7118,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/adapters/codex.js",
+        "size": 10234,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/adapters/gemini-cli.js",
+        "size": 9670,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/adapters/opencode.js",
+        "size": 13670,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/index.js",
+        "size": 834,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/manager.js",
+        "size": 9644,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/mcp-profiles.js",
+        "size": 2858,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/registry.js",
+        "size": 1233,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/shared-artifacts.js",
+        "size": 1296,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/types.js",
+        "size": 1423,
+        "mode": 420
+      },
+      {
+        "path": "dist/integrations/versioning.js",
+        "size": 7672,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp/identity.js",
+        "size": 6455,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp/main.js",
+        "size": 254265,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp/opencomms-tools.js",
+        "size": 28795,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp/orchestrator-tools.js",
+        "size": 12397,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp/principal.js",
+        "size": 3280,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp/server.js",
+        "size": 6972,
+        "mode": 420
+      },
+      {
+        "path": "dist/mcp/store-types.js",
+        "size": 11,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/api.js",
+        "size": 85560,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/bridge.js",
+        "size": 19693,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/events.js",
+        "size": 2263,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/managed-capabilities.js",
+        "size": 1488,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/managed-delivery.js",
+        "size": 7206,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/node-ca.js",
+        "size": 7846,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/node-server.js",
+        "size": 5806,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/node-transport.js",
+        "size": 6395,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/node-wire.js",
+        "size": 3736,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/runtime.js",
+        "size": 1335,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/runtimes/acp.js",
+        "size": 16126,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/runtimes/opencode.js",
+        "size": 24276,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/state.js",
+        "size": 21755,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/tasks.js",
+        "size": 15977,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/team-templates.js",
+        "size": 3176,
+        "mode": 420
+      },
+      {
+        "path": "dist/orchestrator/worktrees.js",
+        "size": 2546,
+        "mode": 420
+      },
+      {
+        "path": "dist/plugin.bundled.js",
+        "size": 124898,
+        "mode": 420
+      },
+      {
+        "path": "dist/plugin.js",
+        "size": 46470,
+        "mode": 420
+      },
+      {
+        "path": "dist/version-constants.js",
+        "size": 393,
+        "mode": 420
+      },
+      {
+        "path": "dist/version.js",
+        "size": 1356,
+        "mode": 420
+      },
+      {
+        "path": "package.json",
+        "size": 2571,
+        "mode": 420
+      }
+    ],
+    "entryCount": 80,
+    "bundled": []
+  }
+]

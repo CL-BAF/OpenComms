@@ -1,0 +1,15 @@
+
+> opencomms@1.4.0 test:windows-release
+> node scripts/test-windows-release.mjs
+
+file:///<workspace>/scripts/test-windows-release.mjs:25
+if (!installer || !existsSync(installer)) throw new Error("No OpenComms-Setup-*.exe was found in dist-release.")
+                                                ^
+
+Error: No OpenComms-Setup-*.exe was found in dist-release.
+    at file:///<workspace>/scripts/test-windows-release.mjs:25:49
+    at ModuleJob.run (node:internal/modules/esm/module_job:439:25)
+    at async node:internal/modules/esm/loader:643:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.19.0

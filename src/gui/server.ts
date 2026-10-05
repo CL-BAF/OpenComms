@@ -16,6 +16,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { watchFile, unwatchFile, appendFileSync, mkdirSync, existsSync, type StatWatcher } from "node:fs"
 import { execFile } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { join, resolve } from "node:path"
 import {
   normalizeChannelName,
@@ -28,6 +29,8 @@ import {
   effectiveEndpointCapabilities,
   setSessionPausedAsOperator,
   sendMessage,
+  sendMessageAsOperator,
+  joinChannel,
 } from "../core/engine.js"
 import { ArchiveStore, buildArchiveContext, type SessionArchive } from "../core/archive.js"
 import { StateStore, emptyState } from "../core/store.js"
@@ -46,8 +49,11 @@ import { integrationsOverview, integrationsListSync, integrationAction, projectB
 import { VERSION } from "../version.js"
 import { OrchestratorStore } from "../orchestrator/state.js"
 import { createOrchestratorFeed } from "../orchestrator/events.js"
-import { OrchestratorApi } from "../orchestrator/api.js"
-import { ensureServe } from "../orchestrator/runtimes/opencode.js"
+import { OrchestratorApi, permissionCapability } from "../orchestrator/api.js"
+import { ensureServe, createOpencodeRuntime } from "../orchestrator/runtimes/opencode.js"
+import { ACTION_ROUTES, knownFailureState, redactDiagnostic, type ActionCapability } from "./contracts.js"
+import { createManagedDelivery } from "../orchestrator/managed-delivery.js"
+import type { ApiResult } from "../orchestrator/api.js"
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"])
 
@@ -66,9 +72,9 @@ function browseForDirectory(): Promise<string | null> {
 }
 
 /** Member runtime state as far as OpenComms can honestly observe it. */
-export function memberState(member: { stale: boolean }, queueLength: number): "Working" | "Idle" | "Offline" {
+export function memberState(member: { stale: boolean }, queueLength: number): "Queued" | "Unknown" | "Offline" {
   if (member.stale) return "Offline"
-  return queueLength > 0 ? "Working" : "Idle"
+  return queueLength > 0 ? "Queued" : "Unknown"
 }
 
 export interface GuiDeps {
@@ -130,37 +136,68 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   // and is handed to the runtime env for transport authentication.
   let serveChild: import("node:child_process").ChildProcess | null = null
   let serveAuthHeader: string | null = null
+  const instanceId = randomUUID()
+  let activeMutations = 0
+  let deliveryController: ReturnType<typeof createManagedDelivery> | null = null
+  let coordinationStopped = false
+  let emergencyPaused = new Set<string>()
+  const savedCoordination = orchestratorStore?.load().coordination
+  if (savedCoordination) {
+    coordinationStopped = savedCoordination.stopped
+    emergencyPaused = new Set(savedCoordination.emergency_paused_channels)
+  }
+  const coordinationByProject = new Map<string, { stopped: boolean; paused: Set<string> }>()
+  let serveStartup: Promise<{ ok: boolean; message: string }> | null = null
+  let closing = false
+  const resolvedServePassword = (): string =>
+    serveAuthHeader?.startsWith("Basic ")
+      ? Buffer.from(serveAuthHeader.slice(6), "base64").toString("utf8").split(":").slice(1).join(":")
+      : servePassword()
   const ensureServeRunning = async (): Promise<{ ok: boolean; message: string }> => {
     if (!projectDir) return { ok: false, message: "Select a project before spawning agents." }
-    const result = await ensureServe({
-      projectDir,
-      preferredPort: servePort || 4923,
-      existing: serveChild,
-      existingPort: servePort || undefined,
-    })
-    if (!result.ok) return { ok: false, message: result.detail }
-    serveChild = result.child
-    servePort = result.port
-    if (result.authHeader) serveAuthHeader = result.authHeader
-    // Record port + serve_started_at on the local node record (locked).
-    if (orchestratorStore) {
-      const activeStore = orchestratorStore
-      await activeStore
-        .withLock(() => {
-          const oState = activeStore.load()
-          const local = oState.nodes.find((n) => n.id === oState.local_node_id)
-          if (local) {
-            oState.serve = { port: result.port, password_redacted: true }
-            if (!("serve_started_at" in (local as unknown as Record<string, unknown>))) {
-              ;(local as unknown as Record<string, unknown>)["serve_started_at"] = Date.now()
+    if (serveStartup) return serveStartup
+    const startupProject = projectDir
+    const startupStore = orchestratorStore
+    serveStartup = (async () => {
+      const result = await ensureServe({
+        projectDir: startupProject,
+        preferredPort: servePort || 4923,
+        existing: serveChild,
+        existingPort: servePort || undefined,
+      })
+      if (!result.ok) return { ok: false, message: result.detail }
+      if (closing) {
+        result.child?.kill("SIGTERM")
+        return { ok: false, message: "The coordinator closed during startup." }
+      }
+      serveChild = result.child
+      servePort = result.port
+      if (result.authHeader) serveAuthHeader = result.authHeader
+      // Record port + serve_started_at on the local node record (locked).
+      if (startupStore) {
+        const activeStore = startupStore
+        await activeStore
+          .withLock(() => {
+            const oState = activeStore.load()
+            const local = oState.nodes.find((n) => n.id === oState.local_node_id)
+            if (local) {
+              oState.serve = { port: result.port, password_redacted: true }
+              if (!("serve_started_at" in (local as unknown as Record<string, unknown>))) {
+                ;(local as unknown as Record<string, unknown>)["serve_started_at"] = Date.now()
+              }
             }
-          }
-          activeStore.save(oState)
-          return 0
-        })
-        .catch(() => {})
+            activeStore.save(oState)
+            return 0
+          })
+          .catch(() => {})
+      }
+      return { ok: true, message: result.detail }
+    })()
+    try {
+      return await serveStartup
+    } finally {
+      serveStartup = null
     }
-    return { ok: true, message: result.detail }
   }
   let feed: ReturnType<typeof createOrchestratorFeed> | null = null
   if (orchestratorStore) {
@@ -191,19 +228,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     // servePassword serves BOTH roles: when the env pin is set, it is the
     // operator-provided password; after ensureServe bootstraps, the in-memory
     // serveAuthHeader carries the generated credential for the transports.
-    const orchestratorServePassword = (): string => {
-      const envPassword = servePassword()
-      if (envPassword) return envPassword
-      // Memory-only derived credential from the managed serve (never logged).
-      if (serveAuthHeader?.startsWith("Basic ")) {
-        try {
-          return Buffer.from(serveAuthHeader.slice(6), "base64").toString("utf8").split(":")[1] ?? ""
-        } catch {
-          return ""
-        }
-      }
-      return ""
-    }
+    const orchestratorServePassword = (): string => resolvedServePassword()
     orchestratorApi = new OrchestratorApi({
       projectDir: initialStorageProjectDir,
       servePassword: orchestratorServePassword,
@@ -216,11 +241,12 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       projectId: () => null,
       loadChannelEngineState: () => apiStore.load(),
       engineSend: (state, input, senderSessionId) =>
-        sendMessage(
-          state as never,
-          { channel: input.channel, content: input.content, type: input.message_type },
-          senderSessionId,
-        ),
+        sendMessageAsOperator(state as never, {
+          channel: input.channel,
+          content: input.content,
+          type: input.message_type,
+          to: input.to,
+        }),
       saveChannelEngineState: (state) => apiStore.save(state as never),
     })
     // M4.5 bridge deps: the SAME api + closures the HTTP routes use, so the
@@ -303,6 +329,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
               max_members: typeof body["max_members"] === "number" ? body["max_members"] : undefined,
               rate_limit: typeof body["rate_limit"] === "number" ? body["rate_limit"] : undefined,
               max_hops: typeof body["max_hops"] === "number" ? body["max_hops"] : undefined,
+              budgets: body["budgets"] as { max_runtime_ms?: number; max_delivered_messages?: number } | undefined,
             })
             if (created.ok) apiStore.save(st)
             return created
@@ -417,6 +444,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   }
   const load = (): State => store?.load() ?? emptyState()
   const recordError = (message: string): void => {
+    message = redactDiagnostic(message, [servePassword(), resolvedServePassword(), serveAuthHeader ?? ""])
     if (store) {
       const activeStore = store
       void activeStore
@@ -512,15 +540,42 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   const selectProject = (candidate: string): string => {
     if (!isExistingDirectory(candidate)) throw new Error("Project directory does not exist or is not a directory.")
     const normalized = resolve(candidate)
+    if (activeMutations > 1)
+      throw new Error("A project operation is still pending. Wait for its outcome before switching projects.")
+    if (serveChild && !serveChild.killed && serveChild.exitCode === null && normalized !== projectDir)
+      throw new Error(
+        "Managed agents are attached to this project's coordinator. Stop the coordinator before switching projects, then select the other project. Linked sessions are unaffected.",
+      )
+    if (
+      normalized !== projectDir &&
+      orchestratorStore
+        ?.load()
+        .agents.some((a) => a.runtime === "acp" && ["running", "idle", "starting"].includes(a.status))
+    )
+      throw new Error(
+        "Stop the managed ACP agents before switching projects; their owned processes remain attached to this project's coordinator.",
+      )
     if (isInsideInstallDirectory(normalized))
       throw new Error("Choose a coding project outside the OpenComms installation folder.")
+    if (normalized === projectDir) return normalized
+    if (projectDir) coordinationByProject.set(projectDir, { stopped: coordinationStopped, paused: emergencyPaused })
+    const coordination = coordinationByProject.get(normalized)
+    coordinationStopped = coordination?.stopped ?? false
+    emergencyPaused = coordination?.paused ?? new Set<string>()
     rememberWorkspaceProject(normalized)
+    deliveryController?.close()
+    deliveryController = null
     stopWatchers()
     projectDir = normalized
     storageProjectDir = normalized
     store = new StateStore(normalized)
     archives = new ArchiveStore(normalized)
     orchestratorStore = new OrchestratorStore(normalized, store)
+    const persistedCoordination = orchestratorStore.load().coordination
+    if (persistedCoordination) {
+      coordinationStopped = persistedCoordination.stopped
+      emergencyPaused = new Set(persistedCoordination.emergency_paused_channels)
+    }
     const activeOrchestratorStore = orchestratorStore
     feed = createOrchestratorFeed((fn) =>
       activeOrchestratorStore.withLock(() => {
@@ -534,18 +589,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     const activeFeedRef = feed
     // Same credential resolution as the initial wiring: env pin wins, else
     // the in-memory serveAuthHeader from the managed bootstrap.
-    const projectServePassword = (): string => {
-      const envPassword = servePassword()
-      if (envPassword) return envPassword
-      if (serveAuthHeader?.startsWith("Basic ")) {
-        try {
-          return Buffer.from(serveAuthHeader.slice(6), "base64").toString("utf8").split(":")[1] ?? ""
-        } catch {
-          return ""
-        }
-      }
-      return ""
-    }
+    const projectServePassword = (): string => resolvedServePassword()
     orchestratorApi = new OrchestratorApi({
       projectDir: normalized,
       servePassword: projectServePassword,
@@ -558,11 +602,12 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       projectId: () => null,
       loadChannelEngineState: () => activeStoreRef.load(),
       engineSend: (state, input, senderSessionId) =>
-        sendMessage(
-          state as never,
-          { channel: input.channel, content: input.content, type: input.message_type },
-          senderSessionId,
-        ),
+        sendMessageAsOperator(state as never, {
+          channel: input.channel,
+          content: input.content,
+          type: input.message_type,
+          to: input.to,
+        }),
       saveChannelEngineState: (state) => activeStoreRef.save(state as never),
     })
     // Rebuild the bridge deps for the newly selected project (same closures).
@@ -755,8 +800,44 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
   }
 
   const json = (res: ServerResponse, code: number, payload: unknown): void => {
+    const secrets = [servePassword(), serveAuthHeader ?? "", orchestratorStore?.load().trust.owner_confirm_token ?? ""]
+    if (serveAuthHeader?.startsWith("Basic "))
+      secrets.push(Buffer.from(serveAuthHeader.slice(6), "base64").toString("utf8").split(":").slice(1).join(":"))
+    let envelope = payload as Record<string, unknown>
+    if (envelope && envelope["ok"] === false) {
+      const message = String(envelope["message"] ?? "Request failed")
+      const state =
+        knownFailureState(envelope["code"]) ??
+        (code === 403
+          ? "permission_denied"
+          : code === 401
+            ? "authentication_required"
+            : code === 404 && (message.startsWith("No GUI route") || message.startsWith("No orchestrator route"))
+              ? "unsupported"
+              : code === 409 && !projectDir
+                ? "not_configured"
+                : code === 503
+                  ? "temporarily_unavailable"
+                  : "execution_failed")
+      envelope = {
+        ...envelope,
+        message,
+        error: {
+          state,
+          recovery:
+            code >= 500
+              ? "Inspect Diagnostics using the request ID before retrying mutations."
+              : "Correct the request or check the host configuration.",
+        },
+      }
+    }
+    envelope = { ...envelope, request_id: res.getHeader("X-OpenComms-Request-Id") ?? randomUUID() }
     res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" })
-    res.end(JSON.stringify(payload))
+    res.end(
+      JSON.stringify(envelope, (_key, value: unknown) =>
+        typeof value === "string" ? redactDiagnostic(value, secrets) : value,
+      ),
+    )
   }
 
   /**
@@ -788,7 +869,7 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
         (typeof referer === "string" && referer.toLowerCase().startsWith(`http://${host}/`))
       const fetchOk = fetchSite === "same-origin" || fetchSite === "none"
       const hasBrowserSignals = origin !== undefined || referer !== undefined || fetchSite !== undefined
-      if (hasBrowserSignals && !(sameOrigin || fetchOk)) {
+      if (hasBrowserSignals && !sameOrigin && (!fetchOk || origin !== undefined || referer !== undefined)) {
         return "Rejected cross-site request (write operations require a same-origin loopback client)"
       }
     }
@@ -797,15 +878,21 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
 
   const readBody = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
     let body = ""
-    for await (const chunk of req) body += String(chunk)
-    if (body.length > 1_000_000) throw new Error("request body too large")
+    for await (const chunk of req) {
+      body += String(chunk)
+      if (Buffer.byteLength(body) > 1_000_000)
+        throw Object.assign(new Error("Request body too large (maximum 1 MB)."), { status: 413 })
+    }
     try {
       const parsed = JSON.parse(body || "{}") as unknown
-      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {}
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+        throw new Error("Expected a JSON object.")
+      const result = parsed as Record<string, unknown>
+      if (typeof result["request_id"] !== "string" && typeof req.headers["x-opencomms-operation-id"] === "string")
+        result["request_id"] = req.headers["x-opencomms-operation-id"]
+      return result
     } catch {
-      return {}
+      throw Object.assign(new Error("Invalid request JSON. Submit a JSON object."), { status: 400 })
     }
   }
 
@@ -850,23 +937,490 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     return load().channels[key] ?? null
   }
 
+  const capabilityPayload = (): ApiResult => {
+    const actions: Record<string, ActionCapability> = {}
+    for (const route of ACTION_ROUTES) {
+      actions[route.command] =
+        projectDir || ["workspace_state", "workspace_select", "diagnostics", "capabilities"].includes(route.command)
+          ? { state: "supported" }
+          : { state: "not_configured", reason: "No project selected.", recovery: "Choose an existing coding project." }
+    }
+    if (coordinationStopped) {
+      for (const command of ["agent_create", "task_assign", "task_reassign"])
+        actions[command] = {
+          state: "temporarily_unavailable",
+          reason: "Coordination delivery is stopped.",
+          recovery: "Resume coordination explicitly.",
+        }
+    }
+    if (projectDir)
+      for (const command of ["node_approve", "node_revoke", "audit_log"])
+        actions[command] = {
+          state: "authentication_required",
+          reason: "An owner confirmation token is required for this action.",
+          recovery:
+            "The local owner can read trust.owner_confirm_token in the selected project's .opencomms/orchestrator.json and enter it in this form.",
+        }
+    const orchestration = orchestratorStore?.load()
+    const agents = orchestration?.agents ?? []
+    const agentCapabilities = Object.fromEntries(
+      agents.map((agent) => [
+        agent.id,
+        {
+          operating_mode: "managed",
+          identity: agent.host_session_id ? "reported" : "unknown",
+          model: agent.model ?? "unknown",
+          usage: "unknown",
+          permissions: permissionCapability(agent, orchestration!.local_node_id).state,
+          permissions_detail: permissionCapability(agent, orchestration!.local_node_id).reason ?? null,
+          status: agent.status,
+          detail: agent.status_detail ?? null,
+          worktree: agent.worktree,
+          isolation: agent.worktree === projectDir ? "shared_source_tree" : "recorded_separate_worktree",
+        },
+      ]),
+    )
+    if (
+      projectDir &&
+      !coordinationStopped &&
+      !agents.some(
+        (agent) =>
+          agent.node_id === orchestration?.local_node_id &&
+          ["idle", "running"].includes(agent.status) &&
+          agent.channel_ids.length,
+      )
+    )
+      actions["task_assign"] = {
+        state: "not_configured",
+        reason: "No running or idle worker is linked to a session.",
+        recovery: "Create or resume a managed worker and link its existing host identity to a matching session.",
+      }
+    return {
+      ok: true,
+      message: "ok",
+      data: {
+        version: VERSION,
+        contract_version: 1,
+        instance_id: instanceId,
+        actions,
+        agents: agentCapabilities,
+        managed_runtimes: ["opencode", ...(process.env["OPENCOMMS_ACP_COMMAND"] ? ["acp"] : [])],
+        visibility: "Host model usage and cost remain unknown unless reported by the host.",
+        coordination_stopped: coordinationStopped,
+        folder_browse: process.platform === "win32" ? "supported" : "unsupported",
+        updates: { state: "unsupported", recovery: "Run opencomms update from the CLI after reviewing its target." },
+        isolated_worktrees: {
+          state: projectDir && existsSync(join(projectDir, ".git")) ? "supported" : "not_configured",
+          recovery:
+            "Opt in during managed creation in a Git repository root. The new worktree requires a matching channel; ownership in shared workspaces remains advisory.",
+        },
+        remote_runtime_control: {
+          state: "unsupported",
+          recovery:
+            "Use the authenticated node daemon and CLI; this coordinator does not dispatch remote managed sessions.",
+        },
+      },
+    }
+  }
+
+  const sessionDetailPayload = (name: string): ApiResult => {
+    const state = load()
+    const live = state.channels[normalizeChannelName(name)]
+    if (live)
+      return {
+        ok: true,
+        message: "ok",
+        data: {
+          ...live,
+          compact_context:
+            live.parent_channel_id && archives?.get(live.parent_channel_id)
+              ? buildArchiveContext(archives.get(live.parent_channel_id)!, live.name)
+              : undefined,
+          agents: live.members.map((member) => ({
+            ...member,
+            operating_mode: member.surface === "api" ? "managed" : "linked",
+            endpoint_capabilities: effectiveEndpointCapabilities(member),
+            queued_messages: (state.queues[member.session_id] ?? []).length,
+            state: memberState(member, (state.queues[member.session_id] ?? []).length),
+          })),
+        },
+      }
+    const archive = archives?.findByName(name) ?? archives?.get(name)
+    if (archive)
+      return {
+        ok: true,
+        message: "ok",
+        data: {
+          ...archive,
+          lifecycle: "saved",
+          compact_context: buildArchiveContext(archive, archive.name),
+          agents: archive.members.map((member) => ({
+            ...member,
+            endpoint_capabilities: effectiveEndpointCapabilities(member),
+            state: "Offline",
+          })),
+        },
+      }
+    return { ok: false, message: `No live or archived session matches "${name}".` }
+  }
+
+  const joinPayload = (name: string, host: string): ApiResult => {
+    if (!findLive(name)) return { ok: false, message: "Choose an active session before retrieving its join command." }
+    const result = joinCommandFor(name, host)
+    return "error" in result ? { ok: false, message: result.error } : { ok: true, message: "ok", data: result }
+  }
+
+  const linkManagedAgent = async (body: Record<string, unknown>): Promise<ApiResult> => {
+    if (!projectDir || !store || !orchestratorStore) return { ok: false, message: "Select a project first." }
+    const activeStore = store,
+      activeOrchestrator = orchestratorStore,
+      activeProject = projectDir
+    return activeStore.withLock(() => {
+      const state = activeStore.load(),
+        managed = activeOrchestrator.load()
+      const agent = managed.agents.find((a) => a.id === body["agent_id"])
+      if (!agent?.host_session_id) return { ok: false, message: "Choose a managed agent with a verified host session." }
+      if (agent.node_id !== managed.local_node_id)
+        return { ok: false, message: "Remote managed linking is unsupported on this coordinator." }
+      const channelName = String(body["channel"] ?? "")
+      const channel = state.channels[normalizeChannelName(channelName)]
+      if (!channel) return { ok: false, message: "Create the OpenComms session before linking this managed agent." }
+      if (agent.worktree !== channel.worktree)
+        return {
+          ok: false,
+          message:
+            "The agent and session must use the same worktree. Create a session scoped to this managed worktree before linking.",
+        }
+      const existing = channel.members.find((m) => m.session_id === agent.host_session_id)
+      if (!existing) {
+        const result = joinChannel(state, {
+          channel: channelName,
+          role: agent.role,
+          role_prompt: agent.role_prompt,
+          session_id: agent.host_session_id,
+          project_id: channel.project_id,
+          worktree: agent.worktree,
+          host: agent.host,
+          surface: "api",
+          delivery_mode: "pull",
+          host_session_id: agent.host_session_id,
+          stale_policy: { mode: "none", window_ms: null },
+        })
+        if (!result.ok) return result
+        const member = channel.members.find((m) => m.session_id === agent.host_session_id)!
+        member.endpoint_capabilities = {
+          push: true,
+          pull: false,
+          resume: true,
+          queue_while_busy: false,
+          interrupt: true,
+        }
+      }
+      if (!agent.channel_ids.includes(channel.name)) agent.channel_ids.push(channel.name)
+      activeStore.save(state)
+      activeOrchestrator.save(managed)
+      broadcast("refresh", { reason: "managed_agent_linked" })
+      return {
+        ok: true,
+        message: `Managed agent ${agent.name} linked to ${channel.name}. Its host identity is unchanged.`,
+      }
+    })
+  }
+
+  const createGuiSession = async (body: Record<string, unknown>): Promise<ApiResult> => {
+    if (!projectDir || !store) return { ok: false, message: "Select a project before creating a session." }
+    const activeStore = store,
+      activeProject = projectDir
+    const worktreeAgentId = body["worktree_agent_id"]
+    const agent = worktreeAgentId
+      ? orchestratorStore?.load().agents.find((item) => item.id === worktreeAgentId)
+      : undefined
+    if (
+      worktreeAgentId &&
+      (!agent || agent.node_id !== orchestratorStore?.load().local_node_id || !isExistingDirectory(agent.worktree))
+    )
+      return { ok: false, message: "Choose an existing local managed agent worktree." }
+    return activeStore.withLock(() => {
+      const state = activeStore.load()
+      const created = createSessionAsOperator(state, {
+        channel: String(body["name"] ?? ""),
+        project_id: "gui-local-project",
+        worktree: agent?.worktree ?? activeProject,
+        max_members: typeof body["max_members"] === "number" ? body["max_members"] : undefined,
+        rate_limit: typeof body["rate_limit"] === "number" ? body["rate_limit"] : undefined,
+        max_hops: typeof body["max_hops"] === "number" ? body["max_hops"] : undefined,
+        budgets: body["budgets"] as
+          { max_runtime_ms?: number | null; max_delivered_messages?: number | null } | undefined,
+      })
+      if (created.ok) {
+        activeStore.save(state)
+        broadcast("refresh", { reason: "session_created" })
+      }
+      return created
+    })
+  }
+
+  const createManagedAgent = async (body: Record<string, unknown>): Promise<ApiResult> => {
+    if (!projectDir || !orchestratorApi || coordinationStopped)
+      return { ok: false, message: "Select a project and resume coordination before creating managed agents." }
+    // Validate essential inputs before starting a child; never start serve from malformed submissions.
+    if (
+      !body["name"] ||
+      !body["role"] ||
+      !body["role_prompt"] ||
+      (body["host"] !== "acp" && !body["model"] && !serveModel())
+    )
+      return { ok: false, message: "Name, role, role prompt and a provider/model pin are required." }
+    if (body["host"] && body["host"] !== "opencode" && body["host"] !== "acp")
+      return {
+        ok: false,
+        message: "Managed creation supports OpenCode and explicitly configured ACP; use Sessions to link other hosts.",
+      }
+    const api = orchestratorApi
+    if (body["host"] === "acp") return api.createAgent(body)
+    const ready = await ensureServeRunning()
+    if (!ready.ok) return { ok: false, message: ready.message }
+    return api.createAgent(body)
+  }
+
+  const emergencyStop = async (body: Record<string, unknown>): Promise<ApiResult> => {
+    if (!store || !orchestratorStore) return { ok: false, message: "Select a project before changing coordination." }
+    const activeStore = store,
+      managedStore = orchestratorStore
+    if (body["resume"] === true) {
+      await activeStore.withLock(() => {
+        const state = activeStore.load()
+        for (const name of emergencyPaused)
+          if (state.channels[name]) setSessionPausedAsOperator(state, { channel: name, paused: false })
+        activeStore.save(state)
+        const managed = managedStore.load()
+        managed.coordination = { stopped: false, emergency_paused_channels: [] }
+        managedStore.save(managed)
+      })
+      emergencyPaused.clear()
+      coordinationStopped = false
+      return {
+        ok: true,
+        message: "Delivery resumed for sessions paused by this stop. Restart stopped managed agents explicitly.",
+      }
+    }
+    coordinationStopped = true
+    deliveryController?.close()
+    deliveryController = null
+    await activeStore.withLock(() => {
+      const state = activeStore.load()
+      for (const channel of Object.values(state.channels))
+        if (!channel.paused) {
+          emergencyPaused.add(channel.name)
+          setSessionPausedAsOperator(state, { channel: channel.name, paused: true })
+        }
+      activeStore.save(state)
+      const managed = managedStore.load()
+      managed.coordination = { stopped: true, emergency_paused_channels: [...emergencyPaused] }
+      managedStore.save(managed)
+    })
+    const outcomes: Array<{ agent_id: string; ok: boolean; message: string }> = []
+    if (body["interrupt_managed"] === true)
+      for (const agent of managedStore.load().agents) {
+        if (agent.node_id !== managedStore.load().local_node_id || !agent.host_session_id || agent.status === "stopped")
+          continue
+        try {
+          const runtime = managedRuntime(agent)
+          const resumed = await runtime.resume(agent)
+          if (!resumed.ok) throw new Error(resumed.message)
+          await resumed.handle.stop()
+          await managedStore.withLock(() => {
+            const state = managedStore.load(),
+              fresh = state.agents.find((a) => a.id === agent.id)
+            if (fresh) fresh.status = "stopped"
+            managedStore.save(state)
+          })
+          outcomes.push({ agent_id: agent.id, ok: true, message: "Host interruption accepted." })
+        } catch (error) {
+          outcomes.push({
+            agent_id: agent.id,
+            ok: false,
+            message: redactDiagnostic((error as Error).message, [servePassword()]),
+          })
+        }
+      }
+    broadcast("refresh", { reason: "coordination_stopped" })
+    return {
+      ok: outcomes.every((o) => o.ok),
+      message:
+        "OpenComms delivery paused. Linked host processes continue running." +
+        (outcomes.some((o) => !o.ok) ? " Some managed interruptions failed; inspect outcomes." : ""),
+      data: { outcomes },
+    }
+  }
+
+  const managedRuntime = (agent: import("../orchestrator/state.js").AgentRecord) =>
+    orchestratorApi?.runtimeForAgent(agent) ??
+    createOpencodeRuntime({
+      projectDir: projectDir!,
+      port: servePort,
+      env: {
+        ...process.env,
+        OPENCOMMS_ORCH_SERVE_PASSWORD: resolvedServePassword(),
+        OPENCOMMS_ORCH_SERVE_MODEL: agent.model ?? "",
+      },
+    })
+  const managedTimer = setInterval(() => {
+    if (!store || !orchestratorStore || coordinationStopped || closing) return
+    if (servePort <= 0 && !orchestratorStore.load().agents.some((a) => a.runtime === "acp" && a.status !== "stopped"))
+      return
+    if (!deliveryController)
+      deliveryController = createManagedDelivery({
+        store,
+        orchestrator: orchestratorStore,
+        runtime: managedRuntime,
+        changed: () => broadcast("refresh", { reason: "managed_delivery" }),
+        redact: (detail) => redactDiagnostic(detail, [servePassword(), resolvedServePassword(), serveAuthHeader ?? ""]),
+      })
+    void deliveryController
+      .tick()
+      .catch((error) => recordError(redactDiagnostic((error as Error).message, [servePassword()])))
+  }, 1500)
+  managedTimer.unref()
+
+  const sharedBridgeDeps = (): import("../orchestrator/bridge.js").BridgeCoreDeps | null => {
+    const base = bridgeDepsProvider?.()
+    if (!base) return null
+    const locked =
+      (fn: (body: Record<string, unknown>) => Promise<ApiResult>) => async (body: Record<string, unknown>) => {
+        if (!projectDir || !store) return { ok: false, message: "Select a project first." }
+        return store.withLock(() => fn(body))
+      }
+    return {
+      ...base,
+      withMutation: async (fn) => {
+        activeMutations += 1
+        try {
+          return await fn()
+        } finally {
+          activeMutations -= 1
+        }
+      },
+      normalizeResult: (result) => {
+        const secrets = [
+          servePassword(),
+          serveAuthHeader ?? "",
+          orchestratorStore?.load().trust.owner_confirm_token ?? "",
+        ]
+        if (serveAuthHeader?.startsWith("Basic "))
+          secrets.push(Buffer.from(serveAuthHeader.slice(6), "base64").toString("utf8").split(":").slice(1).join(":"))
+        const envelope = result as ApiResult & { error?: { state: string }; code?: string }
+        const normalized =
+          result.ok || envelope.error
+            ? result
+            : {
+                ...result,
+                error: {
+                  state:
+                    knownFailureState(envelope.code) ??
+                    (!projectDir
+                      ? "not_configured"
+                      : result.message.startsWith("Owner approval")
+                        ? "permission_denied"
+                        : "execution_failed"),
+                  recovery:
+                    "Inspect host configuration and Diagnostics; use the operation ID before retrying a mutation.",
+                },
+              }
+        return JSON.parse(
+          JSON.stringify(normalized, (_key, value: unknown) =>
+            typeof value === "string" ? redactDiagnostic(value, secrets) : value,
+          ),
+        ) as ApiResult
+      },
+      guiReads: {
+        ...base.guiReads,
+        sessions: sessionsPayload,
+        sessionMembers: sessionDetailPayload,
+        sessionDetail: sessionDetailPayload,
+        sessionJoinCommand: (name, host) => joinPayload(name, host),
+        capabilities: capabilityPayload,
+        integrationsOverview: async () =>
+          projectDir
+            ? { ok: true, message: "ok", data: await integrationsOverview(projectDir) }
+            : { ok: false, message: "Select a project first." },
+        integrationBootstrap: async () =>
+          projectDir
+            ? { ok: true, message: "ok", data: await projectBootstrap(projectDir) }
+            : { ok: false, message: "Select a project first." },
+      },
+      guiWrites: {
+        ...base.guiWrites,
+        sessionCreate: createGuiSession,
+        sessionSave: locked(base.guiWrites.sessionSave),
+        sessionResume: locked(base.guiWrites.sessionResume),
+        sessionDelete: locked(base.guiWrites.sessionDelete),
+        memberRemove: locked(base.guiWrites.memberRemove),
+        setSessionPaused: (body, paused) => locked((b) => base.guiWrites.setSessionPaused(b, paused))(body),
+        agentCreate: createManagedAgent,
+        agentLink: linkManagedAgent,
+        emergencyStop,
+        taskAssign: (body) =>
+          coordinationStopped
+            ? Promise.resolve({ ok: false, message: "Resume coordination before assigning tasks." })
+            : base.api.assignTask(body),
+        taskReassign: (taskId, body) =>
+          coordinationStopped
+            ? Promise.resolve({ ok: false, message: "Resume coordination before reassigning work." })
+            : base.api.reassignTask(taskId, body),
+        integrationAction: async (body) => {
+          if (!projectDir) return { ok: false, message: "Select a project first." }
+          const report = await integrationAction(projectDir, String(body["id"] ?? ""), String(body["action"] ?? ""))
+          return {
+            ...report,
+            message:
+              [...report.actions, ...report.warnings].join("; ") ||
+              (report.ok ? "Integration action completed." : "Integration action failed."),
+          }
+        },
+      },
+    }
+  }
+
   const server: Server = createServer((req, res) => {
+    const requestId =
+      typeof req.headers["x-opencomms-operation-id"] === "string" &&
+      /^[A-Za-z0-9_-]{1,100}$/.test(req.headers["x-opencomms-operation-id"])
+        ? req.headers["x-opencomms-operation-id"]
+        : randomUUID()
+    res.setHeader("X-OpenComms-Request-Id", requestId)
     const rejected = guard(req)
     if (rejected) {
       recordError(`GUI request rejected: ${rejected}`)
       json(res, 403, { ok: false, message: rejected })
       return
     }
-    void handle(req, res).catch((error) => {
-      recordError(`GUI request failed: ${(error as Error).message}`)
-      if (!res.headersSent) json(res, 500, { ok: false, message: `Internal error: ${(error as Error).message}` })
-    })
+    if (MUTATING.has(req.method ?? "GET")) activeMutations += 1
+    void handle(req, res)
+      .catch((error) => {
+        const message = redactDiagnostic((error as Error).message, [servePassword()])
+        recordError(`GUI request ${requestId} failed: ${message}`)
+        if (!res.headersSent) json(res, (error as { status?: number }).status ?? 500, { ok: false, message })
+      })
+      .finally(() => {
+        if (MUTATING.has(req.method ?? "GET")) activeMutations -= 1
+      })
   })
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${deps.port}`)
     const path = url.pathname.replace(/\/+$/, "") || "/"
     const method = req.method ?? "GET"
+
+    if (method === "GET" && path === "/api/capabilities") {
+      json(res, 200, capabilityPayload())
+      return
+    }
+    if (method === "POST" && path === "/api/emergency-stop") {
+      const result = await emergencyStop(await readBody(req))
+      json(res, result.ok ? 200 : 409, result)
+      return
+    }
 
     if (method === "GET" && path === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
@@ -928,28 +1482,42 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           return
         }
         if (method === "POST" && sub === "/agents/create") {
-          // Lazy serve bootstrap: the shared serve spawns on the FIRST create
-          // (Lead-approved ensureServe spec). Failure fails the create
-          // cleanly with a clear message � no half-spawned agent rows beyond
-          // what createAgent itself already marks failed.
-          const serveReady = await ensureServeRunning()
-          if (!serveReady.ok) {
-            json(res, 409, { ok: false, message: serveReady.message })
-            return
-          }
-          // Ledger assertion (M1 proof follow-up): the FIRST GUI-path create
-          // must never proceed with an unrecorded serve port � the bootstrap
-          // above guarantees it, and we fail loudly if it ever drifts.
-          if (!Number.isFinite(servePort) || servePort <= 0) {
-            recordError(
-              `serve bootstrap succeeded but servePort was not recorded (${servePort}); refusing agent create`,
-            )
-            json(res, 500, { ok: false, message: "Internal error: serve port was not recorded after bootstrap." })
-            return
-          }
-          const body = await readBody(req)
-          const result = await activeApi.createAgent(body)
-          if (result.ok) broadcast("refresh", { reason: "orchestrator_agent_created" })
+          const result = await createManagedAgent(await readBody(req))
+          if (result.ok) broadcast("refresh", { reason: "managed_agent_created" })
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        if (method === "POST" && sub === "/agents/link") {
+          const result = await linkManagedAgent(await readBody(req))
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        const taskDetailMatch = sub.match(/^\/tasks\/([^/]+)$/)
+        const taskTransitionMatch = sub.match(/^\/tasks\/([^/]+)\/transition$/)
+        if (method === "GET" && taskDetailMatch) {
+          const result = activeApi.getTask(decodeURIComponent(taskDetailMatch[1]!))
+          json(res, result.ok ? 200 : 404, result)
+          return
+        }
+        if (method === "POST" && taskTransitionMatch) {
+          const result = await activeApi.transitionTask(
+            decodeURIComponent(taskTransitionMatch[1]!),
+            await readBody(req),
+          )
+          if (result.ok) broadcast("refresh", { reason: "task_transition" })
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        if (method === "GET" && sub === "/context") {
+          json(res, 200, activeApi.listContext(url.searchParams.get("query") ?? ""))
+          return
+        }
+        if (method === "GET" && sub === "/context/handoff") {
+          json(res, 200, activeApi.contextHandoff())
+          return
+        }
+        if (method === "POST" && sub === "/context") {
+          const result = await activeApi.addContext(await readBody(req))
           json(res, result.ok ? 200 : 400, result)
           return
         }
@@ -986,9 +1554,38 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           json(res, 200, activeApi.listTasks())
           return
         }
+        if (method === "GET" && sub === "/team-templates") {
+          json(res, 200, activeApi.listTeamTemplates())
+          return
+        }
+        if (method === "POST" && sub === "/team-templates") {
+          const result = await activeApi.saveTeamTemplate(await readBody(req))
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        const templateDelete = sub.match(/^\/team-templates\/([^/]+)$/)
+        if (method === "DELETE" && templateDelete) {
+          const result = await activeApi.deleteTeamTemplate(decodeURIComponent(templateDelete[1]!), await readBody(req))
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
+        const reassignMatch = sub.match(/^\/tasks\/([^/]+)\/reassign$/)
+        if (method === "POST" && reassignMatch) {
+          const result = coordinationStopped
+            ? { ok: false, message: "Resume coordination before reassigning work." }
+            : await activeApi.reassignTask(decodeURIComponent(reassignMatch[1]!), {
+                ...(await readBody(req)),
+                actor_id: "operator",
+              })
+          if (result.ok) broadcast("refresh", { reason: "task_reassigned" })
+          json(res, result.ok ? 200 : 400, result)
+          return
+        }
         if (method === "POST" && sub === "/tasks/assign") {
           const body = await readBody(req)
-          const result = await activeApi.assignTask(body)
+          const result = coordinationStopped
+            ? { ok: false, message: "Resume coordination before assigning tasks." }
+            : await activeApi.assignTask(body)
           if (result.ok) broadcast("refresh", { reason: "orchestrator_task_assigned" })
           json(res, result.ok ? 200 : 400, result)
           return
@@ -1144,27 +1741,8 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
           json(res, 409, { ok: false, message: "Select a project before creating a session." })
           return
         }
-        const activeStore = store
-        const activeProjectDir = projectDir
         const body = await readBody(req)
-        const result = await activeStore.withLock(() => {
-          const state = load()
-          const created = createSessionAsOperator(state, {
-            channel: String(body["name"] ?? ""),
-            project_id: "gui-local-project",
-            worktree: activeProjectDir,
-            max_members: typeof body["max_members"] === "number" ? body["max_members"] : undefined,
-            rate_limit: typeof body["rate_limit"] === "number" ? body["rate_limit"] : undefined,
-            max_hops: typeof body["max_hops"] === "number" ? body["max_hops"] : undefined,
-            budgets:
-              body["budgets"] && typeof body["budgets"] === "object"
-                ? (body["budgets"] as { max_runtime_ms?: number | null; max_delivered_messages?: number | null })
-                : undefined,
-          })
-          if (created.ok) activeStore.save(state)
-          return created
-        })
-        if (result.ok) broadcast("refresh", { reason: "session_created" })
+        const result = await createGuiSession(body)
         json(res, result.ok ? 200 : 400, result)
         return
       }
@@ -1295,76 +1873,8 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
 
     const membersMatch = path.match(/^\/api\/sessions\/([^/]+)\/members$/)
     if (membersMatch && method === "GET") {
-      const name = decodeURIComponent(membersMatch[1]!)
-      const live = findLive(name)
-      if (live) {
-        const state = load()
-        // Resumed sessions carry their parent archive's COMPACT context in
-        // the member view (never the transcript).
-        let compactContext: string | undefined
-        if (live.parent_channel_id) {
-          const parent = archives?.get(live.parent_channel_id)
-          if (parent) compactContext = buildArchiveContext(parent, live.name)
-        }
-        json(res, 200, {
-          ok: true,
-          data: {
-            name: live.name,
-            lifecycle: live.lifecycle,
-            created_at: live.created_at,
-            parent_channel_id: live.parent_channel_id,
-            description: live.description ?? "No description yet",
-            paused: live.paused,
-            max_members: live.max_members,
-            max_hops: live.max_hops,
-            rate_limit: live.rate_limit,
-            budgets: live.budgets,
-            delivered_total: live.delivered_total,
-            compact_context: compactContext,
-            agents: live.members.map((m: Member) => ({
-              session_id: m.session_id,
-              role: m.role,
-              host: m.host,
-              surface: m.surface,
-              delivery_mode: m.delivery_mode,
-              host_session_id: m.host_session_id,
-              endpoint_capabilities: effectiveEndpointCapabilities(m),
-              stale: m.stale,
-              state: memberState(m, (state.queues[m.session_id] ?? []).length),
-            })),
-          },
-        })
-        return
-      }
-      const archive = archives?.findByName(name) ?? archives?.get(name)
-      if (archive) {
-        json(res, 200, {
-          ok: true,
-          data: {
-            name: archive.name,
-            lifecycle: "saved",
-            description: archive.description ?? "No description yet",
-            summary: archive.summary,
-            parent_channel_id: archive.parent_channel_id,
-            created_at: archive.created_at,
-            compact_context: buildArchiveContext(archive, archive.name),
-            saved_at: archive.saved_at,
-            message_count: archive.message_count,
-            agents: archive.members.map((m) => ({
-              session_id: m.session_id,
-              role: m.role,
-              host: m.host,
-              surface: m.surface,
-              delivery_mode: m.delivery_mode,
-              host_session_id: m.host_session_id,
-              endpoint_capabilities: effectiveEndpointCapabilities(m),
-              state: "Offline",
-            })),
-          },
-        })
-        return
-      }
-      json(res, 404, { ok: false, message: `No live or archived session matches "${name}".` })
+      const result = sessionDetailPayload(decodeURIComponent(membersMatch[1]!))
+      json(res, result.ok ? 200 : 404, result)
       return
     }
 
@@ -1416,9 +1926,8 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
     if (joinMatch && method === "GET") {
       const name = decodeURIComponent(joinMatch[1]!)
       const host = url.searchParams.get("host") ?? "opencode"
-      const result = joinCommandFor(name, host)
-      if ("error" in result) json(res, 400, { ok: false, message: result.error })
-      else json(res, 200, { ok: true, data: result })
+      const result = joinPayload(name, host)
+      json(res, result.ok ? 200 : 400, result)
       return
     }
 
@@ -1430,11 +1939,14 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
       resolve({
         server,
         port: (server.address() as { port: number }).port,
-        bridgeDeps: () => bridgeDepsProvider?.() ?? null,
+        bridgeDeps: sharedBridgeDeps,
         close: () =>
           new Promise<void>((resolveClose) => {
+            closing = true
             // The refresh timer is unref'd; unwind the stat watchers too.
             if (refreshTimer) clearTimeout(refreshTimer)
+            clearInterval(managedTimer)
+            deliveryController?.close()
             stopWatchers()
             for (const res of sseClients) res.end()
             sseClients.clear()
@@ -1448,7 +1960,11 @@ export function startGuiServer(deps: GuiDeps): Promise<GuiServerHandle> {
               /* best effort; the child may have already exited */
             }
             serveChild = null
-            server.close(() => resolveClose())
+            const runtimesClosed =
+              orchestratorApi?.shutdownRuntimes().catch((error) => recordError(String(error))) ?? Promise.resolve()
+            server.close(() => {
+              void runtimesClosed.then(() => resolveClose())
+            })
           }),
       })
     })

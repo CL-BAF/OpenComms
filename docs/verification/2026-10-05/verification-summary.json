@@ -1,0 +1,75 @@
+{
+  "snapshot": "111856faebd9aacb10930d6f16712b5563829b248f320710553fba5cb258dc36",
+  "files": 170,
+  "artifacts": [
+    {
+      "path": "dist-release/opencomms.exe",
+      "bytes": 85030912,
+      "sha256": "e915c9faa61d50a99762bb739ec737bf6c75d9b2fb6f323975012feaed96f4a0"
+    },
+    {
+      "path": "dist-release/opencomms-1.4.0.tgz",
+      "bytes": 504646,
+      "sha256": "2770f06706e199d2d0307575fdb0ed617f2f278b150c36f00b02164592423f15"
+    },
+    {
+      "path": "desktop/src-tauri/binaries/opencomms-coordinator-x86_64-pc-windows-msvc.exe",
+      "bytes": 85030912,
+      "sha256": "e915c9faa61d50a99762bb739ec737bf6c75d9b2fb6f323975012feaed96f4a0"
+    },
+    {
+      "path": "desktop/dist-shell/index.html",
+      "bytes": 15197,
+      "sha256": "c9c14f2b14ca09849b23d4e75ea2c4ebc773be93cf22b701fc07e6cedb1eab2c"
+    },
+    {
+      "path": "desktop/dist-shell/app.js",
+      "bytes": 100426,
+      "sha256": "8aa7c9385a275adf6651c16540f023b11a57e14174a30d50e4512ef332017c79"
+    },
+    {
+      "path": "desktop/dist-shell/manifest.json",
+      "bytes": 233,
+      "sha256": "3343dffa22e80647069fa34d0f46f17bb6e13ee51bdccb95622874d73b25712b"
+    }
+  ],
+  "test_summaries": {
+    "unit": {
+      "log": "validation-unit-final.log",
+      "tests": 438,
+      "pass": 438,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "contract": {
+      "log": "validation-contract-final.log",
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "linked_live": {
+      "log": "validation-live-final.log",
+      "tests": 3,
+      "pass": 0,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "todo": 0
+    },
+    "managed_vendor": {
+      "log": "validation-vendor-final.log",
+      "tests": 2,
+      "pass": 0,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 2,
+      "todo": 0
+    }
+  },
+  "publication_note": "Local validation snapshot; user-profile/workspace paths redacted for publication. No live vendor or packaged native acceptance is inferred."
+}

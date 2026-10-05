@@ -1,0 +1,18 @@
+
+> opencomms@1.4.0 test:contract
+> npm run build:test && node --test --test-concurrency=1 dist-test/test/contract/*.test.js
+
+
+> opencomms@1.4.0 build:test
+> tsc -p tsconfig.test.json
+
+✔ src/core contains no host-specific identifiers (host neutrality) (2.5588ms)
+✔ host capability profiles cover every supported host and are internally consistent (0.9111ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 60.0017

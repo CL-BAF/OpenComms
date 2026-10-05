@@ -1,0 +1,118 @@
+TAP version 13
+# Subtest: bridge parity: Rust ALLOWED_COMMANDS equals TS BRIDGE_COMMANDS exactly
+ok 1 - bridge parity: Rust ALLOWED_COMMANDS equals TS BRIDGE_COMMANDS exactly
+  ---
+  duration_ms: 1.4333
+  type: 'test'
+  ...
+# Subtest: native action contract: visible mutations dispatch to the advertised operation
+ok 2 - native action contract: visible mutations dispatch to the advertised operation
+  ---
+  duration_ms: 1.7872
+  type: 'test'
+  ...
+# Subtest: every advertised GUI route resolves to an implemented native dispatcher
+ok 3 - every advertised GUI route resolves to an implemented native dispatcher
+  ---
+  duration_ms: 2.0828
+  type: 'test'
+  ...
+# Subtest: bridge rejects arbitrary proxies and malformed arguments without reflecting sensitive input
+ok 4 - bridge rejects arbitrary proxies and malformed arguments without reflecting sensitive input
+  ---
+  duration_ms: 0.2209
+  type: 'test'
+  ...
+# Subtest: native mutations share lifetime tracking, keep one project binding, and release tracking on failure
+ok 5 - native mutations share lifetime tracking, keep one project binding, and release tracking on failure
+  ---
+  duration_ms: 0.4422
+  type: 'test'
+  ...
+# Subtest: bridge preserves real outcome and correlation fields and redacts dispatch exceptions
+ok 6 - bridge preserves real outcome and correlation fields and redacts dispatch exceptions
+  ---
+  duration_ms: 1.9032
+  type: 'test'
+  ...
+# Subtest: bridge bounds incomplete input, discards oversized frames, and recovers at the next frame
+ok 7 - bridge bounds incomplete input, discards oversized frames, and recovers at the next frame
+  ---
+  duration_ms: 1.3412
+  type: 'test'
+  ...
+# Subtest: bridge probe: packaged sidecar handshakes, acks, and serves runtimes_list
+ok 8 - bridge probe: packaged sidecar handshakes, acks, and serves runtimes_list
+  ---
+  duration_ms: 961.2766
+  type: 'test'
+  ...
+# Subtest: GUI/native: creation budgets, existing identities, removal, pause, archive and resume persist through shared backend
+ok 9 - GUI/native: creation budgets, existing identities, removal, pause, archive and resume persist through shared backend
+  ---
+  duration_ms: 138.9384
+  type: 'test'
+  ...
+# Subtest: GUI/native: one established bridge follows project selection without leaking context or writes to previous project
+ok 10 - GUI/native: one established bridge follows project selection without leaking context or writes to previous project
+  ---
+  duration_ms: 33.8414
+  type: 'test'
+  ...
+# Subtest: GUI/native: operator assignment in a three-member channel targets the worker, and stable retry sends once
+ok 11 - GUI/native: operator assignment in a three-member channel targets the worker, and stable retry sends once
+  ---
+  duration_ms: 28.3798
+  type: 'test'
+  ...
+# Subtest: GUI/native: coordination stop remains available when the designated Lead is present
+ok 12 - GUI/native: coordination stop remains available when the designated Lead is present
+  ---
+  duration_ms: 15.5292
+  type: 'test'
+  ...
+# Subtest: GUI/native: emergency coordination stop gates assignment even if a channel is individually unpaused
+ok 13 - GUI/native: emergency coordination stop gates assignment even if a channel is individually unpaused
+  ---
+  duration_ms: 18.194
+  type: 'test'
+  ...
+# Subtest: GUI/native: emergency state follows the project and cannot unpause a same-named session in another project
+ok 14 - GUI/native: emergency state follows the project and cannot unpause a same-named session in another project
+  ---
+  duration_ms: 47.0599
+  type: 'test'
+  ...
+# Subtest: GUI/native: a pending native mutation blocks concurrent HTTP project switching
+ok 15 - GUI/native: a pending native mutation blocks concurrent HTTP project switching
+  ---
+  duration_ms: 12.9085
+  type: 'test'
+  ...
+# Subtest: GUI/native: emergency coordination state and prior pauses survive a coordinator restart
+ok 16 - GUI/native: emergency coordination state and prior pauses survive a coordinator restart
+  ---
+  duration_ms: 27.5707
+  type: 'test'
+  ...
+# Subtest: GUI/native: remote and inactive permission capability matches the enforced host boundary
+ok 17 - GUI/native: remote and inactive permission capability matches the enforced host boundary
+  ---
+  duration_ms: 22.6381
+  type: 'test'
+  ...
+# Subtest: GUI/native: capability negotiation names supported actions and failures retain actionable correlation
+ok 18 - GUI/native: capability negotiation names supported actions and failures retain actionable correlation
+  ---
+  duration_ms: 14.6954
+  type: 'test'
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 18
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1506.6323

@@ -1,115 +1,43 @@
-# OpenComms Capability Matrix
+# OpenComms capabilities
 
-Every claim below is backed by an implementing file/test or a recorded
-official-doc citation. Vocabulary: **SUPPORTED** / **PARTIAL** /
-**EXPERIMENTAL** / **UNSUPPORTED** only. Statuses are per *surface*, never
-per vendor. Date of last full verification: **2026-08-29**.
+Updated 2026-10-05. These statuses describe this build. A working protocol fixture does not establish vendor authentication or live model interoperability. See [verification evidence and live gates](INTEGRATION_VERIFICATION.md).
 
-Legend for "evidence": implementation path + test file where applicable.
+Linked mode communicates with user-owned sessions. Managed mode explicitly creates and controls separate runtime sessions. Installation, session discovery, authentication, prompt acceptance and task completion are distinct facts.
 
-## Surfaces
+| Surface | Installation and onboarding | Delivery and identity | Managed creation | Remaining live gate |
+| --- | --- | --- | --- | --- |
+| OpenCode linked plugin | SUPPORTED project plugin installation | SUPPORTED owner-side idle delivery, explicit tools, existing root identity | UNSUPPORTED in linked mode | Current authenticated OpenCode/model roundtrip; historical evidence remains in [OPENCODE.md](OPENCODE.md) |
+| OpenCode managed runtime | SUPPORTED configured native executable, authenticated local serve and explicit model pin | SUPPORTED exact lookup, actual busy/idle status, prompt acceptance and operator permission replies | SUPPORTED separate sessions; source folder by default, optional detached Git worktree | Installed server, provider authentication and model completion |
+| Claude Code linked | PARTIAL project hooks and MCP installer; explicit pin/trust required | SUPPORTED hook context and MCP pull; PARTIAL opt-in argv resume delivery, no mid-turn injection | UNSUPPORTED | Installed CLI authentication and vendor hook/resume roundtrip |
+| Codex CLI linked | PARTIAL project TOML MCP registration; project trust and explicit pin required | SUPPORTED MCP pull; PARTIAL opt-in exec-compatible resume; interactive TUI resume unverified | UNSUPPORTED | Authenticated CLI/tool and resume roundtrip |
+| Gemini CLI linked | PARTIAL settings, MCP and lifecycle hooks; explicit pin/trust required | SUPPORTED hook context and MCP pull; documented hook identity correlation | UNSUPPORTED | Gemini authentication, hook trust and actual roundtrip |
+| Configured ACP managed runtime | PARTIAL operator-supplied executable/argv and existing authentication | SUPPORTED initialize/new/prompt/cancel and pending operator permissions; load conditional on advertised capability | SUPPORTED separate managed sessions, source folder or optional detached Git worktree | Vendor interoperability/authentication; model catalogue/selection and discovery unsupported |
+| Codex App Server | UNSUPPORTED: no client/runtime shipped | UNSUPPORTED in this build | UNSUPPORTED | Official host primitives are documented but are not implemented OpenComms capabilities |
+| Claude Desktop | PARTIAL standalone extension layout; user packs/installs with official MCPB tooling | SUPPORTED explicit MCP pull; conversation identity, push and role injection unsupported | UNSUPPORTED | Real extension installation and Desktop tool execution |
+| ChatGPT web/desktop connector | PARTIAL scaffold; operator supplies authenticated HTTPS deployment | PARTIAL remote MCP pull after deployment; conversation identity and server-initiated push unsupported | UNSUPPORTED | Remote deployment, OAuth/TLS and actual connector execution |
+| Manual Goose / Cursor / Cline / Roo / Continue / VS Code-Copilot MCP profiles | PARTIAL read-only configuration export; user merges and enables it | SUPPORTED shared MCP pin/join/pull wire behavior; native conversation identity and lifecycle UNKNOWN | UNSUPPORTED by profiles | Actual authenticated host configuration and tool execution; [setup contracts](MCP_PROFILES.md) |
+| Windsurf legacy Cascade MCP profile | PARTIAL read-only export for the documented legacy Cascade configuration; current default Devin Local excluded | SUPPORTED shared MCP pull wire behavior; native identity/lifecycle UNKNOWN | UNSUPPORTED by profile | Installed legacy agent acceptance and actual tool execution; [current documentation boundary](MCP_PROFILES.md) |
 
-1. OpenCode (plugin, CLI)
-2. Claude Code (CLI — hooks + MCP)
-3. Claude Desktop (extension — local MCP)
-4. Codex CLI (config.toml MCP + trust-gated hooks)
-5. Codex App Server (managed JSON-RPC)
-6. ChatGPT Desktop (plugins / remote MCP)
-7. ChatGPT Web (developer mode / remote MCP)
+## Runtime constraints
 
-## Matrix
+- Explicit managed actions alone create managed sessions. Linked installations do not create, replace or delete existing sessions.
+- Unsupported runtimes and required capabilities fail before creation. ACP resume remains unknown until its peer advertises loadSession; automatic replacement is disabled.
+- Managed delivery distinguishes accepted, rejected and uncertain. Uncertain mail remains in flight for inspection and is excluded from linked-plugin startup recovery. Acceptance does not complete a task.
+- Isolation is a verified detached checkout of source HEAD. The source must be a Git repository root. Uncommitted edits are not copied, linked sessions are not relocated, and retained worktrees are never automatically deleted. Membership still requires exact project/worktree equality.
+- Operator permission responses grant one request once or reject it. No adapter silently grants permanent permissions. Unsupported listing and a failed request remain distinct.
+- Installed MCP/hook files are standalone bundles. SEA builds embed them and the Desktop manifest; npm builds include the manifest in dist. Installations do not rebuild source.
+- Integration detection inspects configuration and artifacts. Placeholders, missing artifacts and malformed settings are actionable. Configuration verification never proves authenticated vendor execution.
 
-| Capability | OpenCode | Claude Code | Claude Desktop | Codex CLI | Codex App Server | ChatGPT Desktop | ChatGPT Web |
-|---|---|---|---|---|---|---|---|
-| Installation | SUPPORTED (installer, idempotent)¹ | PARTIAL (installer: hooks merged, MCP registered)² | PARTIAL (.mcpb bundle; end-user install UX UNVERIFIED-BY-HARNESS)³ | PARTIAL (config.toml section; trusted-project caveat)⁴ | UNSUPPORTED (no adapter shipped) | PARTIAL (scaffold only; OAuth/TLS operator-provided)⁵ | PARTIAL (developer mode; scaffold)⁵ |
-| Membership / channels | SUPPORTED | SUPPORTED (via MCP tools) | SUPPORTED (via MCP tools) | SUPPORTED (via MCP tools) | UNSUPPORTED | SUPPORTED (via MCP tools, remote) | SUPPORTED (remote) |
-| Existing-session identity | SUPPORTED (ctx.sessionID)⁶ | PARTIAL (hooks see session_id; MCP tools do NOT)⁶ | UNSUPPORTED (no conversation id documented)³ | PARTIAL (hooks see session_id; MCP tools do NOT) | SUPPORTED (thread ids) | UNSUPPORTED | UNSUPPORTED |
-| Existing-session linking | SUPPORTED (invariant: link-only)⁶ | PARTIAL (hook-boundary correlation via pin + host_session_id) | UNSUPPORTED | PARTIAL (hook-boundary correlation if user opts in) | EXCEPTION (opencomms never attaches to TUI threads) | UNSUPPORTED | UNSUPPORTED |
-| Push delivery | SUPPORTED (deliver on idle event)⁶ | SUPPORTED with limits (spawn_push: `claude --resume <id> --print <msg>` documented non-interactive resume; never mid-turn; serialized per member)¹ ,⁶ ,⁷ | UNSUPPORTED (documented: no server-initiated push, no session identity)³ | SUPPORTED with limits (spawn_push: `codex exec resume <id> <msg>`; verified for exec-compatible sessions; TUI-session resume UNVERIFIED)⁴ ,⁷ | UNSUPPORTED (no app-server client shipped) | UNSUPPORTED (documented)⁵ | UNSUPPORTED (documented)⁵ |
-| Pull inbox | SUPPORTED (tools) | SUPPORTED (opencomms_pull MCP) | SUPPORTED (opencomms_pull; stale_policy=none so nothing ages out while unread) | SUPPORTED | UNSUPPORTED | SUPPORTED (remote) | SUPPORTED (remote) |
-| Polling | UNSUPPORTED (event-driven instead) | UNSUPPORTED (hook boundaries only) | UNSUPPORTED (user-invoked tools) | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED |
-| Managed threads | UNSUPPORTED (never owns sessions) | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | EXPERIMENTAL (docs only — no code shipped) | UNSUPPORTED | UNSUPPORTED |
-| Role injection | SUPPORTED (persistent system prompt)⁶ | PARTIAL (hook-boundary additionalContext)¹ | UNSUPPORTED | PARTIAL (AGENTS.md; hooks trust-gated) | PARTIAL (per-thread instructions, via app-server only) | UNSUPPORTED | UNSUPPORTED |
-| Lifecycle events | SUPPORTED (session.idle/deleted/status)⁶ | SUPPORTED (SessionStart/SessionEnd hooks; Stop per turn)¹ | UNSUPPORTED | PARTIAL (SessionStart/End hooks, trust-gated) | SUPPORTED (thread notifications) | UNSUPPORTED | UNSUPPORTED |
-| Session discovery | SUPPORTED (client.session.list) | UNSUPPORTED (no documented API) | UNSUPPORTED | UNSUPPORTED | SUPPORTED (thread/list, via app-server) | UNSUPPORTED | UNSUPPORTED |
-| Session resume | SUPPORTED (sessions persist server-side) | SUPPORTED (claude --resume <id>) | UNSUPPORTED | SUPPORTED (codex exec resume <id>) | SUPPORTED (thread/resume) | UNSUPPORTED | UNSUPPORTED |
-| History (member-scoped) | SUPPORTED | SUPPORTED | SUPPORTED | SUPPORTED | UNSUPPORTED | SUPPORTED | SUPPORTED |
-| Targeted send / broadcast | SUPPORTED (to= / broadcast) | SUPPORTED | SUPPORTED | SUPPORTED | UNSUPPORTED | SUPPORTED | SUPPORTED |
-| Cross-host channels | SUPPORTED (any combination of members above; delivery modes never conflated) | SUPPORTED | SUPPORTED | SUPPORTED | (requires app-server adapter) | PARTIAL (PULL side only) | PARTIAL |
-| Local operation (no network) | SUPPORTED | SUPPORTED (stdio MCP + hooks) | SUPPORTED (stdio) | SUPPORTED (stdio) | n/a | UNSUPPORTED (public HTTPS endpoint required)⁵ | UNSUPPORTED |
-| Remote broker required | No | No | No | No | No | Yes (only for ChatGPT; must be authenticated) | Yes |
+## Implementation and regression evidence
 
-## Evidence index
+| Concern | Implementation | Regression |
+| --- | --- | --- |
+| Installed wiring | scripts/build-bundles.mjs, src/cli/adapter-resources.ts, installers | installed-adapters.test.ts, gemini-integration.test.ts, desktop-package.test.ts run copied artifacts outside the checkout |
+| OpenCode managed API | src/orchestrator/runtimes/opencode.ts | opencode-runtime.test.ts uses real loopback HTTP |
+| ACP protocol | src/orchestrator/runtimes/acp.ts | acp-runtime.test.ts launches an actual deterministic subprocess; no vendor/model claim |
+| Durable create/isolation | src/orchestrator/api.ts, worktrees.ts, managed-capabilities.ts | managed-create-safety.test.ts checks concurrent retries and real temporary Git worktrees |
+| Endpoint ownership | src/hosts/opencode/delivery.ts, managed-delivery.ts | opencode-owner-delivery.test.ts and managed-delivery.test.ts preserve uncertain managed mail |
+| Spawn argv/limits | src/hosts/spawn-delivery.ts | spawn-delivery.test.ts checks argv-only launch, pre-drain refusal and serialization |
+| Manual editor profiles | src/integrations/mcp-profiles.ts, CLI mcp-profile | mcp-profiles.test.ts launches every exported profile, checks its exact host label, unknown native identity and real framed pull |
 
-1. **Claude Code hooks** — official hooks reference, fetched 2026-08-29
-   (code.claude.com/docs/en/hooks): hook event names, stdin JSON
-   (`session_id`, `cwd`), `hookSpecificOutput.additionalContext` on
-   SessionStart/UserPromptSubmit/Stop; `${CLAUDE_PROJECT_DIR}` expansion in
-   hook commands. Implementation: `src/adapters/claude-code/hooks.ts`,
-   `src/adapters/claude-code/install.ts`; tests:
-   `test/unit/core/claude-hooks.test.ts` (child-process, production pin-file
-   wiring), `test/unit/core/mcp-server.test.ts` (transport).
-2. **OpenCode plugin API** — official plugin docs fetched 2026-08-29
-   (opencode.ai/docs/plugins): tool registration, event hook,
-   experimental.chat.system.transform, command.execute.before,
-   client.session.prompt/get. Implementation: `src/plugin.ts`,
-   `src/core/*`; wiring tests: `test/unit/plugin.test.ts`; live guard:
-   `test/live/live.test.ts` (SKIPped without a server — never counted as
-   evidence).
-3. **Claude Desktop / MCPB** — MANIFEST.md v0.3 + support article 10949351,
-   fetched 2026-08-29: no push into conversations, no conversation identity;
-   .mcpb layout, `${__dirname}`, `${user_config.*}`, `mcpb pack`.
-   Implementation: `src/adapters/claude-desktop/package.ts`,
-   `adapters/claude-desktop/manifest.json`; smoke:
-   `test/unit/core/desktop-package.test.ts`.
-4. **Codex** — developers.openai.com/codex (mcp/config/hooks pages), fetched
-   2026-08-29: `[mcp_servers.*]` tables (project scope trusted-projects
-   only), stdio command/args/env + `cwd`, hooks trust-gated (non-managed
-   hooks are skipped until the user approves them in /hooks), no documented
-   external injection into TUI sessions. Implementation:
-   `src/adapters/codex/install.ts`; tests:
-   `test/unit/core/codex-install.test.ts`.
-5. **ChatGPT** — developers.openai.com/plugins + learn.chatgpt.com +
-   platform.openai.com/docs/mcp, fetched 2026-08-29: third-party MCP =
-   public HTTPS streamable-HTTP endpoint; developer mode plan gates; OAuth
-   2.1 + PKCE (S256) for private data; strictly PULL; no conversation
-   identity. Implementation: `src/adapters/chatgpt/install.ts` (scaffold
-   with unauth-refusal guard); tests: `test/unit/core/chatgpt-install.test.ts`.
-6. **OpenCode behaviors** — engine + plugin (PUSH delivery on idle,
-   persistent role injection, session events): `src/core/engine.ts`,
-   `src/plugin.ts`; tests: `test/unit/engine.test.ts`,
-   `test/unit/plugin.test.ts`. **Topology verification 2026-09-08**
-   (OpenCode 1.18.25, headless `opencode serve` labs with real local model
-   turns): Desktop↔Desktop and headless same-server autonomous loops
-   verified both directions with no manual wake (5/5 A→B receipts, B→A
-   receipt +10.9s); two-server CLI↔CLI verified AFTER the owner-side
-   delivery fix (recipient's turn fires on the recipient's own bus; the
-   sender's bus shows zero foreign events). Full evidence:
-   docs/OPENCODE.md § "Topology & autonomy".
-7. **Spawn-push (2026-09-08)** — documented non-interactive resume APIs:
-   Claude Code `claude --resume <session-id> --print "<msg>"` (official
-   sessions docs + CLI reference; community-verified pattern), Codex
-   `codex exec resume <SESSION_ID> "<msg>"` (developers.openai.com/codex
-   CLI reference: "Resume an exec session by ID… Accepts an optional
-   follow-up prompt"). Implementation: `src/hosts/spawn-delivery.ts`
-   (argv-array spawn, NO shell; two-phase delivery; FIFO requeue on CLI
-   failure); tests: `test/unit/core/spawn-delivery.test.ts`. Members opt in
-   with `spawn_push: true` on opencomms_create/join; requires a bound
-   `host_session_id` (claude-code SessionStart hook). Limitations are
-   explicit: never mid-turn; Codex TUI-created session resume UNVERIFIED;
-   Claude Desktop and ChatGPT have no identity and no resume API (stay
-   PULL). Windows npm `.cmd` shims are refused by Node (CVE-2024-27980):
-   the documented fix is a binary/command-template override
-   (`OPENCOMMS_CLAUDE_BIN` / `OPENCOMMS_CODEX_BIN`, quote-aware argv split,
-   no shell); batches exceeding the platform argv budget (~30k chars
-   Windows / ~120k POSIX) are refused BEFORE draining (never truncated;
-   queue untouched; one actionable error). argv-contract verified +
-   unit-tested; live verification against the vendor CLIs pending.
-
-## Rules this matrix obeys
-
-- A capability is SUPPORTED only with a real implementation + test, or a
-  documented host primitive we call.
-- "PARTIAL" always says what part is missing.
-- EXPERIMENTAL rows have no unimplemented code paths described as working.
-- SKIPPED live tests are never counted as evidence of host support.
+Official sources and opt-in live commands are in [INTEGRATION_VERIFICATION.md](INTEGRATION_VERIFICATION.md). Skipped live tests are never successful interoperability evidence.

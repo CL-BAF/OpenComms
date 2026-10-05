@@ -1,0 +1,762 @@
+{
+  "recorded_at": "2026-10-05T02:04:04.959Z",
+  "package_version": "1.4.0",
+  "tested_source_snapshot_sha256": "111856faebd9aacb10930d6f16712b5563829b248f320710553fba5cb258dc36",
+  "snapshot_algorithm": "sha256 of sorted UTF-8 lines: <file sha256> two spaces <relative path> LF",
+  "scope": "src, test, scripts, installer, adapters/assets, desktop source/config, install.mjs, root package/tsconfig/.gitignore; excludes generated outputs, dependencies, caches and root/docs documentation",
+  "git_revision": null,
+  "node": "v24.19.0",
+  "files": [
+    {
+      "path": ".gitignore",
+      "sha256": "9c6eb37534469055e19aef02b56446f134744915f57ef3fcef33e5c3452eac25"
+    },
+    {
+      "path": "adapters/claude-code/.claude-plugin/plugin.json",
+      "sha256": "d4dbb4b2ed4c50041d31556bc640fe1a623ce098251885dfc51fd8ac74c36a4e"
+    },
+    {
+      "path": "adapters/claude-code/commands/opencomms.md",
+      "sha256": "da5e11c1c5fdd08e346fe409146ce4e05ce828635eb49f316a93f229c8c30522"
+    },
+    {
+      "path": "adapters/claude-code/hooks/hooks.json",
+      "sha256": "488821d7064248e3c2e9a963dc5c1e2bb9128414b578175486545ad43af27ddc"
+    },
+    {
+      "path": "adapters/claude-code/mcp-config.json",
+      "sha256": "b191b449292073f4e01126a8f950c90ca700c66a5e928e1fa35406e2b2cc7b54"
+    },
+    {
+      "path": "adapters/claude-desktop/manifest.json",
+      "sha256": "c162fe2e7536ff45886b40d6e0e09305a240014b0983b679e9360bbbc4c886de"
+    },
+    {
+      "path": "assets/opencomms.ico",
+      "sha256": "146a4454a2d3068b1a263caf355f78b80d9339ef53348b8bafc50debaf7ec248"
+    },
+    {
+      "path": "desktop/.gitignore",
+      "sha256": "dea086824fb35b8ce619f03b897849282cbc6a05abc6e9dea9721c2def67dad9"
+    },
+    {
+      "path": "desktop/package-lock.json",
+      "sha256": "ab6b34c4d9628589804a3b39ddf0a2342816bdbfb52871244132912ac05b37a3"
+    },
+    {
+      "path": "desktop/package.json",
+      "sha256": "4c3fc55ff33b336582f183e5aef25c48a309a1e883c33f1c124d608ec98e6c20"
+    },
+    {
+      "path": "desktop/README.md",
+      "sha256": "61b0bf58b4bd53c0665e6e826f3f8d43ec3e589e62ebce74134f1fed131bbf10"
+    },
+    {
+      "path": "desktop/src-tauri/build.rs",
+      "sha256": "c3241f8a6c0149309d44bf1ea913623467ddbfda01ad32971ac57656138a29a5"
+    },
+    {
+      "path": "desktop/src-tauri/capabilities/default.json",
+      "sha256": "43af82325d44bc2705dbf7b63516ee555da96a058f7e1ef886afb61cb6a8e6e2"
+    },
+    {
+      "path": "desktop/src-tauri/Cargo.lock",
+      "sha256": "8679b42b42e0437ab6bd05b7151966239b38f16ce93a8c125dadab6a1ba065a7"
+    },
+    {
+      "path": "desktop/src-tauri/Cargo.toml",
+      "sha256": "a2ed616b43b9ca43554e43bd602331726515dc3541699fdf68f5832085803e08"
+    },
+    {
+      "path": "desktop/src-tauri/icons/icon.ico",
+      "sha256": "146a4454a2d3068b1a263caf355f78b80d9339ef53348b8bafc50debaf7ec248"
+    },
+    {
+      "path": "desktop/src-tauri/src/bridge_io.rs",
+      "sha256": "71733d1b7c8b22f99fce61ab5f8b211990d9cbf474d1e339254b43aa259c72cc"
+    },
+    {
+      "path": "desktop/src-tauri/src/main.rs",
+      "sha256": "7fd2b77018673e2d8bc162342f618cea7ec6b04ad90f41f1e493fc827c48bb7a"
+    },
+    {
+      "path": "desktop/src-tauri/tauri.conf.json",
+      "sha256": "b85cd48f2fd7ce92257581129c8b1a85276d8fc158d28ad21812e20bff6fdd2e"
+    },
+    {
+      "path": "install.mjs",
+      "sha256": "c6d9cdf980547f0a41fa53251532a587566f4843193ecc7fd699953fdda2ddc0"
+    },
+    {
+      "path": "installer/linux/opencomms-node.service",
+      "sha256": "6fa20c9bebadb5e93a46fde78380dc8a78d047a47fbe8062a658cbcb64b8acef"
+    },
+    {
+      "path": "installer/linux/opencomms.service",
+      "sha256": "97b22898c3cf31290f8343eba189c5584d471752845f900d31ea070335e9ba85"
+    },
+    {
+      "path": "installer/OpenComms.iss",
+      "sha256": "9990483dba956e1d61505aac3b63251efc011ca7135761a8f122f19f2744a578"
+    },
+    {
+      "path": "installer/OpenComms.vbs",
+      "sha256": "8e046a2e401836bdaf8a7b56c82c6a938028c57cfcceba6bd72077b55165428a"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "81c12897ecb4080c5ce6aa4e8ce80bc2b045e9645508117e5262ab2c73974cf9"
+    },
+    {
+      "path": "package.json",
+      "sha256": "3d1e31e057da3c84589198965a6590e8c53137fecfe4638ff33b091921a17ffb"
+    },
+    {
+      "path": "scripts/build-bundles.mjs",
+      "sha256": "c6ee345da65d638f082efcc42f798acfd26b6cecdc78c12d47d8830f82bc2980"
+    },
+    {
+      "path": "scripts/build-exe.mjs",
+      "sha256": "220acd2b765696f7eb0a4666af8d027bb379a1566a41aec076357d9a90fde9ae"
+    },
+    {
+      "path": "scripts/build-installer.mjs",
+      "sha256": "85aeb059c6870962703335735d0d45fe4140fe7b7782011e7ae53f83fe3364cf"
+    },
+    {
+      "path": "scripts/build-release.mjs",
+      "sha256": "ea0abc1bc50e669b4ad13703fda6604616d91b79c9bd632ec46cac6fdeafaa85"
+    },
+    {
+      "path": "scripts/build-shell-asset.mjs",
+      "sha256": "a6b9f193fe07a63d7a4be1b371a2e2ba3e35293eb4423f48a2bbd16c15d4b9c3"
+    },
+    {
+      "path": "scripts/bundle.mjs",
+      "sha256": "0bf04d357a719db955f37d66c95165b3e0dd59ca1bfd21d62eeb91e97786a544"
+    },
+    {
+      "path": "scripts/evaluate-coordination.mjs",
+      "sha256": "2123521931e15a24007edccc4e7985bd121b59850c2b9378a9d600e9c0f8dd11"
+    },
+    {
+      "path": "scripts/install.sh",
+      "sha256": "1c929829d15fdb78de020432e55cde5d3997332014fe23b84f5235d33635c340"
+    },
+    {
+      "path": "scripts/make-icon.mjs",
+      "sha256": "2ebc8f0f5524ee10e9ef9693e9786c8ca5de66beb0dafa02a75c1f81f4ed3f53"
+    },
+    {
+      "path": "scripts/record-verification.mjs",
+      "sha256": "9eef59cdb18bb8b37a9c25698e8674331dfbd1e5444d66b4680e4121a5c88b63"
+    },
+    {
+      "path": "scripts/test-browser-workflows.mjs",
+      "sha256": "c007e6acc8e3c042c263cbea5bf7bea948d8b5c2ff626316eb96e1e92bd14194"
+    },
+    {
+      "path": "scripts/test-cwd-independence.mjs",
+      "sha256": "9b50ba99aa92c23a48c1b0e82267a674d26e240333257918f3ecd4184c326238"
+    },
+    {
+      "path": "scripts/test-linux-release.mjs",
+      "sha256": "437d45c59d585c5337e59683dd85ef9b8a4d7dbaf2056d89facd7b9babdc8bfc"
+    },
+    {
+      "path": "scripts/test-native-assets.mjs",
+      "sha256": "2cc0f3fce31df812c14cce7f077f8eaa6e859e25805477e3c07ac132834f7cbe"
+    },
+    {
+      "path": "scripts/test-standalone-artifacts.mjs",
+      "sha256": "2e6b275856ef7c044a9c8383357627f92e638661d7c6226bb45ebad7a009d529"
+    },
+    {
+      "path": "scripts/test-windows-release.mjs",
+      "sha256": "9c28ce0db6bebcbdf8a09dd859b621692ce407b4ae7949236d86737e80d2ae36"
+    },
+    {
+      "path": "src/adapters/chatgpt/install.ts",
+      "sha256": "0ab0de842bf4870ccff409b4e20efca57ab5ef6f32ab02ea1212b45de1201b89"
+    },
+    {
+      "path": "src/adapters/claude-code/hook-cli.ts",
+      "sha256": "381c28d2ce198d544425fb07822e90f4b8c096fa2b905be3ebf12e11f5c5a84e"
+    },
+    {
+      "path": "src/adapters/claude-code/hooks.ts",
+      "sha256": "6c07285a737bcb765f26ad7026a4b7b9274506c39fc6ec34e35921dda22b85a0"
+    },
+    {
+      "path": "src/adapters/claude-code/install.ts",
+      "sha256": "81e698a8bb96cb3a8c0e7e97ab32262d9729db715a1a90c1a2eb4bc2df1e2fe2"
+    },
+    {
+      "path": "src/adapters/claude-desktop/package.ts",
+      "sha256": "b4dd7c8d95868a610eb66c1e215539b3e774b6f707375ebb9b2a28e3c046bf6e"
+    },
+    {
+      "path": "src/adapters/codex/install.ts",
+      "sha256": "322ac3333aab4a0a144b5f24c02dde692051aab356b179e7b388ad5b4a9fb432"
+    },
+    {
+      "path": "src/adapters/gemini-cli/hook-cli.ts",
+      "sha256": "db5710839f51ed76f5d8e58be070e9b45e9253979824311e23b036b23788a19b"
+    },
+    {
+      "path": "src/cli/adapter-resources.ts",
+      "sha256": "59cd7a41939bc1acfc5a06d85d719ec2ac568f4387bfbaf5805c43a80fada02b"
+    },
+    {
+      "path": "src/cli/agent.ts",
+      "sha256": "cf1db01ec26a7062f1e2c41ac3e350335986707c47ede58e1be3a293db95ebfe"
+    },
+    {
+      "path": "src/cli/daemon.ts",
+      "sha256": "a4639a5a7b2df8fb42050a7cd01c07c108ad78d06af81d8e60d6de4186540af8"
+    },
+    {
+      "path": "src/cli/doctor.ts",
+      "sha256": "decc0fe984b1aba42a41253fb6b907b9453bd8ac22a46c91d0f186a8f6bd5308"
+    },
+    {
+      "path": "src/cli/icon-base64.ts",
+      "sha256": "742abbd3df2732c01c0b2834c708f973a88b7068005b285b6475f0e01b6afe88"
+    },
+    {
+      "path": "src/cli/install-opencode.ts",
+      "sha256": "9d6c5fa2db4582f848ece738f9d92ed9d476a0af3389bde17b4ae2807c57e25d"
+    },
+    {
+      "path": "src/cli/join-command.ts",
+      "sha256": "4eeb76aa61fefc9398b58de951c67ed4565c45001d46a4ace9155c60083fdd9e"
+    },
+    {
+      "path": "src/cli/main.ts",
+      "sha256": "a0a4739b6bc77364ffbf1d5ba7ec3e21dbfbcb24d6a2bed7e55c088b56aacb5e"
+    },
+    {
+      "path": "src/cli/paths.ts",
+      "sha256": "bd870fd8b7b953ee9764530340471e24e6cb3f9fd6eee0e7f92f019084370ada"
+    },
+    {
+      "path": "src/cli/tasks.ts",
+      "sha256": "96b1ab6af1a3199873aaa524f1507a37182b4ac1f9c3f22a8dcc74c1df8bede1"
+    },
+    {
+      "path": "src/cli/update.ts",
+      "sha256": "7d9d138d7855705cd12f202dbd574cda8f99ab76035f73836a8321fc2a959145"
+    },
+    {
+      "path": "src/cli/wizard.ts",
+      "sha256": "dcab6d79357c56e0a780e697ce03b38ae800f7017bb85fbea381bc16acab7e6f"
+    },
+    {
+      "path": "src/core/archive.ts",
+      "sha256": "f806a16488ca7385f0e013ba9338e6543811c43b90dd4c3a37b9af53df7b87c0"
+    },
+    {
+      "path": "src/core/atomic-file.ts",
+      "sha256": "6e8d450e2740b44e1b16405c677fa1a71fa410be5f26f4044e697cc7874eb1a8"
+    },
+    {
+      "path": "src/core/engine.ts",
+      "sha256": "6c36d54f0593806dd803f62f39624c91d73e8a2f386a0ffb065e10ed2538c203"
+    },
+    {
+      "path": "src/core/store.ts",
+      "sha256": "bd4896438c453b091a9a460f33f24a4c955751103a8178c10e6b24e96cdbafc1"
+    },
+    {
+      "path": "src/core/types.ts",
+      "sha256": "56283e91733673a5fba51579de0ecb675737073df9e928d0b54291abcf00dd1d"
+    },
+    {
+      "path": "src/gui/contracts.ts",
+      "sha256": "4c32d53a2dab3654fe42b7764675136ef3f3a97bf625f56460aedc31d026308c"
+    },
+    {
+      "path": "src/gui/integrations.ts",
+      "sha256": "fdfa03fd06e0d6c2804bd4a8ccae17b52b104e333c5b97cdae41c7f734570504"
+    },
+    {
+      "path": "src/gui/server.ts",
+      "sha256": "3f82dec071ccdf277f1822644753aa81d2ac6cd964cd744d77ced30e4adac22e"
+    },
+    {
+      "path": "src/gui/team-workflows.ts",
+      "sha256": "07c588c85c6f50637f3479f7d20431a714df0897d61a2d35dc8aaf1698a31bbb"
+    },
+    {
+      "path": "src/gui/ui.ts",
+      "sha256": "3bc283fb4ba235810e0b9534d6254d9cb71ae248eaba7628457741d18ac2e40d"
+    },
+    {
+      "path": "src/gui/workflows.ts",
+      "sha256": "121ebbd2cc0c666054a83a1c0afcdfa8e7719baa630f2cb4f62936a6bbd85df7"
+    },
+    {
+      "path": "src/gui/workspace.ts",
+      "sha256": "e2f8b188959abdcdb6d368ddd94528dd6198bab3039d4e0edc67758fb1e96bcd"
+    },
+    {
+      "path": "src/hosts/contract.ts",
+      "sha256": "9317f08359d60f8ae7ccd36872d38d3306970a0cc72836800b3d116a639932c1"
+    },
+    {
+      "path": "src/hosts/opencode/delivery.ts",
+      "sha256": "5d7a4d49033825855e434b417d93376073f51bbe892c7c9248ff1f23ee81160b"
+    },
+    {
+      "path": "src/hosts/profiles.ts",
+      "sha256": "258f3cc451c4790662d5b64f35c297c2dfc9639ceb4392f55d6802afd822ff00"
+    },
+    {
+      "path": "src/hosts/spawn-delivery.ts",
+      "sha256": "8ba49020ac8805995fb36708100567fed6e3c9679adbe120f95e297e8857df7b"
+    },
+    {
+      "path": "src/integrations/adapters/chatgpt.ts",
+      "sha256": "cceb4d11c78e0f9fc365df0bce69f535b3d1952bf54174f4b0d8904d28733f40"
+    },
+    {
+      "path": "src/integrations/adapters/claude-code.ts",
+      "sha256": "e45728545252f39afae5a7cee372481bff8806276f0a97bf74aeeae8f10ab90d"
+    },
+    {
+      "path": "src/integrations/adapters/claude-desktop.ts",
+      "sha256": "267d07c7879053dc28a7980716b90764c313fd23805a1083ebd784ec04e9ca9b"
+    },
+    {
+      "path": "src/integrations/adapters/codex.ts",
+      "sha256": "f7b40481f64a68ebfb1afd239318069f6de47b1ad007cb7a87652fb7f2255943"
+    },
+    {
+      "path": "src/integrations/adapters/gemini-cli.ts",
+      "sha256": "f2eb9b78fd5908112501cbe7a7c67bf5a5022b465d8c93c5df4f592a3ef1da16"
+    },
+    {
+      "path": "src/integrations/adapters/opencode.ts",
+      "sha256": "83de53aa474c8d06537b693826447b7532f417558f1f2579661119b634c08e93"
+    },
+    {
+      "path": "src/integrations/index.ts",
+      "sha256": "ef36437120d0bc462a1ffaa5edba63d711606fc699ed7104a6599a311a734569"
+    },
+    {
+      "path": "src/integrations/manager.ts",
+      "sha256": "e19b7ba93fa35963019adda3fd91b11d4d5d717ee2d19d33ca0d70975ba29b1f"
+    },
+    {
+      "path": "src/integrations/mcp-profiles.ts",
+      "sha256": "3c76347ff77c83a21d81ebddeff47aa40743b7b8f78e9b6e450d18e83fd6d251"
+    },
+    {
+      "path": "src/integrations/registry.ts",
+      "sha256": "f52bc26b5b4ee4af0a4dcc236dbee3d978f32d115f3052801cf6fd0e84b4a087"
+    },
+    {
+      "path": "src/integrations/shared-artifacts.ts",
+      "sha256": "202f8ecb8265d4e225453f629ddbaa9d688c4bb5a31b4cea72a38f184dd3c4da"
+    },
+    {
+      "path": "src/integrations/types.ts",
+      "sha256": "2e4b8ecebf1b111f606a0a860c67dd07dd8b8ac9aa0cf6f161a99891e01d987d"
+    },
+    {
+      "path": "src/integrations/versioning.ts",
+      "sha256": "5b8196b426643bf3cb0b9703476a3d9f2b94fe48ef6bcc58eb3f3604d8af8c9c"
+    },
+    {
+      "path": "src/mcp/identity.ts",
+      "sha256": "36be9e142afdc82d654a35ae6fba98029259807db3b6271d830b2d6cb4e4aea3"
+    },
+    {
+      "path": "src/mcp/main.ts",
+      "sha256": "c17e28095e19c985c9eb472df42f537f0488b39286d78aeeeaf9d6cec0548895"
+    },
+    {
+      "path": "src/mcp/opencomms-tools.ts",
+      "sha256": "f8e2ff04ea0216490905b6ec6058e516e99de7cc48487deaae3128daa65fc32e"
+    },
+    {
+      "path": "src/mcp/orchestrator-tools.ts",
+      "sha256": "6622f59a82e9a171fb47ef8128844869b707dc4529a69e0f522b36aae33ef303"
+    },
+    {
+      "path": "src/mcp/principal.ts",
+      "sha256": "7d0a90c273281ce6aeb99bbb5551f8360ed64a88a2baa256cf70da87fe7cacc1"
+    },
+    {
+      "path": "src/mcp/server.ts",
+      "sha256": "889f3efa47b2a0b993206f07bdc0627ff02384295cd896689e5d7880ee340e04"
+    },
+    {
+      "path": "src/mcp/store-types.ts",
+      "sha256": "c283ab8bb2bdaaf019561b6ecbf42d4c2fcf7cbff42e073c9daad5ea24d910f3"
+    },
+    {
+      "path": "src/orchestrator/api.ts",
+      "sha256": "6529b5f455985d35eff7335a11734148b698544650318274465301cf19266458"
+    },
+    {
+      "path": "src/orchestrator/bridge.ts",
+      "sha256": "c12abbdd8b302afbe030207b1dea68ca15f3c1881abc9d902111c3e50c00c5c3"
+    },
+    {
+      "path": "src/orchestrator/events.ts",
+      "sha256": "4673bb8ff7729f22f2b69aa38fcf54978a2643d1178370b42d96bb1f5a0d6fe6"
+    },
+    {
+      "path": "src/orchestrator/managed-capabilities.ts",
+      "sha256": "fdd494fe9a5e17e96f75c8758814b4ea7bbaeb95d590d6bb40980325b097d8db"
+    },
+    {
+      "path": "src/orchestrator/managed-delivery.ts",
+      "sha256": "4317822f039ebfa736d44f2f738380781fb28040c4b32badb29d17bd5f943a21"
+    },
+    {
+      "path": "src/orchestrator/node-ca.ts",
+      "sha256": "205fb4f126dcd07f9cd808d657918b0b3e29049950c8410ce1af4875d8507a54"
+    },
+    {
+      "path": "src/orchestrator/node-server.ts",
+      "sha256": "5ffc5d348c005d9e96e499d75d88833bfc1536ac893c164612379e7108cade59"
+    },
+    {
+      "path": "src/orchestrator/node-transport.ts",
+      "sha256": "3c359ab1feb319e04920efa1ca68b57aba47aa597b16c485d127ddc0b2432ea1"
+    },
+    {
+      "path": "src/orchestrator/node-wire.ts",
+      "sha256": "3cfcf1e41d899c7eaa7384c58aa942226d23e4678429840880b57d9841246673"
+    },
+    {
+      "path": "src/orchestrator/runtime.ts",
+      "sha256": "7bd2ca6d225439cb81a20299f856ab0cd19864b905de90baf77ddc71f56d01c2"
+    },
+    {
+      "path": "src/orchestrator/runtimes/acp.ts",
+      "sha256": "7438b22d49dae3e4b34f7b2bbfc90dc2f9347b361c4c13ab8ab4c474ebe64f30"
+    },
+    {
+      "path": "src/orchestrator/runtimes/opencode.ts",
+      "sha256": "4d1b7cd10cbf5652685f08726f895dfa0fbd097b16ac2021036b939c1ae4fc77"
+    },
+    {
+      "path": "src/orchestrator/state.ts",
+      "sha256": "c93b964ab7c70b3a121acf384284997efd965a37a9568f0918cad07920583b9c"
+    },
+    {
+      "path": "src/orchestrator/tasks.ts",
+      "sha256": "b3a86091c6487ec19d3ceeb97e75ce78e8e09f56225d6a6c704e09f047898340"
+    },
+    {
+      "path": "src/orchestrator/team-templates.ts",
+      "sha256": "dfb0d642a929a6bb6cac4ede8a663793c6cdf5c9728daf8cd664f89b217b7e4d"
+    },
+    {
+      "path": "src/orchestrator/worktrees.ts",
+      "sha256": "e5c825c524c59609412fbac9e9722d7c5554b23fcf4fe4b40e275454de973d5b"
+    },
+    {
+      "path": "src/plugin.ts",
+      "sha256": "39e5566862b4f69516089759c1ebbd4655edb805087a159dc7f68626b0ba832d"
+    },
+    {
+      "path": "src/version-constants.ts",
+      "sha256": "de9287f88a153783558c76f17a460b07a1162f673dbb832d90f3299dfbee10e0"
+    },
+    {
+      "path": "src/version.ts",
+      "sha256": "d0f25b883bc5d6b87f50d0b0f5b4d44408f3342dc9a104956362869ebeb0a56a"
+    },
+    {
+      "path": "test/contract/host-neutrality.test.ts",
+      "sha256": "59dbabfcb9cd214c09334150ef630e888be00fd588e5ee093ea1e2cef57bff81"
+    },
+    {
+      "path": "test/fixtures/acp-agent.mjs",
+      "sha256": "e9ebe805d758931d3e40e6a579c67ca5e4e4b841aabf50d50f259db2068ef0f4"
+    },
+    {
+      "path": "test/live/live.test.ts",
+      "sha256": "a7ce36cd34263b6efc7ee4ba27c5156270a17f3b44d48b6b00c747d201d325b3"
+    },
+    {
+      "path": "test/live/managed-vendor.test.ts",
+      "sha256": "37d717ca39ce2f30a42763f086c4741808a01deb20985cddb920b87d5dd13be2"
+    },
+    {
+      "path": "test/unit/atomic-save.test.ts",
+      "sha256": "24743a9a62f5ed5ad9cf707c6bf6bb232d6a9f9799c22023c2bb70621bde649a"
+    },
+    {
+      "path": "test/unit/core/acp-runtime.test.ts",
+      "sha256": "90ffe03b3111fd2aece4311dc52e8ff7238f3833035709490e888f0730fb7edc"
+    },
+    {
+      "path": "test/unit/core/agent-cli.test.ts",
+      "sha256": "49d9dd3f845a518347c66724308c0a8c1dcd5ae89907ed81cd589d8c2c905033"
+    },
+    {
+      "path": "test/unit/core/bridge-parity.test.ts",
+      "sha256": "a5d2b7c1ea227c0da1c776dd06dffdbd28ebcc6803c837be757acaba1abe97a5"
+    },
+    {
+      "path": "test/unit/core/budgets-orchestrator.test.ts",
+      "sha256": "fa0a5c79b71bd1faec8a16dbc76a4dcccaf4ad550baa4fef5c0f666e0cf82352"
+    },
+    {
+      "path": "test/unit/core/chatgpt-install.test.ts",
+      "sha256": "3b11dce6be4477f96ad66d57eb39ca5d357119ed0991c4b8df1ed557d23156fc"
+    },
+    {
+      "path": "test/unit/core/claude-hooks.test.ts",
+      "sha256": "ea56f099582abb55ea5aeaeaf22c8216315dae3001a5afbf6155a5a0b45041a8"
+    },
+    {
+      "path": "test/unit/core/cli.test.ts",
+      "sha256": "d4dd84bdd87b4972bc64102c83e50b89440e62993f70c6a9df232ef6ed84c488"
+    },
+    {
+      "path": "test/unit/core/codex-install.test.ts",
+      "sha256": "6e1759dd7905b5150127be07726b0a8feeec2030fea94f4ec1b60ec13d0794a2"
+    },
+    {
+      "path": "test/unit/core/coordination-evaluation.test.ts",
+      "sha256": "5c3c867c07831c7964c76764f3461be904636a7a26136644c52ade53a719ec3c"
+    },
+    {
+      "path": "test/unit/core/coordination-state.test.ts",
+      "sha256": "8d45198e46e28943c3344d33c3738bfa2aa1177df5685671aa54e6e667cf5b51"
+    },
+    {
+      "path": "test/unit/core/cross-host.test.ts",
+      "sha256": "2063d33a3fe8d0531781b1ad2c0052a45775c0e908213c6225e07d6a92e09c6c"
+    },
+    {
+      "path": "test/unit/core/daemon.test.ts",
+      "sha256": "174298f53012a9efd65e95f05e3171237aeec67bd198fb4b42ed1a2d08ebb4b3"
+    },
+    {
+      "path": "test/unit/core/delivery-budgets.test.ts",
+      "sha256": "c229e241eac2e47ff95c778f4d17539ccc67c1548c977f029e4f14d6acdb9e3b"
+    },
+    {
+      "path": "test/unit/core/desktop-package.test.ts",
+      "sha256": "52340b26b8c483b0e4811b8a43d7283de93e0f2d03cd5c96d675691a911c5376"
+    },
+    {
+      "path": "test/unit/core/doctor.test.ts",
+      "sha256": "e2e309161fabd4b78e5c9ec4347d757c71e06490a3579346c6c23195ac48da33"
+    },
+    {
+      "path": "test/unit/core/gemini-integration.test.ts",
+      "sha256": "fcc0628f28d31c8dddce6b66006567ed4b4bd1940573624d886a5944cdd144b1"
+    },
+    {
+      "path": "test/unit/core/gui-integrations.test.ts",
+      "sha256": "7005ec7e7e7e58017dfaa1c0685aab689348e8360ac2352c61fcd3cba5bea5c9"
+    },
+    {
+      "path": "test/unit/core/gui-upgrade.test.ts",
+      "sha256": "9dea1271e4e080c002d984816fe3cd3c953a6ae72687cab0b1ca53b619b72006"
+    },
+    {
+      "path": "test/unit/core/gui.test.ts",
+      "sha256": "4b755fdc0a49a67502037951ef05d8d60659753a28c38678a95be8b21626c3a9"
+    },
+    {
+      "path": "test/unit/core/installed-adapters.test.ts",
+      "sha256": "96cd54f215df19941ba45d82cf622541e783d10783ca252639a9461a974f9a86"
+    },
+    {
+      "path": "test/unit/core/integrations-adapters.test.ts",
+      "sha256": "859921653cc89b7c1470118d5cecec7976dc7752dbc5ec96be19b682761887df"
+    },
+    {
+      "path": "test/unit/core/integrations-manager.test.ts",
+      "sha256": "23e770b17cc3b6502cc41566d5c7eda861cda3f73bbcc46145d7ed2d616b065f"
+    },
+    {
+      "path": "test/unit/core/integrations-uninstall.test.ts",
+      "sha256": "19afcb932e5259fd579a6d8dd3755170e297175c5f0f43dda3d0bab276e8a5c4"
+    },
+    {
+      "path": "test/unit/core/linked-delivery-cleanup.test.ts",
+      "sha256": "5fafd62c06d086b3d4fd1229f2e93213ae5d290a03b453d0631792426c0f9a0d"
+    },
+    {
+      "path": "test/unit/core/managed-create-safety.test.ts",
+      "sha256": "8fafd62f906f9db9783fc8e669cf10d0b039bd4f8646b378c654459957c92cb4"
+    },
+    {
+      "path": "test/unit/core/managed-delivery.test.ts",
+      "sha256": "9660e23c1fe4041c6f6177f4556567f35ddbe69389ab72207ac1e9e44c3921d1"
+    },
+    {
+      "path": "test/unit/core/mcp-identity.test.ts",
+      "sha256": "a7ad2db623e1e88aae6d38b8191be0122e84ad7b521195f0ad76dcb0b2e95ef9"
+    },
+    {
+      "path": "test/unit/core/mcp-principal.test.ts",
+      "sha256": "80f02dafcb4b298c4662cff6f4179fb569735aa21b17b5cce8c32ae6ae6c77c2"
+    },
+    {
+      "path": "test/unit/core/mcp-profiles.test.ts",
+      "sha256": "5e62316b8d98dfe0fc27f43207c247705e01065eb85af5a9f3e84ce6237190f9"
+    },
+    {
+      "path": "test/unit/core/mcp-pull.test.ts",
+      "sha256": "116916ead3855968e608d185f86119d9b18c8b711a990eac860c27a9610ca3db"
+    },
+    {
+      "path": "test/unit/core/mcp-server.test.ts",
+      "sha256": "1088261ef2a6d4d11b83f6594f9fb5fa81ad42c29d03f49e8fd2d4fd64f2dee0"
+    },
+    {
+      "path": "test/unit/core/mcp-size.test.ts",
+      "sha256": "0a2457779a95a97815ba26f3a1c0457b0d7b2967679f9be30cc07a5d259c6b98"
+    },
+    {
+      "path": "test/unit/core/migration.test.ts",
+      "sha256": "8437c1caa519faa5d39d942cb82c985f6bea0ae1a8f6da5e50ff867a0c340f60"
+    },
+    {
+      "path": "test/unit/core/multi-provider.test.ts",
+      "sha256": "1339b1f3472238a5458fb22bcf16861ebe9c89d5773c84393af949b95b870729"
+    },
+    {
+      "path": "test/unit/core/opencode-owner-delivery.test.ts",
+      "sha256": "605a2404559b3386d792847d8ed735c82c947319c2900f9533c9aec7949d4ba3"
+    },
+    {
+      "path": "test/unit/core/opencode-runtime.test.ts",
+      "sha256": "0df121570c7cc54940d93a5f4a0066d115b11ba49e6faa6190d7dc7888027d8a"
+    },
+    {
+      "path": "test/unit/core/orchestrator.test.ts",
+      "sha256": "4a1f1d50aa689a174b1ef9bbeb1df0e9442c5a1ca640aeded83f4e1875f3e70b"
+    },
+    {
+      "path": "test/unit/core/release.test.ts",
+      "sha256": "1c35a5c5916533d2d8dbd0abd8d900277f031a53746cde6777014cde139f4a4f"
+    },
+    {
+      "path": "test/unit/core/session-lifecycle.test.ts",
+      "sha256": "365f81818db1b8f818e6ccc26bfeba8425bdc640575a4be2dc00970a9f1f37ad"
+    },
+    {
+      "path": "test/unit/core/spawn-delivery.test.ts",
+      "sha256": "106bb273c68baf1c835c18f932eaab23ac0f5548a41b4e56c38c70e6f2c9ba15"
+    },
+    {
+      "path": "test/unit/core/stale.test.ts",
+      "sha256": "8d5690f145e546e50fd10ba71d0463096fe060621d0f18debf1dc99ea07b8cd7"
+    },
+    {
+      "path": "test/unit/core/tasks.test.ts",
+      "sha256": "d484f3ef71510884257990739b3af393d3c2bf648297daaf3c12242bad682a4b"
+    },
+    {
+      "path": "test/unit/engine.test.ts",
+      "sha256": "fe7c2923ce027cc3acdf75b478e38d1faf8b41527fca53ed5ef4b10a4d1be15f"
+    },
+    {
+      "path": "test/unit/lock-errors.test.ts",
+      "sha256": "9f39dab7f66be19829354d4d61671be2a27e988f4321e294e8ccffca03bfd48d"
+    },
+    {
+      "path": "test/unit/plugin.test.ts",
+      "sha256": "c5bfe1ae57b855031fbeb5195d967cfdf1f5a48e129c9aa16cd021a55ac14279"
+    },
+    {
+      "path": "test/unit/store.test.ts",
+      "sha256": "13a02855e229aec778168f389dc363d31bf02d16ce295497d02c8fa73ff11cd3"
+    },
+    {
+      "path": "tsconfig.build.json",
+      "sha256": "a6eb93361a732213452c339676f90552951975e5b07cae8c05973482e09a1d68"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "605e2e35e0d5d41cd86fdf459b80273b55e50ab43ff3e4b3c62ae568bea744ff"
+    },
+    {
+      "path": "tsconfig.test.json",
+      "sha256": "da48c23d3076d20e416289d67751d57847c4324b5f536f9a9ae6bfdfebda3704"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "dist-release/opencomms.exe",
+      "bytes": 85030912,
+      "sha256": "e915c9faa61d50a99762bb739ec737bf6c75d9b2fb6f323975012feaed96f4a0"
+    },
+    {
+      "path": "dist-release/opencomms-1.4.0.tgz",
+      "bytes": 504646,
+      "sha256": "2770f06706e199d2d0307575fdb0ed617f2f278b150c36f00b02164592423f15"
+    },
+    {
+      "path": "desktop/src-tauri/binaries/opencomms-coordinator-x86_64-pc-windows-msvc.exe",
+      "bytes": 85030912,
+      "sha256": "e915c9faa61d50a99762bb739ec737bf6c75d9b2fb6f323975012feaed96f4a0"
+    },
+    {
+      "path": "desktop/dist-shell/index.html",
+      "bytes": 15197,
+      "sha256": "c9c14f2b14ca09849b23d4e75ea2c4ebc773be93cf22b701fc07e6cedb1eab2c"
+    },
+    {
+      "path": "desktop/dist-shell/app.js",
+      "bytes": 100426,
+      "sha256": "8aa7c9385a275adf6651c16540f023b11a57e14174a30d50e4512ef332017c79"
+    },
+    {
+      "path": "desktop/dist-shell/manifest.json",
+      "bytes": 233,
+      "sha256": "3343dffa22e80647069fa34d0f46f17bb6e13ee51bdccb95622874d73b25712b"
+    }
+  ],
+  "test_summaries": {
+    "unit": {
+      "log": "validation-unit-final.log",
+      "tests": 438,
+      "pass": 438,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "contract": {
+      "log": "validation-contract-final.log",
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "linked_live": {
+      "log": "validation-live-final.log",
+      "tests": 3,
+      "pass": 0,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "todo": 0
+    },
+    "managed_vendor": {
+      "log": "validation-vendor-final.log",
+      "tests": 2,
+      "pass": 0,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 2,
+      "todo": 0
+    }
+  },
+  "publication_note": "Local validation snapshot; user-profile/workspace paths redacted for publication. No live vendor or packaged native acceptance is inferred."
+}

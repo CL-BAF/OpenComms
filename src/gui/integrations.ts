@@ -14,7 +14,8 @@
  */
 
 import { existsSync, readFileSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { delimiter, join, resolve } from "node:path"
+import { OrchestratorStore } from "../orchestrator/state.js"
 import { createDefaultManager } from "../integrations/registry.js"
 import {
   CURRENT_INTEGRATION_SCHEMA_VERSION,
@@ -39,6 +40,13 @@ export interface IntegrationHostView {
   details: string[]
   issues: string[]
   actions: Record<"install" | "update" | "repair" | "verify" | "uninstall", boolean>
+  onboarding: {
+    application: "detected" | "not_detected" | "unknown"
+    configuration: "configured" | "needs_attention"
+    connection: "runtime_contact_observed" | "unknown"
+    round_trip: "unverified"
+    detail: string
+  }
 }
 
 export interface IntegrationsOverview {
@@ -67,6 +75,7 @@ export async function integrationsOverview(projectDir: string): Promise<Integrat
   const manager = createDefaultManager()
   const ctx = ctxFor(projectDir)
   const hosts: IntegrationHostView[] = []
+  const agents = new OrchestratorStore(ctx.projectDir).load().agents
   for (const adapter of manager.list()) {
     let detection: IntegrationDetection
     try {
@@ -90,6 +99,22 @@ export async function integrationsOverview(projectDir: string): Promise<Integrat
       currentVersion: ctx.currentVersion,
       details: detection.details,
       issues: detection.issues,
+      onboarding: {
+        application: applicationPresence(adapter.id),
+        configuration: detection.status === "installed" ? "configured" : "needs_attention",
+        connection: agents.some(
+          (agent) =>
+            agent.host === adapter.id &&
+            ["running", "idle"].includes(agent.status) &&
+            agent.last_heartbeat !== null &&
+            Date.now() - agent.last_heartbeat < 30_000,
+        )
+          ? "runtime_contact_observed"
+          : "unknown",
+        round_trip: "unverified",
+        detail:
+          "Configuration checks inspect files. Runtime contact is a recent recorded managed-host observation; it does not establish model execution. Verify a message round trip in the actual host before assigning consequential work.",
+      },
       actions: {
         install: detection.status === "absent",
         update: detection.status === "outdated",
@@ -102,6 +127,23 @@ export async function integrationsOverview(projectDir: string): Promise<Integrat
     })
   }
   return { project: ctx.projectDir, currentVersion: ctx.currentVersion, hosts }
+}
+
+/** Executable presence is separate from configuration, login and protocol support. */
+function applicationPresence(id: string): "detected" | "not_detected" | "unknown" {
+  const names: Record<string, string> = {
+    opencode: "opencode",
+    "claude-code": "claude",
+    codex: "codex",
+    "gemini-cli": "gemini",
+  }
+  const command = names[id]
+  if (!command) return "unknown"
+  const suffixes = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]
+  const found = (process.env["PATH"] ?? "")
+    .split(delimiter)
+    .some((directory) => suffixes.some((suffix) => existsSync(join(directory.replace(/^"|"$/g, ""), command + suffix))))
+  return found ? "detected" : "not_detected"
 }
 
 /**

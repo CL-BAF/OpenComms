@@ -86,7 +86,7 @@ export function createOrchestratorFeed(
 
 /** Cursor-paginated read (pure; the API layer calls this on a snapshot). */
 export function listEvents(state: OrchestratorState, since: number): { events: OrchestrationEvent[]; cursor: number } {
-  const events = state.events.filter((e) => e.seq > since)
+  const events = state.events.filter((e) => e.seq > since).slice(0, 100)
   const cursor = events.length > 0 ? (events[events.length - 1] as OrchestrationEvent).seq : since
   return { events, cursor }
 }

@@ -12,6 +12,10 @@
 | `docs/API_REFERENCE.md` | Every exported function/type/constant with `file:line` + signature | Looking up exact args/returns without opening `src/*` |
 | `docs/TOOLS_AND_COMMANDS.md` | 12 tools + `/OpenComms` slash command, schemas, examples | Adding/modifying tools or commands |
 | [docs/CAPABILITIES.md](CAPABILITIES.md) | Honest per-surface capability matrix with citations | Before claiming host support |
+| [UPGRADE_HANDOFF.md](UPGRADE_HANDOFF.md) | Current build, exact evidence, artifacts and outstanding acceptance gates | Reviewing this upgrade |
+| [GUI_ACTION_AUDIT.md](GUI_ACTION_AUDIT.md) | Every visible control, named backend action and verification level | Browser/native parity |
+| [TASK_EXECUTION.md](TASK_EXECUTION.md) | Task execution, criteria/evidence/review, migration and evaluation | Assigning and verifying work |
+| [INTEGRATION_VERIFICATION.md](INTEGRATION_VERIFICATION.md) / [MCP_PROFILES.md](MCP_PROFILES.md) | Current official host contracts, live prerequisites and manual profiles | Installing/testing integrations |
 | [docs/ADAPTERS.md](ADAPTERS.md) | Adapter contract, identity models, shared MCP tools | Writing/changing any adapter |
 | [docs/SECURITY.md](SECURITY.md) | Threat model, trust boundaries, residual risks | Security review |
 | [docs/PROTOCOL.md](PROTOCOL.md) | Envelope, delivery semantics, MCP wire surface | Changing message/transport behavior |
@@ -32,15 +36,15 @@
 
 ## Source of Truth
 
-All `file:line` refs point to `src/` at `HEAD`. Docs are generated from source â€” if a signature drifts, the source wins. Run `npm run typecheck` after edits.
+The upgrade started from an archive without Git metadata; repository history was restored for publication. Older generated `file:line` references and historical milestone reports can drift; current source wins. The upgrade handoff identifies the tested local source by a SHA256 inventory. Run `npm run typecheck` after edits.
 
 ## Build & Test Recap
 
 ```bash
 npm run build       # tsc -p tsconfig.build.json
 npm run typecheck   # tsc --noEmit (strict, noUncheckedIndexedAccess)
-npm run test        # unit tests (30 tests, <2s)
-npm run test:all    # unit + live (needs OpenCode server, 5min timeout)
+npm run test        # fresh source/bundles + complete unit suite
+npm run test:all    # unit + guarded linked live + opt-in managed vendor tests
 ```
 
-Test files: `test/unit/engine.test.ts:1` (27 tests), `test/unit/store.test.ts:1` (3 tests), `test/live/live.test.ts:1` (guarded live flow).
+Tests span `test/unit/`, `test/contract/` and `test/live/`. Browser and artifact harnesses live in `scripts/`. Exact final counts, skips and blocked checks are in the current handoff; a skipped live test is never interoperability evidence.

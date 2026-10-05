@@ -1,0 +1,3 @@
+
+> opencomms@1.4.0 build:test
+> tsc -p tsconfig.test.json

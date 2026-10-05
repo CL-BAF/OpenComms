@@ -19,6 +19,7 @@ import {
   resolveBinaryOverride,
   spawnArgvBudget,
   isWindowsShimPath,
+  defaultSpawn,
   type SpawnCommand,
   type SpawnRunnerDeps,
 } from "../../../src/hosts/spawn-delivery.js"
@@ -185,6 +186,55 @@ test("deliverViaSpawn: per-member in-flight guard prevents overlapping spawns", 
   }
   const outcome = await deliverViaSpawn(deps, member)
   assert.equal(outcome.status, "delivered")
+})
+
+test("spawn delivery reserves the recipient before asynchronous drain and leaves concurrent new mail queued", async () => {
+  const state = emptyState()
+  const member = makeMember()
+  seedChannelWithSpawnMember(state, member)
+  sendMessage(state, { channel: "spawn-ch", content: "first assignment" }, "sess_sender")
+  const { deps } = makeFakeDeps(state)
+  let release: (() => void) | undefined
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let spawns = 0
+  deps.spawn = async () => {
+    spawns++
+    await gate
+    return { ok: true, stdout: "ok" }
+  }
+  const first = deliverViaSpawn(deps, member)
+  while (spawns === 0) await new Promise((resolve) => setTimeout(resolve, 5))
+  sendMessage(state, { channel: "spawn-ch", content: "second assignment" }, "sess_sender")
+  const concurrent = await deliverViaSpawn(deps, member)
+  assert.equal(concurrent.status, "skipped")
+  assert.equal(spawns, 1)
+  assert.deepEqual(
+    state.queues[member.session_id]?.map((id) => state.messages[id]?.content),
+    ["second assignment"],
+  )
+  release!()
+  assert.equal((await first).status, "delivered")
+})
+
+test("actual failed CLI process does not expose its peer argv or stdout/stderr in recorded errors", async () => {
+  const peerSecret = "sensitive-peer-content"
+  const hostSecret = "sensitive-host-diagnostic"
+  const result = await defaultSpawn(
+    {
+      command: process.execPath,
+      args: ["-e", `process.stdout.write('${hostSecret}');process.stderr.write('${hostSecret}');process.exit(17)`],
+      cwd: process.cwd(),
+    },
+    peerSecret,
+  )
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.match(result.error, /code 17/)
+    assert.ok(!result.error.includes(peerSecret))
+    assert.ok(!result.error.includes(hostSecret))
+  }
 })
 
 test("codex member spawn uses codex exec resume argv", async () => {

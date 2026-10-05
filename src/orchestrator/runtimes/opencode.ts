@@ -9,8 +9,8 @@
  *    (OPENCODE_SERVER_PASSWORD is generated here, never on the command line,
  *    never logged, never returned).
  *  - Agents are sessions created over the SDK: `session.create` →
- *    `prompt`/`promptAsync` → `abort`; status is SSE-driven (the spike proved
- *    GET /session/status unreliable mid-turn).
+ *    `prompt_async` → `abort`; session existence and /session/status are
+ *    checked before managed mail is submitted.
  *  - The model is ALWAYS pinned and pre-verified (detect() caches the
  *    provider/model catalog); server defaults failed or hung in the spike.
  *  - Native-exe resolution: Windows npm shims (.ps1/.cmd) cannot be
@@ -82,6 +82,9 @@ export interface OpencodeRuntimeOptions {
  * the serve's HTTP API — the SDK's createOpencodeClient surface, narrowed).
  */
 export interface OpencodeTransport {
+  /** Verify the persisted identity against this server, without creating it. */
+  getSession?(sessionId: string): Promise<{ id: string }>
+  sessionStatus?(sessionId: string): Promise<{ type: string; detail?: string } | null>
   createSession(title: string): Promise<{ id: string }>
   prompt(sessionId: string, text: string, model?: { providerID: string; modelID: string }): Promise<void>
   abort(sessionId: string): Promise<void>
@@ -96,9 +99,8 @@ export interface OpencodeTransport {
     }>
   >
   /**
-   * M2 §9b-4: host permission surface (GET list + POST response), backed by
-   * the serve's /session/:id/permissions routes. Returns null for "list
-   * unsupported" on older serves.
+   * The host's global permission list is filtered to this exact session.
+   * Returns null only for an unsupported list route on older serves.
    */
   permissionsList(sessionId: string): Promise<Array<{ permission_id: string; request?: unknown }> | null>
   permissionsRespond(sessionId: string, permissionId: string, response: "allow" | "deny"): Promise<void>
@@ -138,21 +140,41 @@ export function lastAssistantText(
  * Production transport over the shared serve (fetch; basic auth from env the
  * caller holds in memory only). Kept minimal: exactly the spike-proven calls.
  */
-export function createHttpTransport(baseUrl: string, password: string, username = "orchestrator"): OpencodeTransport {
+export function createHttpTransport(
+  baseUrl: string,
+  password: string,
+  username = "orchestrator",
+  directory?: string,
+): OpencodeTransport {
   const headers: Record<string, string> = {
     Authorization: basicAuthHeader(username, password),
     "Content-Type": "application/json",
   }
   const call = async (path: string, init?: RequestInit): Promise<unknown> => {
-    const res = await fetch(`${baseUrl}${path}`, { headers, ...init })
+    const endpoint = new URL(path, baseUrl)
+    if (directory) endpoint.searchParams.set("directory", directory)
+    const res = await fetch(endpoint, { headers, signal: AbortSignal.timeout(30_000), ...init })
     if (!res.ok) {
-      const body = await res.text().catch(() => "")
-      throw new Error(`opencode ${path} failed (${res.status}): ${body.slice(0, 200)}`)
+      // Host bodies may contain credentials, prompt contents or tool output.
+      throw new Error(`opencode ${path} failed (${res.status})`)
     }
     const text = await res.text()
     return text ? JSON.parse(text) : {}
   }
   return {
+    async getSession(sessionId) {
+      const payload = (await call(`/session/${encodeURIComponent(sessionId)}`)) as { id?: string }
+      if (payload.id !== sessionId) throw new Error("opencode returned a different session identity")
+      return { id: payload.id }
+    },
+    async sessionStatus(sessionId) {
+      // Idle rows are removed from SessionStatus.list by the host. Confirm
+      // the identity first so absence cannot turn a deleted session into idle.
+      const session = (await call(`/session/${encodeURIComponent(sessionId)}`)) as { id?: string }
+      if (session.id !== sessionId) throw new Error("opencode session identity is unavailable")
+      const payload = (await call("/session/status")) as Record<string, { type: string }>
+      return payload[sessionId] ?? { type: "idle" }
+    },
     async createSession(title) {
       const created = (await call("/session", { method: "POST", body: JSON.stringify({ title }) })) as {
         id?: string
@@ -165,34 +187,48 @@ export function createHttpTransport(baseUrl: string, password: string, username 
     async prompt(sessionId, text, model) {
       const body: Record<string, unknown> = { parts: [{ type: "text", text }] }
       if (model) body.model = model
-      await call(`/session/${sessionId}/message`, { method: "POST", body: JSON.stringify(body) })
+      // 204 confirms host acceptance. Completion belongs to execution state,
+      // so delivery never waits for an assistant response or retries its work.
+      await call(`/session/${encodeURIComponent(sessionId)}/prompt_async`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
     },
     async abort(sessionId) {
-      await call(`/session/${sessionId}/abort`, { method: "POST", body: "{}" })
+      await call(`/session/${encodeURIComponent(sessionId)}/abort`, { method: "POST", body: "{}" })
     },
     async messages(sessionId) {
-      const payload = (await call(`/session/${sessionId}/message`)) as
+      const payload = (await call(`/session/${encodeURIComponent(sessionId)}/message`)) as
         | Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }>
         | { data?: Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }> }
       return Array.isArray(payload) ? payload : (payload.data ?? [])
     },
     async permissionsList(sessionId) {
-      // GET /session/:id/permissions — 404 on older serves = unsupported.
+      // Official SDK permission.list: GET /permission. Its list spans all
+      // sessions, so never expose another agent's approval requests.
       try {
-        const payload = (await call(`/session/${sessionId}/permissions`)) as
-          | Array<{ id?: string; permission_id?: string; request?: unknown }>
-          | { data?: Array<{ id?: string; permission_id?: string; request?: unknown }> }
-        const rows = Array.isArray(payload) ? payload : (payload.data ?? [])
-        return rows.map((r) => ({ permission_id: r.permission_id ?? r.id ?? "", request: (r.request ?? r) as unknown }))
+        const payload = await call("/permission")
+        if (!Array.isArray(payload)) throw new Error("opencode permission list returned an invalid response")
+        return payload
+          .filter((row: unknown): row is { id: string; sessionID: string } => {
+            if (typeof row !== "object" || row === null) return false
+            const value = row as Record<string, unknown>
+            return value.sessionID === sessionId && typeof value.id === "string" && value.id.length > 0
+          })
+          .map((row) => ({ permission_id: row.id, request: row }))
       } catch (error) {
         if (/\(404\)/.test(String(error))) return null
         throw error
       }
     },
     async permissionsRespond(sessionId, permissionId, response) {
-      await call(`/session/${sessionId}/permissions/${permissionId}`, {
+      const pending = await this.permissionsList(sessionId)
+      if (pending === null) throw new Error("opencode permission API is unsupported by this server")
+      if (!pending.some((row) => row.permission_id === permissionId))
+        throw new Error("permission request is not pending for this agent")
+      await call(`/permission/${encodeURIComponent(permissionId)}/reply`, {
         method: "POST",
-        body: JSON.stringify({ response, remember: false }),
+        body: JSON.stringify({ reply: response === "allow" ? "once" : "reject" }),
       })
     },
   }
@@ -406,66 +442,66 @@ export function createOpencodeRuntime(opts: OpencodeRuntimeOptions): AgentRuntim
     opts.spawnFn ??
     ((cmd: string, args: string[], spOpts: { cwd: string; env: NodeJS.ProcessEnv }) =>
       nodeSpawn(cmd, args, { ...spOpts, stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true }))
-  let transport = opts.transport ?? null
+  const transports = new Map<string, OpencodeTransport>()
   const detected: RuntimeDetectResult = { available: false }
 
-  const ensureTransport = (): OpencodeTransport => {
+  const ensureTransport = (directory = opts.projectDir): OpencodeTransport => {
     // Reviewer P4: an empty password would surface as an opaque 401 from the
     // serve; fail early with the actionable cause instead.
     if (!env["OPENCOMMS_ORCH_SERVE_PASSWORD"]?.trim()) {
       throw new Error("serve password not configured (OPENCOMMS_ORCH_SERVE_PASSWORD is empty)")
     }
-    if (!transport) transport = createHttpTransport(baseUrl, env["OPENCOMMS_ORCH_SERVE_PASSWORD"] ?? "")
+    if (opts.transport) return opts.transport
+    let transport = transports.get(directory)
+    if (!transport) {
+      transport = createHttpTransport(baseUrl, env["OPENCOMMS_ORCH_SERVE_PASSWORD"] ?? "", "orchestrator", directory)
+      transports.set(directory, transport)
+    }
     return transport
   }
 
-  const makeHandle = (sessionId: string): AgentHandle => ({
+  const makeHandle = (sessionId: string, directory: string): AgentHandle => ({
     async deliver(framed) {
       try {
-        const t = ensureTransport()
+        const t = ensureTransport(directory)
         const model = parseModel(env["OPENCOMMS_ORCH_SERVE_MODEL"])
         await t.prompt(sessionId, framed, model)
-        const turn = await waitTurn(t, sessionId, turnTimeoutMs, pollMs)
-        if (turn.error) return "failed"
         return "delivered"
-      } catch {
-        return "failed"
+      } catch (error) {
+        // A failed transport after submitting can leave accepted work. Never
+        // label that safe to retry; the coordinator retains the delivery id.
+        return /failed \((400|401|403|404|409|422)\)/.test(String(error)) ? "failed" : "uncertain"
       }
     },
     async abort() {
-      try {
-        await ensureTransport().abort(sessionId)
-      } catch {
-        /* abort is best-effort; the serve may already have ended the turn */
-      }
+      await ensureTransport(directory).abort(sessionId)
     },
     async status() {
-      // Honest snapshot only: without the SSE tap connected, "running" is the
-      // neutral managed-state; the feed (SSE) remains the authority.
-      return { status: "running" as AgentRuntimeStatus }
+      try {
+        const t = ensureTransport(directory)
+        if (!t.sessionStatus) return { status: "stale", detail: "runtime status is unavailable" }
+        const observed = await t.sessionStatus(sessionId)
+        if (observed?.type === "idle") return { status: "idle" }
+        if (observed?.type === "busy" || observed?.type === "retry") return { status: "running", detail: observed.type }
+        return { status: "stale", detail: "host did not report this session's activity" }
+      } catch (error) {
+        return { status: "stale", detail: (error as Error).message }
+      }
     },
     async stop() {
       // Per-agent stop on a SHARED serve is a session abort, not a process
       // kill (killing the serve would stop ALL agents — the accepted M1
       // tradeoff). Full teardown is shutdownNode().
-      try {
-        await ensureTransport().abort(sessionId)
-      } catch {
-        /* already stopped */
-      }
+      await ensureTransport(directory).abort(sessionId)
     },
     async permissionsDrain() {
-      try {
-        const rows = await ensureTransport().permissionsList(sessionId)
-        if (rows === null) return null
-        return rows.map((r) => ({ permission_id: r.permission_id, request: r.request as unknown }))
-      } catch {
-        return null
-      }
+      const rows = await ensureTransport(directory).permissionsList(sessionId)
+      if (rows === null) return null
+      return rows.map((r) => ({ permission_id: r.permission_id, request: r.request as unknown }))
     },
     async permissionsRespond(permissionId, response) {
       try {
-        await ensureTransport().permissionsRespond(sessionId, permissionId, response)
+        await ensureTransport(directory).permissionsRespond(sessionId, permissionId, response)
         return { ok: true, message: `permission ${permissionId} ${response}ed` }
       } catch (error) {
         return { ok: false, message: (error as Error).message }
@@ -481,8 +517,12 @@ export function createOpencodeRuntime(opts: OpencodeRuntimeOptions): AgentRuntim
       if (detected.available) return detected
       try {
         const binary = resolveOpencodeBinary(env)
-        detected.available = true
         detected.version = runVersion(binary)
+        detected.available = Boolean(detected.version)
+        if (!detected.available) {
+          detected.detail = "OpenCode executable did not answer --version; configure OPENCOMMS_OPENCODE_BIN"
+          return detected
+        }
         detected.providers = listModelsCatalog(binary, opts.projectDir)
       } catch (error) {
         detected.available = false
@@ -492,7 +532,7 @@ export function createOpencodeRuntime(opts: OpencodeRuntimeOptions): AgentRuntim
     },
     async create(req: SpawnRequest) {
       try {
-        const t = ensureTransport()
+        const t = ensureTransport(req.worktree)
         const created = await t.createSession(req.name)
         // Compose the role prompt + first prompt: persistent role injection
         // for opencode runs via the system-prompt transform when the plugin
@@ -504,7 +544,7 @@ export function createOpencodeRuntime(opts: OpencodeRuntimeOptions): AgentRuntim
         return {
           ok: true,
           result: { host_session_id: created.id, spawn_cmd_redacted: redact(exe, port) },
-          handle: makeHandle(created.id),
+          handle: makeHandle(created.id, req.worktree),
         }
       } catch (error) {
         return { ok: false, message: (error as Error).message }
@@ -512,10 +552,18 @@ export function createOpencodeRuntime(opts: OpencodeRuntimeOptions): AgentRuntim
     },
     async resume(rec: AgentRecord) {
       if (!rec.host_session_id) return { ok: false, message: "agent record has no host_session_id to resume" }
-      return { ok: true, handle: makeHandle(rec.host_session_id) }
+      try {
+        const directory = rec.worktree || opts.projectDir
+        const t = ensureTransport(directory)
+        if (t.getSession) await t.getSession(rec.host_session_id)
+        else await t.messages(rec.host_session_id)
+        return { ok: true, handle: makeHandle(rec.host_session_id, directory) }
+      } catch (error) {
+        return { ok: false, message: `Cannot resume the recorded session: ${(error as Error).message}` }
+      }
     },
     async shutdownNode() {
-      transport = null
+      transports.clear()
     },
   }
 }
